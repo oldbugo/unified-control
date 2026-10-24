@@ -1,0 +1,19 @@
+{
+  "name": "unified-control",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Unified Control: one Windows tray app for the user's devices (Ulanzi D200H dock first)",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/make-release.ps1"
+  },
+  "author": "oldbugo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oldbugo/unified-control.git"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}
