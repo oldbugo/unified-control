@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Window chrome and the core commands for the app pages (local).",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-win-minimize",
+    "allow-win-toggle-maximize",
+    "allow-win-state",
+    "allow-win-close",
+    "allow-win-force-close",
+    "allow-app-restart",
+    "allow-app-state",
+    "allow-settings-update",
+    "allow-activity",
+    "allow-job-get",
+    "allow-job-cancel"
+  ]
+}
