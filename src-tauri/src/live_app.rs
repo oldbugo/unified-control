@@ -25,6 +25,7 @@ const DESTROY_ON_CLOSE: bool = true;
 
 /// The menu items (kept so later phases can change their labels from any thread).
 struct Tray {
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     open: MenuItem<Wry>,
 }
 
