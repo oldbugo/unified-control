@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified Control</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="js/titlebar.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar"><span class="appname">Unified Control</span><span class="spacer"></span></header>
+  <div class="frame">
+    <nav class="nav" aria-label="Pages">
+      <button class="nav-item" data-page="home">Home</button>
+      <button class="nav-item" data-page="dock">Stream dock</button>
+      <div class="nav-spacer"></div>
+      <button class="nav-item" data-page="general">General</button>
+      <button class="nav-item" data-page="about">About</button>
+    </nav>
+    <main class="pane" id="pane" aria-live="polite"></main>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

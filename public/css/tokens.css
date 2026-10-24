@@ -1,0 +1,84 @@
+/* CoolerScreen design tokens (docs/v4/ui-style-guide.md, section 2). Every colour, size and radius in the UI comes from here.
+   Dark only. Pictures of the screen (previews, thumbnails) sit on --picture-bg; labels drawn over pictures use the on-picture tokens. */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg: #0f1115;
+  --surface-1: #161920;
+  --surface-2: #1d2129;
+  --surface-3: #262b35;
+  --border: #2b313c;           /* decorative dividers */
+  --border-strong: #4a5262;    /* frames of previews, hovered cards */
+  --border-control: #646d7f;   /* outlines of inputs, selects, secondary buttons, switch tracks: >= 3:1 on surface-2 */
+
+  /* text */
+  --text: #e8eaee;
+  --text-muted: #9aa2b1;
+  --text-faint: #858d9e;       /* >= 4.5:1 on surface-1/2 */
+
+  /* meaning */
+  --accent: #5aa9ff;
+  --accent-hover: #7dbbff;
+  --accent-ink: #04121f;
+  --accent-soft: rgba(90, 169, 255, .14);
+  --accent-faint: rgba(90, 169, 255, .07);
+  --ok: #45c97a;
+  --warn: #f0b43c;
+  --danger: #ff6b6b;
+  --ok-soft: rgba(69, 201, 122, .14);
+  --warn-soft: rgba(240, 180, 60, .14);
+  --danger-soft: rgba(255, 107, 107, .14);
+
+  /* pictures and editor overlays */
+  --picture-bg: #000;
+  --notch: #000;
+  --notch-edit: rgba(120, 0, 0, .8);
+  --on-picture: #fff;
+  --on-picture-soft: rgba(255, 255, 255, .7);
+  --scrim: rgba(0, 0, 0, .65);           /* labels over pictures */
+  --text-shadow-picture: 0 0 3px #000, 0 0 3px #000;
+  --icon-shadow-picture: drop-shadow(0 0 2px rgba(0, 0, 0, .9));
+  --guide-zone: rgba(255, 160, 40, .38);
+  --guide-zone-faint: rgba(255, 160, 40, .10);
+  --guide-zone-line: rgba(255, 170, 60, .8);
+  --guide-curve: rgba(120, 200, 255, .26);
+  --guide-curve-faint: rgba(120, 200, 255, .06);
+  --guide-curve-line: rgba(140, 210, 255, .85);
+  --snap: #ff4fa3;
+  --overlay: rgba(0, 0, 0, .55);
+  --overlay-strong: rgba(0, 0, 0, .72);
+
+  /* type */
+  --font: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --fs-display: 22px;  --lh-display: 28px;
+  --fs-title: 20px;    --lh-title: 28px;
+  --fs-h: 15px;        --lh-h: 22px;
+  --fs-body: 14px;     --lh-body: 20px;
+  --fs-small: 13px;    --lh-small: 18px;
+  --fs-tiny: 12px;     --lh-tiny: 16px;
+
+  /* spacing (4 px base) */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+
+  /* control heights */
+  --h-xs: 24px;   /* inline tools inside dense rows (layer eye, caret) */
+  --h-sm: 28px;
+  --h-md: 32px;
+  --h-lg: 36px;
+
+  /* radii */
+  --r-xs: 4px;    /* thumbnails, handles, small labels over pictures */
+  --r-sm: 6px;    /* inputs, chips, preview frames */
+  --r-md: 10px;   /* buttons, rows, panels */
+  --r-inner: 8px; /* items inside an --r-md track (segmented control) */
+  --r-lg: 16px;   /* cards, dialogs, drawer */
+  --r-full: 999px;
+
+  /* elevation, motion, layers */
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
+  --t-fast: .15s ease-out;
+  --t-slow: .2s ease-out;
+  --z-stage: 5; --z-sticky: 10; --z-menu: 30; --z-modal: 50; --z-toast: 60; --z-lock: 100;
+}

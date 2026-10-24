@@ -1,0 +1,20 @@
+/* Placeholder PowerToys-style frame (phase 0). Visual design comes in phase 2 with the user. Tokens: css/tokens.css (CoolerScreen's). */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 var(--fs-body)/var(--lh-body) var(--font); overflow: hidden; }
+.app { height: 100%; display: flex; flex-direction: column; }
+.topbar { height: 40px; flex: none; display: flex; align-items: center; padding: 0 calc(var(--s4) + var(--cs-controls-w, 0px)) 0 var(--s4); background: var(--surface-1); border-bottom: 1px solid var(--border); }
+.topbar .appname { font-weight: 600; }
+.topbar .spacer { flex: 1; align-self: stretch; }
+.frame { flex: 1; min-height: 0; display: flex; }
+.nav { width: 220px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: var(--s3) var(--s2); background: var(--surface-1); border-right: 1px solid var(--border); overflow-y: auto; }
+.nav-spacer { flex: 1; }
+.nav-item { text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; padding: var(--s2) var(--s3); border-radius: var(--r-sm); cursor: pointer; }
+.nav-item:hover { background: var(--surface-2); }
+.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.pane { flex: 1; min-width: 0; overflow-y: auto; padding: var(--s5) var(--s6); }
+.pane h1 { font-size: var(--fs-title); margin: 0 0 var(--s3); }
+.pane p { color: var(--text-muted); max-width: 60ch; }
+.pane dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s1) var(--s4); color: var(--text-muted); }
+.pane dt { color: var(--text-faint); }
+.pane dd { margin: 0; }
