@@ -20,6 +20,7 @@ async function dispatch(line) {
       case 'snapshot': result = reader.snapshot(message.provider); break;
       case 'render': result = await reader.render(message.provider, message.view, message.width, message.height); break;
       case 'views': result = VIEWS; break;
+      case 'health': result = { alive: true }; break;
       case 'shutdown': await reader.stop(); stopped = true; result = { stopped: true }; break;
       default: throw new Error('unsupported-method');
     }

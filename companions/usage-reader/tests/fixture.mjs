@@ -9,6 +9,7 @@ lines.on('line', line => {
   const m = JSON.parse(line); let result;
   if (m.method === 'set_active') { active = m.providers; result = { active }; }
   else if (m.method === 'snapshot') result = snapshot(m.provider);
+  else if (m.method === 'health') result = { alive: true };
   else if (m.method === 'render') result = rasterize(snapshot(m.provider), m);
   else if (m.method === 'shutdown') { result = { stopped: true }; lines.close(); }
   process.stdout.write(JSON.stringify({ id: m.id, result }) + '\n');

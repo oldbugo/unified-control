@@ -6,6 +6,10 @@ Only `set_active_providers` starts the managed Node helper. Empty configuration,
 for the caller to draw unknown; it never starts a reader or returns a cached PNG.
 The app must keep all usage requests off its UI thread. Fake/quiet application
 tests leave providers inactive; explicit standalone fixtures contain no accounts.
+`is_running` checks actual child exit and pipe health, not just a stored process
+object. `check_health` adds an account-free private-pipe ping with a 500 ms deadline.
+A parent supervisor can use this every 30 seconds and retry desired providers
+with backoff; neither health method starts a process on its own.
 
 ## App contract
 
@@ -72,16 +76,38 @@ still must be loaded for account refresh; closing all such sessions, closing
 Claude or suspending the PC stops successful observations. The helper does not
 change installed companion or plugin settings.
 
-Codex uses a dedicated `app-server` child, existing sign-in and only read-only
-account methods. It does not start model work. Limits refresh at most once per
-minute; daily tokens refresh hourly only when used. Daily-token results expire
-after two hours and are hidden whenever current account provenance is unavailable.
-Provider failure clears token data. Exact account-switch behavior still needs
-live acceptance; no continuity across account switches is claimed.
+Codex uses dedicated `app-server` children, existing sign-in and only read-only
+account methods. It does not start model work. Each quota/token transaction is
+bracketed by `account/read` with `refreshToken:false`. Missing/malformed ChatGPT
+identity metadata, a changed before/after identity, or an `account/updated`
+notification during the transaction makes the result unknown. This API contract
+was checked using the installed CLI's generated JSON schema and
+[official App Server documentation](https://learn.chatgpt.com/docs/app-server).
+Schema generation does not open an account session or read an authentication file.
+
+Email, plan type and optional workspace display name are processed only inside
+the Node helper to form a process-salted HMAC fingerprint. A WeakMap side channel
+binds the normalized result to it; neither metadata nor fingerprint is enumerable,
+sent through app pipes, logged, or persisted. The current API exposes no unique
+workspace identifier, and email may be null. Null identity is unknown. Matching
+display metadata cannot prove that two same-name workspaces are identical; real
+account/workspace-switch acceptance remains pending. No full switch reliability
+claim is made from these software tests.
+
+Limits refresh at most once per minute. Token totals refresh only when used, after
+each successful quota revision, on that same minute cadence. Every new quota
+revision discards the previous token cache even when exposed identity metadata
+matches. Pending token responses require the same private identity and quota
+revision; late results from an earlier revision are dropped. Changed/unverified
+identity clears quota history and tokens; token identity differing from the latest
+quota hides both until a new bracketed quota read succeeds. Failures do not spin
+additional account reads or fall back to previous account data.
 
 Quota history contains only sanitized percentages/reset times from real
 observations, with seven-day retention. It lives in `UC_HOME/usage` and is never
 used as a current reading. No current numerical PNG is persisted or replayed.
+Because no account key is persisted, the first verified Codex identity in a new
+helper clears any previously loaded Codex history rather than assuming ownership.
 At Rust receipt, freshness is checked again. If even one window/token field was
 stripped during rendering, the PNG is rejected even if another window remains
 current. PNG bytes are decoded with bounded memory and fixed dimensions before
@@ -104,7 +130,7 @@ tests exercise provenance, stale/reset/logout handling, activation, throttling,
 abort, privacy and all 16 PNG views at both sizes. Rust standalone slice tests
 exercise real private pipes with unknown-only Node fixtures, bounded hung/invalid
 children, full PNG validation and receipt-time numerical suppression.
-The isolated checks passed 53 Node tests and eight Rust usage-slice tests.
+The isolated checks passed 61 Node tests and 11 Rust usage-slice tests.
 
 No live account calls, installed-plugin changes, hardware checks or packaging
 acceptance were performed by this task. The original Toolkit reader's recorded

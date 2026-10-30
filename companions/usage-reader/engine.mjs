@@ -2,7 +2,7 @@ import { Resvg } from '@resvg/resvg-js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readClaudeUsage } from './source/providers/claude.js';
-import { readCodexUsage, readCodexTokenHistory } from './source/providers/codex.js';
+import { readCodexUsage, readCodexTokenHistory, codexIdentity } from './source/providers/codex.js';
 import { createClaudePollBroker } from './source/claude-poll-broker.js';
 import { createHistoryStore } from './source/history.js';
 import { renderUsageSvg, usageView, VIEW_OPTIONS } from './source/render.js';
@@ -61,15 +61,22 @@ export function rasterize(snapshot, { provider, view, width, height, history = [
   return { png: Array.from(png), snapshot: guarded };
 }
 
-const verifiedRead = reader => async options => ({ ...await reader(options), provenanceVerified: true });
+const verifiedRead = reader => async options => {
+  const raw = await reader(options);
+  // Preserve the provider's private WeakMap association; never spread identity
+  // into an enumerable DTO field to transfer it across this module boundary.
+  return raw && typeof raw === 'object' ? Object.assign(raw, { provenanceVerified: true }) : raw;
+};
 // Dependencies can be replaced only in module tests, never by a pipe command.
 export function createUsageReader({ now = Date.now,
   readers = { claude: verifiedRead(readClaudeUsage), codex: verifiedRead(readCodexUsage) },
   tokenReader = readCodexTokenHistory, brokerFactory = createClaudePollBroker,
+  identityOf = codexIdentity,
   historyStore = createHistoryStore({ now }), setTimer = setInterval, clearTimer = clearInterval,
   raster = rasterize } = {}) {
   const active = new Map(), snapshots = new Map(), pending = new Map(), attempts = new Map(), controllers = new Map();
   let generation = 0, stopped = false, timer = null, broker = null, token = null, tokenAttempted = -Infinity, tokenPending = null, tokenController = null;
+  let accountIdentity = null, quotaRevision = 0;
   const empty = provider => unknown(provider, active.has(provider) ? 'unavailable' : 'inactive');
   function snapshot(provider) {
     if (!active.has(provider)) return empty(provider);
@@ -85,22 +92,43 @@ export function createUsageReader({ now = Date.now,
     const gen = generation, controller = new AbortController(); controllers.set(provider, controller);
     const task = Promise.resolve().then(() => readers[provider]({ signal: controller.signal, timeoutMs: 12_000 })).then(raw => {
       if (stopped || generation !== gen || !active.has(provider)) return;
-      const clean = guardSnapshot(provider, raw, now()); snapshots.set(provider, clean);
+      let clean = guardSnapshot(provider, raw, now());
+      if (provider === 'codex') {
+        const identity = clean.status === 'ok' ? identityOf(raw) : null;
+        // No identity is persisted; a new helper cannot attribute old history.
+        if (!identity || identity !== accountIdentity) historyStore.clear('codex');
+        accountIdentity = identity; quotaRevision++;
+        token = null; tokenAttempted = -Infinity;
+        tokenController?.abort(); tokenController = null; tokenPending = null;
+        if (!identity) clean = unknown('codex', 'unavailable');
+      }
+      snapshots.set(provider, clean);
       if (clean.status === 'ok') historyStore.record(clean);
       else { historyStore.clear(provider); if (provider === 'codex') token = null; }
-    }, () => { if (generation === gen && active.has(provider)) { snapshots.set(provider, unknown(provider, 'error')); historyStore.clear(provider); if (provider === 'codex') token = null; } })
+    }, () => { if (generation === gen && active.has(provider)) {
+      snapshots.set(provider, unknown(provider, 'error')); historyStore.clear(provider);
+      if (provider === 'codex') { accountIdentity = null; quotaRevision++; token = null; tokenAttempted = -Infinity; tokenController?.abort(); tokenController = null; tokenPending = null; }
+    } })
       .finally(() => { if (pending.get(provider) === task) { pending.delete(provider); controllers.delete(provider); } });
     pending.set(provider, task); return task;
   }
   async function refreshTokens() {
     if (tokenPending) return tokenPending;
-    if (stopped || !active.get('codex')?.tokenHistory || now() - tokenAttempted < 3600_000) return;
+    if (stopped || !active.get('codex')?.tokenHistory || !accountIdentity || now() - tokenAttempted < 60_000) return;
     if (snapshot('codex').status !== 'ok') return;
-    tokenAttempted = now(); const gen = generation;
+    tokenAttempted = now(); const gen = generation, revision = quotaRevision, identity = accountIdentity;
     const controller = new AbortController(); tokenController = controller;
     const signal = controller.signal;
     const task = Promise.resolve().then(() => tokenReader({ timeoutMs: 12_000, signal })).then(raw => {
-      if (stopped || gen !== generation || !active.get('codex')?.tokenHistory || snapshot('codex').status !== 'ok') return;
+      if (stopped || gen !== generation || revision !== quotaRevision || identity !== accountIdentity ||
+        !active.get('codex')?.tokenHistory || snapshot('codex').status !== 'ok') return;
+      const tokenIdentity = identityOf(raw);
+      if (!tokenIdentity || tokenIdentity !== accountIdentity) {
+        // Token transaction saw an account different from the latest quota. Hide
+        // both until the next independently bracketed quota read establishes it.
+        accountIdentity = null; quotaRevision++; token = null; historyStore.clear('codex');
+        snapshots.set('codex', unknown('codex')); tokenAttempted = -Infinity; return;
+      }
       token = { status: raw?.status === 'ok' ? 'ok' : 'unavailable', observedAt: raw?.observedAt, daily: raw?.daily };
     }, () => { if (gen === generation) token = null; }).finally(() => { if (tokenPending === task) { tokenPending = null; tokenController = null; } });
     tokenPending = task; return task;
@@ -115,9 +143,13 @@ export function createUsageReader({ now = Date.now,
       typeof c.tokenHistory !== 'boolean' || c.provider === 'claude' && c.tokenHistory) || new Set(configs.map(c => c.provider)).size !== configs.length) throw new Error('invalid-active');
     const same = JSON.stringify([...active.values()]) === JSON.stringify(configs);
     if (same) return { active: [...active.values()] };
+    const continuingCodex = active.has('codex') && configs.some(c => c.provider === 'codex');
     generation++; for (const controller of controllers.values()) controller.abort(); controllers.clear(); pending.clear();
     tokenController?.abort(); tokenController = null; tokenPending = null;
-    active.clear(); snapshots.clear(); attempts.clear(); token = null; tokenAttempted = -Infinity;
+    active.clear(); token = null; tokenAttempted = -Infinity;
+    for (const provider of snapshots.keys()) if (!configs.some(c => c.provider === provider)) snapshots.delete(provider);
+    if (!continuingCodex) accountIdentity = null;
+    quotaRevision++;
     for (const config of configs) active.set(config.provider, { provider: config.provider, tokenHistory: config.tokenHistory });
     if (timer) { clearTimer(timer); timer = null; }
     if (active.has('claude') && !broker) { broker = brokerFactory(); await broker.start(); }
@@ -140,6 +172,7 @@ export function createUsageReader({ now = Date.now,
       for (const controller of controllers.values()) controller.abort(); controllers.clear();
       tokenController?.abort(); tokenController = null;
       active.clear(); snapshots.clear(); token = null;
+      accountIdentity = null; quotaRevision++;
       if (broker) { await broker.stop(); broker = null; }
     }
   };
