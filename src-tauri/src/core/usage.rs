@@ -5,6 +5,10 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -256,7 +260,30 @@ impl UsageService {
         Ok(())
     }
     pub fn is_running(&self) -> bool {
-        self.state.lock().map(|s| s.process.is_some()).unwrap_or(false)
+        let Ok(mut state) = self.state.lock() else { return false };
+        let alive = state.process.as_mut().is_some_and(Process::healthy);
+        if !alive {
+            state.process = None;
+            state.active.clear();
+        }
+        alive
+    }
+    /// Bounded, account-free pipe heartbeat. Intended for a supervisor (e.g. every
+    /// 30 seconds), not every rendered key. Failure releases this child only.
+    pub fn check_health(&self) -> bool {
+        let Ok(mut state) = self.state.lock() else { return false };
+        let healthy = state.process.as_mut().is_some_and(|process| {
+            process.healthy()
+                && process
+                    .request(json!({"method":"health"}), self.timeout.min(Duration::from_millis(500)))
+                    .ok()
+                    .is_some_and(|v| v.get("alive") == Some(&json!(true)))
+        });
+        if !healthy {
+            state.process = None;
+            state.active.clear();
+        }
+        healthy
     }
     pub fn snapshot(&self, provider: Provider) -> Result<UsageSnapshot> {
         let mut state = self.state.lock().map_err(error)?;
@@ -368,6 +395,7 @@ struct Process {
     writer: Option<mpsc::SyncSender<Vec<u8>>>,
     replies: mpsc::Receiver<std::result::Result<Value, ()>>,
     next_id: u64,
+    alive: Arc<AtomicBool>,
     #[cfg(windows)]
     job: OwnedJob,
 }
@@ -402,9 +430,13 @@ impl Process {
         let (write_tx, write_rx) = mpsc::sync_channel::<Vec<u8>>(1);
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let write_errors = reply_tx.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let write_alive = alive.clone();
+        let read_alive = alive.clone();
         std::thread::spawn(move || {
             while let Ok(line) = write_rx.recv() {
                 if input.write_all(&line).and_then(|_| input.flush()).is_err() {
+                    write_alive.store(false, Ordering::SeqCst);
                     let _ = write_errors.send(Err(()));
                     break;
                 }
@@ -416,12 +448,14 @@ impl Process {
                 let mut line = Vec::new();
                 let got = reader.by_ref().take((MAX_REPLY + 1) as u64).read_until(b'\n', &mut line);
                 if !matches!(got,Ok(n) if n>0) || line.len() > MAX_REPLY || !line.ends_with(b"\n") {
+                    read_alive.store(false, Ordering::SeqCst);
                     let _ = reply_tx.send(Err(()));
                     break;
                 }
                 let parsed = serde_json::from_slice(&line).map_err(|_| ());
                 let invalid = parsed.is_err();
                 if reply_tx.send(parsed).is_err() || invalid {
+                    read_alive.store(false, Ordering::SeqCst);
                     break;
                 }
             }
@@ -431,6 +465,7 @@ impl Process {
             writer: Some(write_tx),
             replies: reply_rx,
             next_id: 1,
+            alive,
             #[cfg(windows)]
             job,
         })
@@ -455,12 +490,16 @@ impl Process {
         }
         reply.get("result").cloned().ok_or(UsageError("Usage result missing."))
     }
+    fn healthy(&mut self) -> bool {
+        self.alive.load(Ordering::SeqCst) && matches!(self.child.try_wait(), Ok(None))
+    }
     fn shutdown(&mut self) {
         let _ = self.request(json!({"method":"shutdown"}), Duration::from_millis(500));
         self.writer = None;
         self.terminate();
     }
     fn terminate(&mut self) {
+        self.alive.store(false, Ordering::SeqCst);
         #[cfg(windows)]
         self.job.close();
         let _ = self.child.kill();
@@ -586,6 +625,7 @@ mod tests {
         }])
         .unwrap();
         assert!(s.is_running());
+        assert!(s.check_health());
         let result = s.render(Provider::Codex, "rings", 196, 196).unwrap();
         assert!(valid_png(&result.png, 196, 196));
         assert_eq!(result.snapshot.status, UsageStatus::Unavailable);
@@ -625,6 +665,42 @@ mod tests {
                 token_history: false
             }])
             .is_err());
+        assert!(!s.is_running());
+    }
+    #[test]
+    fn child_exit_is_detected_without_rendering_or_reading_an_account() {
+        let (_dir, s) = service("exit-fixture.mjs");
+        s.set_active_providers(&[ActiveProvider {
+            provider: Provider::Codex,
+            token_history: false,
+        }])
+        .unwrap();
+        let start = Instant::now();
+        while s.is_running() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!s.is_running(), "child death must not remain a running process object");
+        assert!(!s.check_health());
+        assert!(s.render(Provider::Codex, "rings", 196, 196).is_err());
+    }
+    #[test]
+    fn unresponsive_live_child_fails_bounded_health_check_without_auto_restart() {
+        let (_dir, s) = service("silent-fixture.mjs");
+        s.set_active_providers(&[ActiveProvider {
+            provider: Provider::Codex,
+            token_history: false,
+        }])
+        .unwrap();
+        assert!(s.is_running());
+        let start = Instant::now();
+        assert!(!s.check_health());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(!s.is_running());
+    }
+    #[test]
+    fn bounded_health_ping_never_starts_inactive_reader() {
+        let (_dir, s) = service("fixture.mjs");
+        assert!(!s.check_health());
         assert!(!s.is_running());
     }
     #[test]

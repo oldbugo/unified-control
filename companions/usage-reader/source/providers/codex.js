@@ -1,8 +1,23 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHmac, randomBytes } from 'node:crypto';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+// Per-helper lifetime only. Neither metadata nor this salted digest is ever an
+// enumerable result field, pipe DTO, log value or persisted history field.
+const identitySalt = randomBytes(32);
+const identities = new WeakMap();
+export const codexIdentity = result => result && typeof result === 'object' ? identities.get(result) ?? null : null;
+function identityFor(response) {
+  const account = response?.account;
+  if (account?.type !== 'chatgpt' || typeof account.email !== 'string' || !account.email.trim() || account.email.length > 512 ||
+    typeof account.planType !== 'string' || !account.planType || account.planType.length > 128 ||
+    account.workspaceName != null && (typeof account.workspaceName !== 'string' || account.workspaceName.length > 512)) return null;
+  return createHmac('sha256', identitySalt).update(JSON.stringify([
+    account.email.trim(), account.planType, account.workspaceName ?? null
+  ])).digest('hex');
+}
 
 function usageWindow(value) {
   if (!value || !Number.isFinite(value.usedPercent) || value.usedPercent < 0 ||
@@ -70,6 +85,7 @@ async function readAccountData(method, normalize, options) {
     let buffer = '';
     let bytes = 0;
     let phase = 'initialize';
+    let identityBefore = null, normalized = null, accountChanged = false;
     const onAbort = () => finish(empty('unavailable', 'The usage reader was stopped.'));
     const empty = (status, message) => method === 'account/usage/read'
       ? { status, observedAt: Date.now(), daily: [], message }
@@ -125,20 +141,32 @@ async function readAccountData(method, normalize, options) {
           finish(empty('error', 'Codex returned an invalid usage response.'));
           return;
         }
+        if (message.method === 'account/updated' && identityBefore) accountChanged = true;
         if (phase === 'initialize' && message.id === 1) {
           if (message.error || !message.result) {
             finish(empty('error', 'Codex could not initialize the usage reader.'));
             return;
           }
-          phase = 'usage';
+          phase = 'account-before';
           send({ method: 'initialized', params: {} });
-          send({ id: 2, method });
+          send({ id: 3, method: 'account/read', params: { refreshToken: false } });
+        } else if (phase === 'account-before' && message.id === 3) {
+          identityBefore = message.error ? null : identityFor(message.result);
+          if (!identityBefore) { finish(empty('unavailable', 'Codex account identity is unavailable.')); continue; }
+          phase = 'usage'; send({ id: 2, method });
         } else if (phase === 'usage' && message.id === 2) {
           if (message.error) {
             finish(empty('unavailable', 'Codex usage is unavailable. Check your ChatGPT sign-in in Codex.'));
           } else {
-            finish(normalize(message.result));
+            normalized = normalize(message.result);
+            phase = 'account-after'; send({ id: 4, method: 'account/read', params: { refreshToken: false } });
           }
+        } else if (phase === 'account-after' && message.id === 4) {
+          const identityAfter = message.error ? null : identityFor(message.result);
+          if (accountChanged || !identityAfter || identityBefore !== identityAfter) {
+            finish(empty('unavailable', 'Codex account changed during the usage read.')); continue;
+          }
+          identities.set(normalized, identityAfter); finish(normalized);
         }
       }
     });

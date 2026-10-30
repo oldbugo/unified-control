@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { normalizeCodexUsage, readCodexUsage, normalizeCodexTokenHistory, readCodexTokenHistory } from '../source/providers/codex.js';
+import { normalizeCodexUsage, readCodexUsage, normalizeCodexTokenHistory, readCodexTokenHistory, codexIdentity } from '../source/providers/codex.js';
 
 const window = (minutes, usedPercent = 23.5) => ({ windowDurationMins: minutes, usedPercent, resetsAt: 1900000000 });
 
@@ -27,7 +27,8 @@ test('missing and invalid measurements are unknown, not zero', () => {
   }
 });
 
-function fakeServer(respond) {
+const account = (email = 'synthetic@example.invalid', workspaceName = null) => ({ account: { type: 'chatgpt', email, planType: 'pro', workspaceName }, requiresOpenaiAuth: true });
+function fakeServer(respond, accounts = [account(), account()]) {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
   child.requests = [];
@@ -36,7 +37,10 @@ function fakeServer(respond) {
   child.stdin = new Writable({ write(chunk, encoding, callback) {
     const message = JSON.parse(String(chunk));
     child.requests.push(message);
-    queueMicrotask(() => respond(message, child));
+    queueMicrotask(() => {
+      if (message.method === 'account/read') child.reply({ id: message.id, result: accounts[message.id === 3 ? 0 : 1] });
+      else respond(message, child);
+    });
     callback();
   } });
   child.reply = message => child.stdout.write(`${JSON.stringify(message)}\n`);
@@ -50,7 +54,8 @@ test('performs handshake, reads only account limits, hides the process and clean
   });
   let launch;
   const result = await readCodexUsage({ executable: 'fake-codex', spawnProcess: (...args) => { launch = args; return child; } });
-  assert.deepEqual(child.requests.map(message => message.method), ['initialize', 'initialized', 'account/rateLimits/read']);
+  assert.deepEqual(child.requests.map(message => message.method), ['initialize', 'initialized', 'account/read', 'account/rateLimits/read', 'account/read']);
+  assert.ok(child.requests.filter(m => m.method === 'account/read').every(m => m.params.refreshToken === false));
   assert.equal(launch[0], 'fake-codex');
   assert.deepEqual(launch[1], ['app-server']);
   assert.equal(launch[2].windowsHide, true);
@@ -100,7 +105,7 @@ test('accepts fragmented JSON lines and ignores unrelated notifications', async 
       process.stdout.write('ult":{}}\n');
     }
     if (message.id === 2) {
-      process.reply({ method: 'account/updated', params: { privateData: 'not retained' } });
+      process.reply({ method: 'thread/name/updated', params: { privateData: 'not retained' } });
       process.reply({ id: 2, result: { rateLimits: { primary: window(300) } } });
     }
   });
@@ -146,8 +151,45 @@ test('daily token reader uses its own read-only account endpoint and returns san
     if (message.id === 2) process.reply({ id: 2, result: { dailyUsageBuckets: [{ startDate: '2026-10-24', tokens: 100 }] } });
   });
   const result = await readCodexTokenHistory({ spawnProcess: () => child });
-  assert.deepEqual(child.requests.map(message => message.method), ['initialize', 'initialized', 'account/usage/read']);
+  assert.deepEqual(child.requests.map(message => message.method), ['initialize', 'initialized', 'account/read', 'account/usage/read', 'account/read']);
   assert.equal(result.status, 'ok');
   assert.deepEqual(result.daily, [{ date: '2026-10-24', tokens: 100 }]);
   assert.equal(child.killCount, 1);
+});
+
+const quotaResponder = (message, child) => {
+  if (message.id === 1) child.reply({ id: 1, result: {} });
+  if (message.id === 2) child.reply({ id: 2, result: { rateLimits: { primary: window(300) } } });
+};
+test('quota reads fail closed if account metadata is missing or changes before/after the transaction', async () => {
+  for (const identities of [[account('one@example.invalid'), account('two@example.invalid')],
+    [account(null), account(null)], [{ account: null }, account()],
+    [{ account: { type: 'apiKey' } }, { account: { type: 'apiKey' } }],
+    [account('one@example.invalid', 'One'), account('one@example.invalid', 'Two')]]) {
+    const child = fakeServer(quotaResponder, identities);
+    const result = await readCodexUsage({ spawnProcess: () => child });
+    assert.notEqual(result.status, 'ok'); assert.equal(result.fiveHour, null); assert.equal(codexIdentity(result), null);
+    assert.ok(!JSON.stringify(result).includes('@example.invalid'));
+  }
+});
+test('identity is stable only in RAM side-channel and never an enumerable result or private pipe field', async () => {
+  const read = async email => readCodexUsage({ spawnProcess: () => fakeServer(quotaResponder, [account(email), account(email)]) });
+  const a = await read('one@example.invalid'), a2 = await read('one@example.invalid'), b = await read('two@example.invalid');
+  assert.ok(codexIdentity(a)); assert.equal(codexIdentity(a), codexIdentity(a2)); assert.notEqual(codexIdentity(a), codexIdentity(b));
+  assert.ok(!JSON.stringify(a).includes(codexIdentity(a))); assert.ok(!JSON.stringify(a).includes('@example.invalid'));
+  assert.ok(!Object.keys(a).some(k => /identity|account|email/i.test(k)));
+});
+test('account-updated notification during otherwise stable metadata brackets invalidates usage', async () => {
+  const child = fakeServer((message, child) => {
+    if (message.id === 2) child.reply({ method: 'account/updated', params: { authMode: 'chatgpt', planType: 'pro' } });
+    quotaResponder(message, child);
+  });
+  const result = await readCodexUsage({ spawnProcess: () => child }); assert.notEqual(result.status, 'ok'); assert.equal(result.fiveHour, null);
+});
+test('token transaction also rejects an account change in its final metadata check', async () => {
+  const child = fakeServer((message, child) => {
+    if (message.id === 1) child.reply({ id: 1, result: {} });
+    if (message.id === 2) child.reply({ id: 2, result: { dailyUsageBuckets: [{ startDate: '2026-10-31', tokens: 999 }] } });
+  }, [account('one@example.invalid'), account('two@example.invalid')]);
+  const result = await readCodexTokenHistory({ spawnProcess: () => child }); assert.deepEqual(result.daily, []); assert.equal(codexIdentity(result), null);
 });
