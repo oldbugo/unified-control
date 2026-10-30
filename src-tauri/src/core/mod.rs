@@ -4,10 +4,13 @@ pub mod app;
 pub mod autostart;
 pub mod buildinfo;
 pub mod commands;
+pub mod dock_runtime;
 pub mod error;
 pub mod jobobject;
 pub mod js;
+pub mod key_render;
 pub mod paths;
+pub mod profiles;
 pub mod scheduler;
 pub mod settings;
 

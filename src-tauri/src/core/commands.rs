@@ -47,9 +47,14 @@ impl Events for EventRelay {
     }
 }
 
-async fn run<T: Send + 'static>(app: &State<'_, Core>, f: impl FnOnce(&App) -> CoreResult<T> + Send + 'static) -> Result<T, CoreError> {
+async fn run<T: Send + 'static>(
+    app: &State<'_, Core>,
+    f: impl FnOnce(&App) -> CoreResult<T> + Send + 'static,
+) -> Result<T, CoreError> {
     let a = app.0.clone();
-    tauri::async_runtime::spawn_blocking(move || f(&a)).await.map_err(|e| CoreError::new(e.to_string()).status(500))?
+    tauri::async_runtime::spawn_blocking(move || f(&a))
+        .await
+        .map_err(|e| CoreError::new(e.to_string()).status(500))?
 }
 
 // ---------- state, jobs ----------
@@ -69,9 +74,16 @@ fn json_args(request: &tauri::ipc::Request<'_>) -> Value {
 
 /// `{ page? }`, or the same wrapped in `patch`.
 #[tauri::command]
-pub async fn settings_update(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+pub async fn settings_update(
+    core: State<'_, Core>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, CoreError> {
     let a = json_args(&request);
-    let patch = a.get("patch").filter(|p| p.is_object()).cloned().unwrap_or(a);
+    let patch = a
+        .get("patch")
+        .filter(|p| p.is_object())
+        .cloned()
+        .unwrap_or(a);
     run(&core, move |app| app.settings_update(&patch)).await
 }
 
@@ -87,5 +99,41 @@ pub async fn job_get(core: State<'_, Core>, job_id: String) -> Result<Value, Cor
 
 #[tauri::command]
 pub async fn job_cancel(core: State<'_, Core>, job_id: String) -> Result<Value, CoreError> {
-    run(&core, move |a| Ok(json!({ "cancelled": a.sched.cancel(&job_id) }))).await
+    run(&core, move |a| {
+        Ok(json!({ "cancelled": a.sched.cancel(&job_id) }))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn profiles_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.profiles_state()).await
+}
+
+#[tauri::command]
+pub async fn profiles_save(
+    core: State<'_, Core>,
+    snapshot: super::profiles::ProfileState,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| app.save_profiles(snapshot)).await
+}
+
+#[tauri::command]
+pub async fn key_previews(
+    core: State<'_, Core>,
+    faces: Vec<super::profiles::Face>,
+    clock: String,
+) -> Result<Value, CoreError> {
+    if faces.len() != 14 {
+        return Err(CoreError::new("A dock page has exactly 14 displays"));
+    }
+    run(&core, move |_| {
+        let inputs = super::key_render::RenderInputs { clock: Some(clock), ..Default::default() };
+        let mut frames = Vec::with_capacity(14);
+        for (index, face) in faces.iter().enumerate() {
+            let frame = super::key_render::render_face(&face.kind, &face.text, index == 13, &inputs).map_err(CoreError::new)?;
+            frames.push(json!({"index":index, "width":frame.width, "height":frame.height, "png":frame.png, "unknown":frame.unknown}));
+        }
+        Ok(Value::Array(frames))
+    }).await
 }

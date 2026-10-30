@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent, Wry};
 use uc_core::core::commands::Core;
 use uc_core::core::error::CoreError;
 
@@ -21,7 +21,11 @@ static TRAY_ON: AtomicBool = AtomicBool::new(false);
 const TRAY_ID: &str = "uc";
 const TOOLTIP: &str = "Unified Control";
 /// Closing the window to the tray destroys it (and its WebView2), as CoolerScreen's default "free the window memory".
-const DESTROY_ON_CLOSE: bool = true;
+// The editor owns pending profile edits. Keep its context until Quit has flushed
+// them; destroying it on a normal close would drop queued or failed writes.
+const DESTROY_ON_CLOSE: bool = false;
+static EDITOR_READY: AtomicBool = AtomicBool::new(false);
+static PENDING_EXIT: Mutex<Option<(crate::quit_cmd::Request, bool)>> = Mutex::new(None);
 
 /// The menu items (kept so later phases can change their labels from any thread).
 struct Tray {
@@ -37,7 +41,8 @@ pub fn tray_on() -> bool {
 
 /// The tray icon is left out of the notification area in quiet test runs.
 fn tray_icon_hidden() -> bool {
-    crate::window::quiet() && !std::env::var("UC_TEST_TRAY_ICON").is_ok_and(|v| !v.is_empty() && v != "0")
+    crate::window::quiet()
+        && !std::env::var("UC_TEST_TRAY_ICON").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 // ---------------------------------------------------------------- window
@@ -73,7 +78,10 @@ pub fn create_window(app: &AppHandle, show: bool) -> tauri::Result<WebviewWindow
 }
 
 /// As `create_window`, with how it is shown (None: built hidden).
-pub fn create_window_as(app: &AppHandle, how: Option<crate::window::Present>) -> tauri::Result<WebviewWindow> {
+pub fn create_window_as(
+    app: &AppHandle,
+    how: Option<crate::window::Present>,
+) -> tauri::Result<WebviewWindow> {
     let win = crate::window::create(app)?;
     attach_close_handler(&win);
     if let Some(h) = how {
@@ -110,7 +118,11 @@ fn icon(app: &AppHandle) -> Image<'static> {
     for y in 0..n {
         for x in 0..n {
             let key = (5..27).contains(&x) && (5..27).contains(&y);
-            let c: [u8; 4] = if key { [64, 200, 160, 255] } else { [28, 32, 48, 255] };
+            let c: [u8; 4] = if key {
+                [64, 200, 160, 255]
+            } else {
+                [28, 32, 48, 255]
+            };
             px[(y * n + x) * 4..(y * n + x) * 4 + 4].copy_from_slice(&c);
         }
     }
@@ -145,7 +157,12 @@ fn build_tray(app: &AppHandle) {
         .icon(icon(app))
         .on_menu_event(|a: &AppHandle, ev: MenuEvent| tray_menu_click(a, ev.id().as_ref()))
         .on_tray_icon_event(|t, ev| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = ev
+            {
                 show_main(t.app_handle());
             }
         })
@@ -172,7 +189,11 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
 #[cfg(debug_assertions)]
 pub fn tray_state() -> String {
     match TRAY.lock().unwrap().as_ref() {
-        Some(t) => format!("open_text={:?} icon_shown={}", t.open.text().unwrap_or_default(), !tray_icon_hidden()),
+        Some(t) => format!(
+            "open_text={:?} icon_shown={}",
+            t.open.text().unwrap_or_default(),
+            !tray_icon_hidden()
+        ),
         None => "no tray".into(),
     }
 }
@@ -183,8 +204,51 @@ fn remove_tray(app: &AppHandle) {
     TRAY_ON.store(false, Ordering::SeqCst);
 }
 
-/// Tray "Quit": stop the work, then exit.
+/// Tray Quit first flushes editor-owned pending writes.
 pub fn quit_app(app: &AppHandle) {
+    request_exit(app, crate::quit_cmd::Request::Quit, true);
+}
+
+fn request_exit(app: &AppHandle, request: crate::quit_cmd::Request, background: bool) {
+    *PENDING_EXIT.lock().unwrap() = Some((request, background));
+    if EDITOR_READY.load(Ordering::SeqCst) {
+        if let Some(window) = app.get_webview_window("main") {
+            if tauri::Emitter::emit(&window, "uc:prepare-quit", ()).is_ok() {
+                return;
+            }
+            // A live editor whose guard cannot be reached must keep its edits.
+            *PENDING_EXIT.lock().unwrap() = None;
+            uc_core::device::log("quit deferred: editor flush guard unavailable");
+            return;
+        }
+    }
+    if let Err(error) = finish_exit(app) {
+        uc_core::device::log(&error.message);
+    }
+}
+
+fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
+    if app.state::<Core>().0.busy_for_quit() {
+        return Err(CoreError::new(
+            "Work is still running; the app has stayed open.",
+        ));
+    }
+    let Some((request, background)) = PENDING_EXIT.lock().unwrap().take() else {
+        return Ok(());
+    };
+    match request {
+        crate::quit_cmd::Request::Quit => {}
+        crate::quit_cmd::Request::Restart => {
+            crate::relaunch::spawn_helper(std::process::id(), background, None)
+                .map_err(|e| CoreError::new(e.to_string()))?
+        }
+        crate::quit_cmd::Request::Update(path) => crate::relaunch::spawn_helper(
+            std::process::id(),
+            true,
+            Some(std::path::Path::new(&path)),
+        )
+        .map_err(|e| CoreError::new(e.to_string()))?,
+    }
     arm_exit_watchdog("tray Quit");
     let a = app.clone();
     std::thread::spawn(move || {
@@ -194,23 +258,29 @@ pub fn quit_app(app: &AppHandle) {
             b.exit(0);
         });
     });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn editor_session_ready(ready: bool) {
+    EDITOR_READY.store(ready, Ordering::SeqCst);
+}
+
+#[tauri::command]
+pub fn editor_quit_ready(app: AppHandle, saved: bool) -> Result<(), CoreError> {
+    if !saved {
+        *PENDING_EXIT.lock().unwrap() = None;
+        show_main(&app);
+        return Ok(());
+    }
+    finish_exit(&app)
 }
 
 /// Carry out a request from `--quit` / `--restart` / `--update` or the General page button: leave a detached helper when the
 /// app is to come back (restart, update), then quit exactly like the tray's Quit. If the helper cannot be started the app does
 /// not quit.
 pub fn restart_app(app: &AppHandle, req: crate::quit_cmd::Request) {
-    use crate::quit_cmd::Request;
-    let pid = std::process::id();
-    let started = match &req {
-        Request::Quit => Ok(()),
-        Request::Restart => crate::relaunch::spawn_helper(pid, true, None),
-        Request::Update(p) => crate::relaunch::spawn_helper(pid, true, Some(std::path::Path::new(p))),
-    };
-    match started {
-        Ok(()) => quit_app(app),
-        Err(e) => uc_core::device::log(&format!("updater: could not start the helper ({e}); the app stays up")),
-    }
+    request_exit(app, req, true);
 }
 
 /// General > "Restart Unified Control" (troubleshooting): the tray Quit path, then a fresh copy started by the app itself with
@@ -218,13 +288,12 @@ pub fn restart_app(app: &AppHandle, req: crate::quit_cmd::Request) {
 #[tauri::command]
 pub async fn app_restart(app: AppHandle, core: tauri::State<'_, Core>) -> Result<Value, CoreError> {
     if core.0.busy_for_quit() {
-        return Err(CoreError::new("Something is still running. Restart when it has finished."));
+        return Err(CoreError::new(
+            "Something is still running. Restart when it has finished.",
+        ));
     }
     uc_core::device::log("restart requested (General): the tray Quit path");
-    let pid = std::process::id();
-    crate::relaunch::spawn_helper(pid, false, None).map_err(|e| CoreError::new(format!("Could not restart: {e}")))?;
-    let a = app.clone();
-    quit_app(&a);
+    request_exit(&app, crate::quit_cmd::Request::Restart, false);
     Ok(serde_json::json!({ "restarting": true }))
 }
 

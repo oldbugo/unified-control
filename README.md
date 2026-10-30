@@ -1,7 +1,7 @@
 # Unified Control
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
-the Ulanzi Dial. Private. App shell and combined-interface prototype; no real device control yet. Rules for working on it: `CLAUDE.md`.
+the Ulanzi Dial. Private. Combined editor, native profile storage and dock foundations; no real device control enabled yet. Rules for working on it: `CLAUDE.md`.
 
 ## Current direction (2026-10-30)
 
@@ -22,29 +22,42 @@ Unified Control is one product maintained across separate private repositories. 
 | [coolerscreen](https://github.com/oldbugo/coolerscreen) | CoolerScreen app and reusable cooler engine; keeps its own version history |
 | [ulanzi-toolkit](https://github.com/oldbugo/ulanzi-toolkit) | Existing Studio plugins, including usage readers and Monitor Toggle |
 
-The combined app will consume the device engines through versioned interfaces. These engine integrations are still
-planned; the current interface prototype does not link or control either engine. Reviewed work is committed and pushed
+The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `a467475` in
+`uc-ulanzi`. This development pin is immutable; tagged dependencies follow when releases are made. The profile/render
+pipeline is tested through the simulated dock; the app does not automatically open native HID. CoolerScreen engine integration is still planned. Reviewed work is committed and pushed
 to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
 
-## Interface prototype
+## Current implementation
 
-The interface prototype edits a local sample dock layout. Its profiles, pages, actions and A/B face choices are preview
-configuration, not the production profile store. It does not send key presses, launch apps, switch monitors, read AI
-accounts or open device connections. CoolerScreen and Dial pages describe future integrations; they do not report live
-connection status. Usage previews must display an explicit sample marker and never imply a live account reading.
+The native editor saves validated profiles and pages in the UC app-data folder, with stable IDs, a startup backup and
+journaled recovery. Changes save as made; errors remain visible and retryable. Browser-only previews keep a separate
+local draft. They are not silently imported into native profiles. [Storage contract](docs/profiles.md).
 
-Built: shared frame and interactive dock editor prototype, plus persisted navigation for all six pages. Still to build:
-real HID transport, production profiles, rendering pipeline, action execution, usage-provider integration and device
-coexistence. UI/browser checks do not establish native WebView or physical-device acceptance. No new installation is
-part of this prototype milestone.
+Built: combined six-page frame; native profile editing; PNG text/clock/unknown-data faces at 196x196 and 458x196;
+transport-independent A/B routing, duplicate-press suppression, folder/back navigation and changed-key updates. A
+saved profile is rendered and sent through the real ZIP/packet pipeline to the simulated dock in integration tests.
+The separate hardware crate implements native Windows HID, serialized writes and reconnect, tested with fake transports
+only. Cached reconnect-image replay is off by default so stale usage pictures cannot be silently replayed.
 
-Verified for this prototype: 30 Rust library tests pass (one helper test ignored); headless Chromium checks cover all six
-pages, 14 displays, A/B flips, draft persistence, profiles/pages, inert action edits, text escaping and corrupt-draft
-recovery. Screenshots were inspected at 1440, 1100 and 800 pixel widths. Native WebView and physical dock checks remain.
+Still to build/check: app-level Studio coexistence and native-device enablement, real action execution, account readers
+and the full 16 usage faces, sensors, icon/picture rendering, physical dock acceptance and the later cooler/dial engines.
+Initial native icon faces use their text label; allowance/reset/trend and unavailable sensors show unknown values.
+No accounts are read and no launch, hotkey, media or monitor action is executed by this stage. No new installation is included.
+
+Checked: 52 UC library tests pass (one helper ignored); 30 driver tests pass. Headless browser checks cover the combined
+interface, stable ID conversion, single-flight saves/retry, draft recovery and three window widths. A separate quiet
+native WebView test exercises actual IPC, isolated profile files, A/B persistence and physical-size PNG previews.
+Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
+failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 
 Repeat the browser check with `node scripts/check-interface.cjs` where Playwright 1.58.2 and its Chromium are available.
 For an external installation, set `UC_PLAYWRIGHT_MODULE` to its module folder. Screenshots go to the temporary
 `uc-interface-preview` folder, or `UC_PREVIEW_OUTPUT` if set. The check runs headlessly and opens no native app.
+
+For the native check, first build debug, set `UC_TEST_EXE` to its `debug/unified-control.exe`, then run
+`node scripts/check-native-profiles.cjs`. It refuses release/installed binaries, creates its own temporary UC_HOME,
+and sets quiet/multi/fake flags. It also verifies normal window close and timed tray Quit preserve a newer queued edit.
+It does not open the real dock or alter the installed apps.
 
 ## Where the shell came from
 

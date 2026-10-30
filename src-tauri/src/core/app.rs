@@ -41,7 +41,11 @@ pub struct Debounce {
 
 impl Debounce {
     pub fn new(delay: Duration, f: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
-        Arc::new(Debounce { pending: AtomicBool::new(false), delay, f: Box::new(f) })
+        Arc::new(Debounce {
+            pending: AtomicBool::new(false),
+            delay,
+            f: Box::new(f),
+        })
     }
     pub fn poke(self: &Arc<Self>) {
         if self.pending.swap(true, Ordering::SeqCst) {
@@ -58,6 +62,7 @@ impl Debounce {
 
 pub struct App {
     pub settings: Arc<SettingsStore>,
+    pub profiles: Arc<super::profiles::ProfileStore>,
     pub sched: Scheduler,
     pub events: Arc<dyn Events>,
     pub app_version: String,
@@ -71,8 +76,21 @@ impl App {
     pub fn new(base: impl Into<PathBuf>, events: Arc<dyn Events>, app_version: &str) -> Arc<App> {
         let base = base.into();
         let settings = Arc::new(SettingsStore::new(base.join("settings.json")));
-        let sched = Scheduler::new(Limits::default(), Policy::default(), Arc::new(SinkAdapter(events.clone())));
-        let app = Arc::new(App { settings: settings.clone(), sched, events: events.clone(), app_version: app_version.to_string(), base, me: Mutex::new(Weak::new()) });
+        let profiles = Arc::new(super::profiles::ProfileStore::new(&base));
+        let sched = Scheduler::new(
+            Limits::default(),
+            Policy::default(),
+            Arc::new(SinkAdapter(events.clone())),
+        );
+        let app = Arc::new(App {
+            settings: settings.clone(),
+            profiles,
+            sched,
+            events: events.clone(),
+            app_version: app_version.to_string(),
+            base,
+            me: Mutex::new(Weak::new()),
+        });
         *app.me.lock().unwrap() = Arc::downgrade(&app);
         let ev = events.clone();
         let app_deb = Debounce::new(Duration::from_millis(100), move || ev.app_changed());
@@ -85,7 +103,11 @@ impl App {
     }
 
     /// Run a task through the scheduler and wait for it (on the calling thread).
-    pub fn run_task(&self, spec: TaskSpec, f: impl Fn(&TaskCtx) -> CoreResult<Value> + Send + Sync + 'static) -> CoreResult<Value> {
+    pub fn run_task(
+        &self,
+        spec: TaskSpec,
+        f: impl Fn(&TaskCtx) -> CoreResult<Value> + Send + Sync + 'static,
+    ) -> CoreResult<Value> {
         self.sched.submit(spec, f).wait()
     }
 
@@ -127,8 +149,38 @@ impl App {
         json!({ "deviceBusy": self.sched.device_active(), "jobs": self.sched.activity(120_000) })
     }
 
+    pub fn profiles_state(&self) -> CoreResult<Value> {
+        let state = self
+            .profiles
+            .state()
+            .map_err(|e| CoreError::coded("profiles", e.to_string()))?;
+        Ok(json!({ "state": state, "notice": self.profiles.recovery_notice() }))
+    }
+
+    pub fn save_profiles(&self, snapshot: super::profiles::ProfileState) -> CoreResult<Value> {
+        let store = self.profiles.clone();
+        // Saves count as visible work: tray Quit and idle-safe installation wait.
+        self.run_task(
+            TaskSpec::new(
+                "profiles-save",
+                "Saving dock layout",
+                super::scheduler::Resources::one(super::scheduler::Res::Io),
+            )
+            .visible(),
+            move |_| {
+                let state = store
+                    .save(&snapshot)
+                    .map_err(|e| CoreError::coded("profiles", e.to_string()))?;
+                Ok(json!({ "state": state, "notice": store.recovery_notice() }))
+            },
+        )
+    }
+
     pub fn job_get(&self, id: &str) -> CoreResult<Value> {
-        let j = self.sched.job(id).ok_or_else(|| CoreError::not_found("No such job"))?;
+        let j = self
+            .sched
+            .job(id)
+            .ok_or_else(|| CoreError::not_found("No such job"))?;
         Ok(serde_json::to_value(j).unwrap_or(Value::Null))
     }
 
@@ -153,7 +205,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::scheduler::{Resources, Res};
+    use crate::core::scheduler::{Res, Resources};
 
     fn app() -> (tempfile::TempDir, Arc<App>) {
         let dir = tempfile::tempdir().unwrap();
@@ -167,7 +219,10 @@ mod tests {
         assert_eq!(a.app_state()["page"], "home");
         a.settings_update(&json!({ "page": "dock" })).unwrap();
         assert_eq!(a.app_state()["page"], "dock");
-        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("settings.json")).unwrap()).unwrap();
+        let on_disk: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(on_disk["ui"]["page"], "dock");
         for page in ["cooler", "dial"] {
             a.settings_update(&json!({ "page": page })).unwrap();
@@ -177,20 +232,46 @@ mod tests {
     }
 
     #[test]
+    fn profile_commands_persist_and_reject_invalid_snapshots() {
+        let (dir, app) = app();
+        let value = app.profiles_state().unwrap();
+        let mut state: super::super::profiles::ProfileState =
+            serde_json::from_value(value["state"].clone()).unwrap();
+        state.profiles[0].pages[0].keys[0].a.text = "Focus".into();
+        app.save_profiles(state.clone()).unwrap();
+        assert_eq!(
+            super::super::profiles::ProfileStore::new(dir.path())
+                .load()
+                .unwrap(),
+            state
+        );
+        let mut invalid = state.clone();
+        invalid.profiles[0].id = "../outside".into();
+        assert!(app.save_profiles(invalid).is_err());
+        assert_eq!(app.profiles.state().unwrap(), state);
+    }
+
+    #[test]
     fn busy_while_a_job_runs_and_idle_after() {
         let (_dir, a) = app();
         assert!(!a.busy_for_quit());
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let rx = Mutex::new(rx);
-        let h = a.sched.submit(TaskSpec::new("send", "Sending a page", Resources::one(Res::Device)).visible(), move |_| {
-            let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
-            Ok(Value::Null)
-        });
+        let h = a.sched.submit(
+            TaskSpec::new("send", "Sending a page", Resources::one(Res::Device)).visible(),
+            move |_| {
+                let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+                Ok(Value::Null)
+            },
+        );
         let t0 = std::time::Instant::now();
         while !a.busy_for_quit() && t0.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(a.busy_for_quit(), "a running job makes the app busy (quit and installs wait)");
+        assert!(
+            a.busy_for_quit(),
+            "a running job makes the app busy (quit and installs wait)"
+        );
         assert!(a.uploading());
         tx.send(()).unwrap();
         let _ = h.wait();

@@ -1,5 +1,6 @@
 /* Combined interface prototype, using the shared CoolerScreen tokens. */
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 400 var(--fs-body)/var(--lh-body) var(--font); overflow: hidden; }
 button, input, select { font: inherit; }
@@ -56,6 +57,7 @@ p { line-height: var(--lh-body); }
 .dock-key { position: relative; min-width: 0; aspect-ratio: 1; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-1); color: var(--text); padding: var(--s2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s1); overflow: hidden; }
 .dock-key:hover { border-color: var(--border-control); background: var(--surface-2); }
 .dock-key.selected { border: 2px solid var(--accent); background: var(--accent-faint); }
+.rendered-key { width: 100%; height: 100%; object-fit: contain; }
 .wide-key { grid-column: 4 / 6; grid-row: 3; aspect-ratio: 2.34; }
 .key-main { font-size: clamp(var(--fs-title), 2.6vw, calc(var(--fs-display) + var(--s2))); font-weight: 600; line-height: 1.15; max-width: 100%; overflow-wrap: anywhere; }
 .key-caption { font-size: var(--fs-tiny); color: var(--text-muted); text-align: center; max-width: 100%; overflow-wrap: anywhere; line-height: var(--lh-tiny); }

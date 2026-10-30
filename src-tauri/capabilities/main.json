@@ -19,6 +19,11 @@
     "allow-settings-update",
     "allow-activity",
     "allow-job-get",
-    "allow-job-cancel"
+    "allow-job-cancel",
+    "allow-profiles-state",
+    "allow-profiles-save",
+    "allow-key-previews",
+    "allow-editor-session-ready",
+    "allow-editor-quit-ready"
   ]
 }

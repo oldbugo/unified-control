@@ -66,11 +66,54 @@ const server = http.createServer((req,res) => {
     await page.locator('[data-page="dial"]').click();
     await page.locator('[data-page="general"]').click();
     await page.locator('[data-page="about"]').click();
+    const modelCheck=await page.evaluate(async()=>{
+      const {toNative,fromNative,ProfileWriter}=await import('/js/profile-model.js');
+      const draft=JSON.parse(localStorage.getItem('uc.interface-prototype.v1'));
+      draft.profile=0; draft.page=0;
+      draft.profiles[0].pages[0].keys[0].action='page';
+      draft.profiles[0].pages[0].keys[0].value='1';
+      const native=toNative(draft), roundtrip=fromNative(native);
+      const target=native.profiles[0].pages[1].id;
+      const called=[], resolvers=[], statuses=[];
+      const writer=new ProfileWriter((cmd,args)=>{called.push(args.snapshot.n);return new Promise(resolve=>resolvers.push(resolve));},status=>statuses.push(status));
+      writer.enqueue({n:1}); writer.enqueue({n:2}); writer.enqueue({n:3});
+      resolvers.shift()(); await Promise.resolve(); await Promise.resolve();
+      resolvers.shift()(); await Promise.resolve(); await Promise.resolve();
+      let fail=true;
+      const retry=new ProfileWriter(()=>fail?Promise.reject(new Error('disk')):Promise.resolve(),()=>{});
+      retry.enqueue({n:4}); await Promise.resolve(); await Promise.resolve();
+      const retained=retry.failed && retry.pending.n===4;
+      fail=false; await retry.drain();
+      return {stable:toNative(draft).profiles[0].id===native.profiles[0].id,
+        target:native.profiles[0].pages[0].keys[0].value===target,
+        roundtrip:roundtrip.profiles[0].pages[0].keys[0].value,
+        called,statuses,retained,retried:!retry.failed && !retry.pending};
+    });
+    assert.equal(modelCheck.stable,true);
+    assert.equal(modelCheck.target,true);
+    assert.equal(modelCheck.roundtrip,'1');
+    assert.deepEqual(modelCheck.called,[1,3]);
+    assert.equal(modelCheck.retained,true);
+    assert.equal(modelCheck.retried,true);
     await page.evaluate(()=>localStorage.setItem('uc.interface-prototype.v1','{broken'));
     await page.reload();
     assert.match(await page.locator('#storage-status').textContent(),/could not be loaded/);
     assert.deepEqual(errors,[]);
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; inert action edits; escaped text; profiles/pages; corrupt draft recovery; 3 responsive sizes; no page errors.');
+    const guardPage=await browser.newPage();
+    await guardPage.addInitScript(()=>{
+      window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
+        if(command==='plugin:event|listen' && args.event==='uc:prepare-quit') throw new Error('guard unavailable');
+        if(command==='app_state') return {page:'dock',appVersion:'test',autostart:false};
+        if(command==='profiles_state') return {state:{version:1,currentProfile:'p',currentPage:'pg',profiles:[{id:'p',name:'Profile',pages:[{id:'pg',name:'Main',keys:Array.from({length:14},()=>({a:{kind:'text',text:''},b:{kind:'text',text:''},action:'none',value:''}))}]}]}};
+        return 0;
+      }};
+    });
+    await guardPage.goto(base);
+    await guardPage.waitForFunction(()=>document.getElementById('storage-status')?.textContent.includes('Layout editing is disabled'));
+    assert.equal(await guardPage.locator('#face-text').count(),0);
+    assert.equal(await guardPage.locator('[data-key]').count(),0);
+    await guardPage.close();
+    console.log('PASS: six pages; 14 displays; A/B flip; persistence; inert action edits; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});
