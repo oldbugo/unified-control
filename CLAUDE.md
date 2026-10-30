@@ -9,6 +9,7 @@ The user is not a programmer: report in plain language.
 ## Standing user instructions (read in full at every session start)
 
 - 2026-10-30: Build with the combined interface visible from the start, including a CoolerScreen page without engine integration. Establish working dock support and run normal acceptance tests; no week-long daily-use trial. Then integrate CoolerScreen, then add the dial. This supersedes the original hidden-cooler-page and daily-use-trial plan.
+- 2026-10-30: Keep reviewed work on GitHub as development proceeds. Preserve separate private repositories for UC, Ulanzi hardware and CoolerScreen, grouped under the existing Unified Control arrangement. Verify privacy before uploading; distinguish pushed branches from merged or installed releases.
 
 Carried over from CoolerScreen's standing list (user-stated, 2026-10-10 to 2026-10-19) and confirmed for UC on 2026-10-25:
 

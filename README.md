@@ -10,6 +10,24 @@ Implement working dock support first, run normal functional and real-device acce
 then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
 until its integration is built and tested.
 
+## GitHub layout
+
+Unified Control is one product maintained across separate private repositories. The agreed grouping is the shared
+`unified-control` GitHub topic and a `UC:` description prefix, under the existing `oldbugo` account.
+
+| Repository | Responsibility |
+| --- | --- |
+| [unified-control](https://github.com/oldbugo/unified-control) | Combined app, interface, profiles, actions, shared services and installer |
+| [uc-ulanzi](https://github.com/oldbugo/uc-ulanzi) | Ulanzi dock hardware engine and fake dock; later the dial |
+| [coolerscreen](https://github.com/oldbugo/coolerscreen) | CoolerScreen app and reusable cooler engine; keeps its own version history |
+| [ulanzi-toolkit](https://github.com/oldbugo/ulanzi-toolkit) | Existing Studio plugins, including usage readers and Monitor Toggle |
+
+The combined app will consume the device engines through versioned interfaces. These engine integrations are still
+planned; the current interface prototype does not link or control either engine. Reviewed work is committed and pushed
+to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
+
+## Interface prototype
+
 The interface prototype edits a local sample dock layout. Its profiles, pages, actions and A/B face choices are preview
 configuration, not the production profile store. It does not send key presses, launch apps, switch monitors, read AI
 accounts or open device connections. CoolerScreen and Dial pages describe future integrations; they do not report live
