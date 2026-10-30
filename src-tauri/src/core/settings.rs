@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// The pages of the window's left list (PowerToys-style frame).
-pub const PAGES: [&str; 4] = ["home", "dock", "general", "about"];
+pub const PAGES: [&str; 6] = ["home", "cooler", "dock", "dial", "general", "about"];
 
 /// Settings are always handled as the sanitised JSON object.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,7 +120,9 @@ mod tests {
     fn defaults_and_sanitising() {
         assert_eq!(sanitize(&json!({})).0, defaults());
         assert_eq!(sanitize(&json!({ "ui": { "page": "dock" }, "junk": 1 })).0, json!({ "ui": { "page": "dock" } }));
-        assert_eq!(sanitize(&json!({ "ui": { "page": "cooler" } })).page(), "home", "no cooler page in phase 0/1");
+        assert_eq!(sanitize(&json!({ "ui": { "page": "cooler" } })).page(), "cooler");
+        assert_eq!(sanitize(&json!({ "ui": { "page": "dial" } })).page(), "dial");
+        assert_eq!(sanitize(&json!({ "ui": { "page": "unknown" } })).page(), "home");
         assert_eq!(sanitize(&json!("not an object")).page(), "home");
     }
 

@@ -169,7 +169,11 @@ mod tests {
         assert_eq!(a.app_state()["page"], "dock");
         let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("settings.json")).unwrap()).unwrap();
         assert_eq!(on_disk["ui"]["page"], "dock");
-        assert!(a.settings_update(&json!({ "page": "cooler" })).is_err(), "no cooler page");
+        for page in ["cooler", "dial"] {
+            a.settings_update(&json!({ "page": page })).unwrap();
+            assert_eq!(a.app_state()["page"], page);
+        }
+        assert!(a.settings_update(&json!({ "page": "unknown" })).is_err());
     }
 
     #[test]

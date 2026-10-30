@@ -1,7 +1,32 @@
 # Unified Control
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
-the Ulanzi Dial. Private. Phase 0: the app shell only (no device code yet). Rules for working on it: `CLAUDE.md`.
+the Ulanzi Dial. Private. App shell and combined-interface prototype; no real device control yet. Rules for working on it: `CLAUDE.md`.
+
+## Current direction (2026-10-30)
+
+Build the combined interface from the start, with Home, Cooler screen, Stream dock, Dial, General and About pages.
+Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,
+then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
+until its integration is built and tested.
+
+The interface prototype edits a local sample dock layout. Its profiles, pages, actions and A/B face choices are preview
+configuration, not the production profile store. It does not send key presses, launch apps, switch monitors, read AI
+accounts or open device connections. CoolerScreen and Dial pages describe future integrations; they do not report live
+connection status. Usage previews must display an explicit sample marker and never imply a live account reading.
+
+Built: shared frame and interactive dock editor prototype, plus persisted navigation for all six pages. Still to build:
+real HID transport, production profiles, rendering pipeline, action execution, usage-provider integration and device
+coexistence. UI/browser checks do not establish native WebView or physical-device acceptance. No new installation is
+part of this prototype milestone.
+
+Verified for this prototype: 30 Rust library tests pass (one helper test ignored); headless Chromium checks cover all six
+pages, 14 displays, A/B flips, draft persistence, profiles/pages, inert action edits, text escaping and corrupt-draft
+recovery. Screenshots were inspected at 1440, 1100 and 800 pixel widths. Native WebView and physical dock checks remain.
+
+Repeat the browser check with `node scripts/check-interface.cjs` where Playwright 1.58.2 and its Chromium are available.
+For an external installation, set `UC_PLAYWRIGHT_MODULE` to its module folder. Screenshots go to the temporary
+`uc-interface-preview` folder, or `UC_PREVIEW_OUTPUT` if set. The check runs headlessly and opens no native app.
 
 ## Where the shell came from
 
