@@ -17,9 +17,11 @@ $exe = Join-Path $env:LOCALAPPDATA "Unified Control\UnifiedControl.exe"
 $name = [IO.Path]::GetFileName($Setup)
 if ($name -notmatch '^UnifiedControl_\d+\.\d+\.\d+_x64-setup\.exe$') { "that file is not a Unified Control installer: $Setup"; exit 1 }
 $want = [version]($name -replace '^UnifiedControl_(\d+\.\d+\.\d+)_.*$', '$1')
-$running = @(Get-Process UnifiedControl -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
-
-if ($running.Count -gt 0) {
+# Ask the app's own scoped quit/update endpoint whether it is running. Packaged
+# shells can expose a virtualized process path unlike $exe; a string comparison
+# must never bypass the app's busy/flush guard and fall through to NSIS.
+if (Test-Path -LiteralPath $exe) {
+    $updateStarted = Get-Date
     $p = Start-Process $exe -ArgumentList '--update', "`"$Setup`"" -WindowStyle Hidden -Wait -PassThru
     switch ($p.ExitCode) {
         0 {
@@ -27,7 +29,7 @@ if ($running.Count -gt 0) {
             for ($i = 0; $i -lt 240; $i++) {
                 Start-Sleep -Milliseconds 500
                 $now = [version]((Get-Item $exe).VersionInfo.ProductVersion -replace '[^0-9.].*$', '')
-                if ($now -ge $want -and (Get-Process UnifiedControl -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })) { "updated to $now; Unified Control restarted itself quietly"; exit 0 }
+                if ($now -ge $want -and (Get-Process UnifiedControl -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -ge $updateStarted })) { "updated to $now; Unified Control restarted itself quietly"; exit 0 }
             }
             "the app quit and the installer was started, but the new build is not running yet: check again in a minute"; exit 1
         }
