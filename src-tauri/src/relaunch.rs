@@ -65,12 +65,15 @@ pub fn spawn_helper(app_pid: u32, background: bool, setup: Option<&Path>) -> std
 }
 
 /// Wait for a process to end; true when it has ended (or cannot be opened any more).
-fn wait_gone(pid: u32, max: Duration) -> bool {
+fn wait_gone(pid: u32) -> bool {
     let h = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
     if h.is_null() {
         return true;
     }
-    let r = unsafe { WaitForSingleObject(h, max.as_millis() as u32) };
+    // Shutdown can be draining an active Monitor Toggle/audio recovery. The
+    // prepared helper must not abandon restart while that transaction finishes.
+    // This handle refers to the exact original process, not a reusable PID.
+    let r = unsafe { WaitForSingleObject(h, u32::MAX) };
     unsafe { CloseHandle(h) };
     r == WAIT_OBJECT_0
 }
@@ -90,8 +93,8 @@ pub fn run_helper(args: &[String]) -> i32 {
             }
         }
     }
-    if !wait_gone(pid, Duration::from_secs(30)) {
-        log("the app did not exit within 30 s: nothing installed, not started again");
+    if !wait_gone(pid) {
+        log("could not wait for the app to exit: nothing installed, not started again");
         return 1;
     }
     if let Some(s) = &setup {
