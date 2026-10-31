@@ -62,6 +62,8 @@ screen. Diagnostics qualify that result: keepalives continued but passive heartb
 reconnects roughly every minute. This is visible idle stability, not a clean connection pass. Version 0.1.3 adds a bounded
 brightness-response probe before the receive timeout while retaining failure/reconnect when no response arrives.
 See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest). Broader physical acceptance remains pending.
+The first 100 seconds of 0.1.3 live diagnostics show three acknowledged response probes, one initial full page and no
+errors/reconnects, with Background keepalive continuing. This is bounded connection evidence, not full hardware acceptance.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 
