@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4 — 2026-10-31
+
+Editing one face of a physical key now shows that edited face as soon as its saved change reaches the dock, even if the key was displaying its other face. Clock, date, icon and other face edits no longer need an A/B round trip. Unrelated key selections, held-press deduplication and folder history stay intact. Name/action-only edits do not flip keys; a bulk change to both faces retains the current selection. Saving an edit never executes the key action.
+
 ## 0.1.3 — 2026-10-31
 
 Fix the passive-only liveness check exposed by the 0.1.2 physical idle trial. The user saw a stable layout for about ten minutes, but diagnostics showed continuing keepalive writes, no passive heartbeats and repeated receive-timeout reconnects. After 25 seconds without input, send one probe using the already-selected dock brightness and wait for its real reply; retain the 35-second receive deadline if no response arrives. A successful write alone is never proof of liveness. Background image keepalive remains enabled.

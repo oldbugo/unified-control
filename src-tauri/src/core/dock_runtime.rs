@@ -61,6 +61,19 @@ impl PageRuntime {
         {
             self.faces_b = [false; 14];
             self.back.clear();
+        } else {
+            // An edit should be visible without a physical flip. Only infer a
+            // selected face when exactly one of this key's presentations changed;
+            // unrelated edits and bulk changes preserve the live A/B selection.
+            let before = self.state.active_page().expect("validated current page");
+            let after = state.active_page().expect("validated current page");
+            for (index, (old, new)) in before.keys.iter().zip(&after.keys).enumerate() {
+                let a_changed = old.a != new.a;
+                let b_changed = old.b != new.b;
+                if a_changed != b_changed {
+                    self.faces_b[index] = b_changed;
+                }
+            }
         }
         self.state = state;
         self.invalidate_images();
@@ -216,6 +229,152 @@ mod tests {
             kind: ButtonKind::Button,
             action,
         })
+    }
+    #[test]
+    fn editing_one_face_shows_it_without_flipping_other_keys_or_releasing_input() {
+        let mut state = ProfileState::default();
+        for index in 0..2 {
+            state.profiles[0].pages[0].keys[index].a.text = "A".into();
+            state.profiles[0].pages[0].keys[index].b.text = "B".into();
+        }
+        state.profiles[0].pages[0].keys[0].action = "hotkey".into();
+        state.profiles[0].pages[0].keys[0].value = "Ctrl + M".into();
+        let mut runtime = PageRuntime::new(state.clone()).unwrap();
+        assert!(runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap()
+            .is_some());
+        runtime
+            .handle_event(&event(1, ButtonAction::Press))
+            .unwrap();
+        assert_eq!(runtime.face(0).unwrap().text, "B");
+        state.profiles[0].pages[0].keys[0].a.kind = "clock".into();
+        runtime.update_state(state.clone()).unwrap();
+        assert_eq!(runtime.face(0).unwrap().kind, "clock");
+        assert_eq!(
+            runtime.face(1).unwrap().text,
+            "B",
+            "other keys keep their live face"
+        );
+        assert!(
+            runtime
+                .handle_event(&event(0, ButtonAction::Press))
+                .unwrap()
+                .is_none(),
+            "editing must not release a held key or dispatch an action"
+        );
+        assert_eq!(runtime.face(0).unwrap().kind, "clock");
+        runtime
+            .handle_event(&event(0, ButtonAction::Release))
+            .unwrap();
+        assert!(runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            runtime.face(0).unwrap().text,
+            "B",
+            "the next real press still flips once"
+        );
+
+        runtime
+            .handle_event(&event(0, ButtonAction::Release))
+            .unwrap();
+        runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap();
+        assert_eq!(runtime.face(0).unwrap().kind, "clock");
+        state.profiles[0].pages[0].keys[0].b.kind = "date".into();
+        runtime.update_state(state).unwrap();
+        assert_eq!(
+            runtime.face(0).unwrap().kind,
+            "date",
+            "a hidden B edit is shown from A too"
+        );
+        assert_eq!(runtime.face(1).unwrap().text, "B");
+    }
+    #[test]
+    fn non_face_and_bulk_edits_preserve_live_face_and_folder_history() {
+        let mut state = ProfileState::default();
+        let first = state.current_page.clone();
+        let mut folder = Page::new("Folder");
+        let target = folder.id.clone();
+        folder.keys[0].action = "back".into();
+        folder.keys[1].a.text = "A".into();
+        folder.keys[1].b.text = "B".into();
+        state.profiles[0].pages[0].keys[0].action = "folder".into();
+        state.profiles[0].pages[0].keys[0].value = target.clone();
+        state.profiles[0].pages.push(folder);
+        let mut runtime = PageRuntime::new(state).unwrap();
+        runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap();
+        runtime
+            .handle_event(&event(0, ButtonAction::Release))
+            .unwrap();
+        runtime
+            .handle_event(&event(1, ButtonAction::Press))
+            .unwrap();
+        let mut edited = runtime.state().clone();
+        edited.profiles[0].pages[1].name = "Renamed".into();
+        edited.profiles[0].pages[1].keys[1].action = "hotkey".into();
+        edited.profiles[0].pages[1].keys[1].value = "Ctrl + N".into();
+        runtime.update_state(edited.clone()).unwrap();
+        assert_eq!(
+            runtime.face(1).unwrap().text,
+            "B",
+            "names and actions do not select a face"
+        );
+        edited.profiles[0].pages[1].keys[1].a.text = "New A".into();
+        edited.profiles[0].pages[1].keys[1].b.text = "New B".into();
+        runtime.update_state(edited).unwrap();
+        assert_eq!(
+            runtime.face(1).unwrap().text,
+            "New B",
+            "bulk face edits retain the live selection"
+        );
+        runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap();
+        assert_eq!(
+            runtime.state().current_page,
+            first,
+            "editing does not erase folder Back history"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn edited_clock_date_and_icon_reach_fake_dock_without_another_press() {
+        let output = tempfile::tempdir().unwrap();
+        let mut dock = Dock::new(FakeDock::with_out_dir(output.path()));
+        let mut state = ProfileState::default();
+        state.profiles[0].pages[0].keys[0].a.text = "A".into();
+        state.profiles[0].pages[0].keys[0].b.text = "B".into();
+        let mut runtime = PageRuntime::new(state.clone()).unwrap();
+        runtime
+            .handle_event(&event(0, ButtonAction::Press))
+            .unwrap();
+        runtime
+            .handle_event(&event(0, ButtonAction::Release))
+            .unwrap();
+        let inputs = RenderInputs {
+            clock: Some("09:30".into()),
+            date: Some("2026-10-31".into()),
+            ..Default::default()
+        };
+        runtime.render_and_send(&mut dock, &inputs).unwrap();
+        for kind in ["clock", "date", "icon"] {
+            state.profiles[0].pages[0].keys[0].a.kind = kind.into();
+            runtime.update_state(state.clone()).unwrap();
+            runtime.render_and_send(&mut dock, &inputs).unwrap();
+            let expected = render_face(kind, "A", false, &inputs).unwrap();
+            assert_eq!(
+                std::fs::read(output.path().join("key_00.png")).unwrap(),
+                expected.png,
+                "edited {kind} must be sent without a flip"
+            );
+        }
+        assert!(dock.transport().errors.is_empty());
     }
     #[test]
     fn exactly_two_faces_and_single_action_per_press() {
