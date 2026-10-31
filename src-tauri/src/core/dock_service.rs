@@ -46,6 +46,7 @@ pub struct DockStatus {
     pub pages_sent: u64,
     pub frames_sent: u64,
     pub keep_alives_sent: u64,
+    pub probe_writes: u64,
     pub actions: u64,
     pub errors: u64,
 }
@@ -134,6 +135,7 @@ impl Controller {
                 pages_sent: 0,
                 frames_sent: 0,
                 keep_alives_sent: 0,
+                probe_writes: 0,
                 actions: 0,
                 errors: 0,
             }),
@@ -266,6 +268,11 @@ fn action_loop(
 }
 enum Link {
     Fake(FakeDock),
+    #[cfg(test)]
+    ProbeFixture {
+        dock: FakeDock,
+        replies: bool,
+    },
     #[cfg(windows)]
     Native(ulanzi_dock::windows::WindowsHid),
 }
@@ -273,6 +280,8 @@ impl Transport for Link {
     fn write(&mut self, p: &Packet) -> io::Result<()> {
         match self {
             Self::Fake(f) => f.write(p),
+            #[cfg(test)]
+            Self::ProbeFixture { dock, .. } => dock.write(p),
             #[cfg(windows)]
             Self::Native(n) => n.write(p),
         }
@@ -280,6 +289,15 @@ impl Transport for Link {
     fn read(&mut self, t: Duration) -> io::Result<Option<Packet>> {
         match self {
             Self::Fake(f) => f.read(t),
+            #[cfg(test)]
+            Self::ProbeFixture { dock, replies } => {
+                if *replies {
+                    dock.read(t)
+                } else {
+                    while dock.read(Duration::ZERO)?.is_some() {}
+                    Ok(None)
+                }
+            }
             #[cfg(windows)]
             Self::Native(n) => n.read(t),
         }
@@ -310,6 +328,8 @@ struct Worker {
     heartbeats: u64,
     acknowledgements: u64,
     next_keep_alive: Option<Instant>,
+    last_brightness_write: Option<Instant>,
+    probe_sent: bool,
 }
 impl Worker {
     fn new(
@@ -345,6 +365,8 @@ impl Worker {
             heartbeats: 0,
             acknowledgements: 0,
             next_keep_alive: None,
+            last_brightness_write: None,
+            probe_sent: false,
         }
     }
     fn activity(&mut self, enabled: bool) {
@@ -361,6 +383,8 @@ impl Worker {
         self.owner = None;
         self.brightness = None;
         self.next_keep_alive = None;
+        self.last_brightness_write = None;
+        self.probe_sent = false;
         self.flash = [None; 14];
         if let Some(r) = &mut self.runtime {
             r.reset_input();
@@ -404,6 +428,42 @@ impl Worker {
         }
         self.shared.status.lock().unwrap().keep_alives_sent += 1;
         self.next_keep_alive = Some(now + Duration::from_secs(5));
+        true
+    }
+    /// A quiet keepalive-mode device need not send passive heartbeats. Ask for
+    /// the already selected brightness again, whose known reply is 0x030a.
+    /// Sending is not receiving: only poll_event may renew last_activity.
+    fn liveness_probe(&mut self, now: Instant) -> bool {
+        if now.saturating_duration_since(self.last_activity) < Duration::from_secs(25)
+            || self.probe_sent
+        {
+            return true;
+        }
+        // A recent user brightness write already asked for the same reply.
+        // Do not add a second request while that response is still pending.
+        if self.last_brightness_write.is_some_and(|at| {
+            at > self.last_activity && now.saturating_duration_since(at) < Duration::from_secs(25)
+        }) {
+            return true;
+        }
+        if !self.shared.safe_to_act() {
+            self.release();
+            return false;
+        }
+        let Some(dock) = &mut self.dock else {
+            return true;
+        };
+        let brightness = self.shared.brightness.load(Ordering::SeqCst);
+        self.shared.writing.store(true, Ordering::SeqCst);
+        let result = dock.set_brightness(brightness);
+        self.shared.writing.store(false, Ordering::SeqCst);
+        if result.is_err() {
+            self.failed(now, "Dock response probe failed; reconnecting");
+            return false;
+        }
+        self.last_brightness_write = Some(now);
+        self.probe_sent = true;
+        self.shared.status.lock().unwrap().probe_writes += 1;
         true
     }
     fn run(mut self, rx: Receiver<Control>) {
@@ -488,7 +548,7 @@ impl Worker {
     fn step(&mut self, now: Instant) {
         if self.shared.enabled.load(Ordering::SeqCst) && now >= self.next_diagnostic {
             let s = self.shared.status();
-            crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} keepalive={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,s.keep_alives_sent,now.saturating_duration_since(self.last_activity).as_millis()));
+            crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} keepalive={} probe={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,s.keep_alives_sent,s.probe_writes,now.saturating_duration_since(self.last_activity).as_millis()));
             self.next_diagnostic = now + Duration::from_secs(10);
         }
         while let Ok(done) = self.completed.try_recv() {
@@ -566,6 +626,8 @@ impl Worker {
                     self.generation += 1;
                     self.brightness = None;
                     self.next_keep_alive = None;
+                    self.last_brightness_write = None;
+                    self.probe_sent = false;
                     self.retry_delay = Duration::from_secs(1);
                     self.last_activity = now;
                     self.last_fake_heartbeat = now;
@@ -603,9 +665,13 @@ impl Worker {
                 return;
             }
             self.brightness = Some(value);
+            self.last_brightness_write = Some(now);
         }
         // Service a due keepalive before a potentially slow account render.
         if !self.keep_alive(now) {
+            return;
+        }
+        if !self.liveness_probe(now) {
             return;
         }
         if now >= self.next_render {
@@ -697,6 +763,7 @@ impl Worker {
                     _ => {}
                 }
                 self.last_activity = now;
+                self.probe_sent = false;
                 // Studio can start between periodic probes. Recheck before handling
                 // a physical event and again inside the serial action executor.
                 if !matches!(self.shared.studio(), Ok(false)) {
@@ -964,10 +1031,8 @@ mod tests {
         store.save(&state).unwrap();
         (dir, store, Arc::new(Hooks::new()))
     }
-    #[test]
-    fn background_keepalive_runs_every_five_seconds_without_resending_or_replacing_images() {
-        let (_dir, store, hooks) = setup();
-        let output = tempfile::tempdir().unwrap();
+    fn stepped_worker(link: Link) -> (tempfile::TempDir, Arc<Shared>, Worker) {
+        let (dir, store, hooks) = setup();
         let shared = Arc::new(Shared {
             status: Mutex::new(DockStatus {
                 state: "connected".into(),
@@ -979,6 +1044,7 @@ mod tests {
                 pages_sent: 0,
                 frames_sent: 0,
                 keep_alives_sent: 0,
+                probe_writes: 0,
                 actions: 0,
                 errors: 0,
             }),
@@ -996,8 +1062,15 @@ mod tests {
         let (actions, _action_rx) = mpsc::sync_channel(16);
         let (_completed, complete_rx) = mpsc::sync_channel(16);
         let mut worker = Worker::new(shared.clone(), store, hooks, actions, complete_rx);
+        worker.dock = Some(Dock::new(link));
+        (dir, shared, worker)
+    }
+    #[test]
+    fn background_keepalive_runs_every_five_seconds_without_resending_or_replacing_images() {
+        let output = tempfile::tempdir().unwrap();
+        let (_dir, shared, mut worker) =
+            stepped_worker(Link::Fake(FakeDock::with_out_dir(output.path())));
         let start = Instant::now();
-        worker.dock = Some(Dock::new(Link::Fake(FakeDock::with_out_dir(output.path()))));
         assert!(worker.next_keep_alive.is_none());
         worker.step(start);
         assert_eq!(shared.status().pages_sent, 1);
@@ -1045,6 +1118,110 @@ mod tests {
         worker.step(start + Duration::from_secs(25));
         assert_eq!(shared.status().keep_alives_sent, 3);
         assert!(worker.next_keep_alive.is_none());
+        assert!(worker.dock.is_none());
+    }
+    #[test]
+    fn response_probes_keep_a_quiet_device_connected_without_passive_heartbeats() {
+        let (_dir, shared, mut worker) = stepped_worker(Link::ProbeFixture {
+            dock: FakeDock::new(),
+            replies: true,
+        });
+        let start = Instant::now();
+        worker.step(start);
+        // The initial brightness ACK is received, but this fixture never emits
+        // the synthetic heartbeat used by the ordinary fake controller.
+        assert_eq!(worker.heartbeats, 0);
+        worker.step(start + Duration::from_millis(24_999));
+        assert_eq!(shared.status().probe_writes, 0);
+        worker.step(start + Duration::from_secs(25));
+        assert_eq!(shared.status().probe_writes, 1);
+        assert_eq!(worker.last_activity, start + Duration::from_secs(25));
+        assert!(
+            !worker.probe_sent,
+            "only the received ACK completes the silence epoch"
+        );
+        worker.step(start + Duration::from_secs(35));
+        worker.step(start + Duration::from_secs(50));
+        worker.step(start + Duration::from_secs(75));
+        assert_eq!(shared.status().probe_writes, 3);
+        assert_eq!(shared.status().errors, 0);
+        assert_eq!(shared.status().pages_sent, 1);
+        assert_eq!(worker.heartbeats, 0);
+        let Link::ProbeFixture { dock, .. } = worker.dock.as_ref().unwrap().transport() else {
+            panic!("fixture only")
+        };
+        assert_eq!(
+            dock.brightness,
+            Some(50),
+            "probe preserves the selected brightness"
+        );
+        assert_eq!(
+            dock.commands_received
+                .iter()
+                .filter(|&&cmd| cmd == 0x000a)
+                .count(),
+            4
+        );
+        shared.enabled.store(false, Ordering::SeqCst);
+        worker.step(start + Duration::from_secs(100));
+        assert_eq!(shared.status().probe_writes, 3);
+        assert!(worker.dock.is_none());
+    }
+    #[test]
+    fn unanswered_probe_does_not_renew_rx_or_repeat_and_still_reconnects() {
+        let (_dir, shared, mut worker) = stepped_worker(Link::ProbeFixture {
+            dock: FakeDock::new(),
+            replies: false,
+        });
+        let start = Instant::now();
+        worker.last_activity = start;
+        worker.step(start);
+        worker.step(start + Duration::from_secs(25));
+        assert_eq!(shared.status().probe_writes, 1);
+        assert_eq!(
+            worker.last_activity, start,
+            "successful writes cannot establish receive liveness"
+        );
+        worker.step(start + Duration::from_secs(30));
+        worker.step(start + Duration::from_millis(34_999));
+        assert_eq!(shared.status().probe_writes, 1);
+        assert!(worker.dock.is_some());
+        worker.step(start + Duration::from_secs(35));
+        assert_eq!(shared.status().probe_writes, 1);
+        assert_eq!(shared.status().state, "error");
+        assert_eq!(shared.status().errors, 1);
+        assert!(worker.dock.is_none());
+        assert!(!worker.probe_sent);
+    }
+    #[test]
+    fn user_brightness_write_avoids_duplicate_probe_and_disable_blocks_a_due_probe() {
+        let (_dir, shared, mut worker) = stepped_worker(Link::ProbeFixture {
+            dock: FakeDock::new(),
+            replies: false,
+        });
+        let start = Instant::now();
+        worker.last_activity = start;
+        worker.step(start);
+        shared.brightness.store(42, Ordering::SeqCst);
+        worker.step(start + Duration::from_secs(25));
+        worker.step(start + Duration::from_secs(26));
+        assert_eq!(shared.status().probe_writes, 0);
+        let Link::ProbeFixture { dock, .. } = worker.dock.as_ref().unwrap().transport() else {
+            panic!("fixture only")
+        };
+        assert_eq!(dock.brightness, Some(42));
+        assert_eq!(
+            dock.commands_received
+                .iter()
+                .filter(|&&cmd| cmd == 0x000a)
+                .count(),
+            2
+        );
+        // A due probe is blocked when the dock is disabled, even though there
+        // has still been no reply to the user brightness write.
+        shared.enabled.store(false, Ordering::SeqCst);
+        worker.step(start + Duration::from_secs(34));
+        assert_eq!(shared.status().probe_writes, 0);
         assert!(worker.dock.is_none());
     }
     #[test]

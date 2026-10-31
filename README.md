@@ -41,27 +41,26 @@ through a managed Node helper; account provenance/freshness gates run before pub
 The dock remains disabled until explicitly enabled. Studio detection, ownership, reconnect, brightness and tray controls
 are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/dock-mvp.md).
 
-Checked: 89 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
+Checked: 92 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
 Toolkit tests pass. The separate driver has 30 passing fake-transport tests from the foundation checkpoint. Browser checks
 cover undo, picture persistence, all usage choices, literal launch arguments and three window widths. A quiet native WebView
 check covers real IPC/files, image import, A/B persistence, physical-size PNGs, fake Studio block/reconnect, duplicate press
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
-must show unknown. Preview 0.1.0 was initially installed (source `1b6926e`); 0.1.1 is now installed (source `1f59ca1`),
-left closed for the user to reopen from Start. The update script's packaged-path admission bug was corrected in `6efb3bf`;
-that tooling fix still needs a future running-update check.
+must show unknown. Preview 0.1.2/source `1322bc2` is installed and its running version was verified after Start-menu launch.
 Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
 Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.
 UC was observed still reporting Connected. The 0.1.1 update tolerates nonstandard acknowledgement lengths and adds
 sanitized connection/heartbeat/frame diagnostics. The physical failure cause and recovery remain unverified.
 The 0.1.1 idle retest failed within 10–15 seconds while heartbeats and minute clock partial updates continued with
-zero errors/reconnects. Prepared 0.1.2 adds a known Background-mode keepalive after the first full page and every five
+zero errors/reconnects. Version 0.1.2 adds a known Background-mode keepalive after the first full page and every five
 seconds. A deterministic fake test confirms the cadence, stop-on-disable, unchanged key/wide images and no page resends.
-Physical efficacy remains pending. See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest).
-The 0.1.2 installer was built from `1322bc2` and ran successfully, but the old updater restarted its original packaged
-0.1.1 copy. That copy was quit normally. User Start-menu launch/version verification is required before the keepalive trial;
-do not claim the running app was upgraded from installer success alone.
+User-reported: the layout stayed visible for about ten idle minutes on 0.1.2, and enabling restored it from the default
+screen. Diagnostics qualify that result: keepalives continued but passive heartbeats stopped, causing receive-timeout
+reconnects roughly every minute. This is visible idle stability, not a clean connection pass. Version 0.1.3 adds a bounded
+brightness-response probe before the receive timeout while retaining failure/reconnect when no response arrives.
+See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest). Broader physical acceptance remains pending.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 

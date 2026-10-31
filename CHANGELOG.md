@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 — 2026-10-31
+
+Fix the passive-only liveness check exposed by the 0.1.2 physical idle trial. The user saw a stable layout for about ten minutes, but diagnostics showed continuing keepalive writes, no passive heartbeats and repeated receive-timeout reconnects. After 25 seconds without input, send one probe using the already-selected dock brightness and wait for its real reply; retain the 35-second receive deadline if no response arrives. A successful write alone is never proof of liveness. Background image keepalive remains enabled.
+
+The installer can use an explicitly supplied reviewed request-only UC executable when its installed-file view is shadowed by a packaged copy; it verifies the new process's logged startup version/PID rather than file metadata alone. All busy and unreachable-host guards remain enforced.
+
 ## 0.1.2 — 2026-10-31
 
 Physical-test update: send the documented background small-window keepalive every five seconds after the first full page, only while the dock is enabled, connected and Studio is absent. Preserves the wide PNG and avoids resending unchanged images. Diagnostics count keepalives. This tests a host-idle fallback hypothesis: on 0.1.1 the user saw the dock's startup screen within 10–15 seconds while inbound heartbeats and clock partial updates continued with zero errors/reconnects. Physical efficacy is not yet established.
