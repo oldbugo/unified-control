@@ -2,6 +2,7 @@
 import {toNative, fromNative, ProfileWriter} from './js/profile-model.js';
 import {EditorHistory} from './js/editor-history.js';
 import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
+import {KeyPreviewRenderer} from './js/key-preview.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -52,6 +53,7 @@ const pictureEpoch=new WeakMap();
 let actionSearch='',deviceStatus=null;
 function remember(group=''){history.checkpoint(draft,group);const undo=document.querySelector('[data-do="undo"]');if(undo)undo.disabled=!history.available;}
 let profilesReady = !T, exitGuardReady = !T, guardError = '', loadRunning = false, nativeSaving = false, recoveryNote = '', previewNote = '', previewGeneration = 0;
+const keyPreviews=new KeyPreviewRenderer();
 const writer = new ProfileWriter(invoke, (status) => {
   nativeSaving=status==='saving';
   storageNote=status==='failed' ? 'Changes could not be saved. Keep this window open and retry.' : '';
@@ -171,16 +173,12 @@ async function updateNativePreviews() {
   try {
     const frames=await invoke('key_previews',{faces,clock});
     if (generation!==previewGeneration || draft.current!=='dock') return;
-    for (const frame of frames) {
+    await Promise.all(frames.map(async frame => {
       const el=document.querySelector(`[data-key="${frame.index}"]`);
-      if (!el) continue;
-      const img=document.createElement('img');
-      img.className='rendered-key'; img.alt=FACES[faces[frame.index].kind];
-      const url=URL.createObjectURL(new Blob([new Uint8Array(frame.png)],{type:'image/png'}));
-      img.onload=img.onerror=()=>URL.revokeObjectURL(url);
-      img.src=url;
-      el.replaceChildren(img);
-    }
+      if (!el) return;
+      await keyPreviews.render(el,frame.png,FACES[faces[frame.index].kind],()=>generation===previewGeneration && draft.current==='dock' && document.querySelector(`[data-key="${frame.index}"]`)===el);
+    }));
+    if(generation!==previewGeneration || draft.current!=='dock')return;
     previewNote=''; showStorage();
   } catch {
     if (generation===previewGeneration) { previewNote='Key image preview is unavailable.'; showStorage(); }
