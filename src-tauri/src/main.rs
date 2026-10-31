@@ -93,7 +93,14 @@ fn main() {
             cc::job_cancel,
             cc::profiles_state,
             cc::profiles_save,
-            cc::key_previews
+            cc::key_previews,
+            cc::dock_state,
+            cc::dock_configure,
+            cc::dock_test_button,
+            cc::dock_test_studio,
+            cc::asset_import,
+            cc::monitor_list,
+            cc::autostart_set
         ])
         .setup(move |app| {
             uc_core::device::log(&uc_core::core::buildinfo::startup_line(env!(
@@ -101,6 +108,10 @@ fn main() {
             )));
             uc_core::device::log(&format!("single-instance id: {}", app.config().identifier));
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
+            app.state::<Core>()
+                .0
+                .start_runtime(app.path().resource_dir()?)
+                .map_err(|error| std::io::Error::other(error.message))?;
             // the tray is always there (Open, Quit): closing the window leaves the app in the tray
             live_app::ensure_tray(app.handle(), false);
             if !tray_only && !background {

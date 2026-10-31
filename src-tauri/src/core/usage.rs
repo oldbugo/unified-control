@@ -99,10 +99,20 @@ impl UsageSnapshot {
     /// Re-evaluated at receipt, never after writing an old PNG to a display.
     pub fn guarded(mut self, now: u64) -> Self {
         self.message = "Current account usage is unavailable.".into();
-        let fresh = |at: Option<u64>, age| at.is_some_and(|t| t > 0 && t <= now.saturating_add(1000) && now.saturating_sub(t) <= age);
-        if self.status != UsageStatus::Ok || !self.provenance_verified || !fresh(self.observed_at, FRESH_MS) {
+        let fresh = |at: Option<u64>, age| {
+            at.is_some_and(|t| {
+                t > 0 && t <= now.saturating_add(1000) && now.saturating_sub(t) <= age
+            })
+        };
+        if self.status != UsageStatus::Ok
+            || !self.provenance_verified
+            || !fresh(self.observed_at, FRESH_MS)
+        {
             let stale = self.status == UsageStatus::Stale
-                || self.status == UsageStatus::Ok && self.observed_at.is_some_and(|t| now.saturating_sub(t) > FRESH_MS);
+                || self.status == UsageStatus::Ok
+                    && self
+                        .observed_at
+                        .is_some_and(|t| now.saturating_sub(t) > FRESH_MS);
             self.status = if stale {
                 UsageStatus::Stale
             } else if self.status == UsageStatus::Ok {
@@ -121,14 +131,18 @@ impl UsageSnapshot {
         let valid = |w: &UsageWindow| {
             w.used_percent.is_finite()
                 && (0.0..=100.0).contains(&w.used_percent)
-                && w.resets_at.is_none_or(|t| t > now / 1000 && t <= 100_000_000_000)
+                && w.resets_at
+                    .is_none_or(|t| t > now / 1000 && t <= 100_000_000_000)
         };
         self.five_hour = self.five_hour.filter(valid);
         self.weekly = self.weekly.filter(valid);
         if self.five_hour.is_none() && self.weekly.is_none() {
             return Self::unknown(self.provider, UsageStatus::Unavailable);
         }
-        if self.provider != Provider::Codex || self.token_history_status != "ok" || !fresh(self.token_history_observed_at, 7_200_000) {
+        if self.provider != Provider::Codex
+            || self.token_history_status != "ok"
+            || !fresh(self.token_history_observed_at, 7_200_000)
+        {
             self.token_history.clear();
             self.token_history_observed_at = None;
             self.token_history_status = "unavailable".into();
@@ -147,7 +161,14 @@ impl UsageSnapshot {
 }
 fn valid_date(s: &str) -> bool {
     let b = s.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' || !b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit()) {
+    if b.len() != 10
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !b
+            .iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    {
         return false;
     }
     let year = s[..4].parse::<u32>().unwrap_or(0);
@@ -212,7 +233,11 @@ pub struct UsageService {
     state: Mutex<ServiceState>,
 }
 impl UsageService {
-    pub fn new(node_executable: impl Into<PathBuf>, reader_script: impl Into<PathBuf>, uc_home: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        node_executable: impl Into<PathBuf>,
+        reader_script: impl Into<PathBuf>,
+        uc_home: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             node: node_executable.into(),
             script: reader_script.into(),
@@ -227,7 +252,9 @@ impl UsageService {
     /// This is the only method allowed to spawn. Empty config stops the owned child.
     pub fn set_active_providers(&self, active: &[ActiveProvider]) -> Result<()> {
         if active.len() > 2
-            || active.iter().any(|c| c.provider == Provider::Claude && c.token_history)
+            || active
+                .iter()
+                .any(|c| c.provider == Provider::Claude && c.token_history)
             || active
                 .iter()
                 .enumerate()
@@ -246,11 +273,10 @@ impl UsageService {
         if state.process.is_none() {
             state.process = Some(Process::start(&self.node, &self.script, &self.home)?);
         }
-        let result = state
-            .process
-            .as_mut()
-            .unwrap()
-            .request(json!({"method":"set_active","providers":active}), self.timeout);
+        let result = state.process.as_mut().unwrap().request(
+            json!({"method":"set_active","providers":active}),
+            self.timeout,
+        );
         if result.is_err() {
             state.process = None;
             state.active.clear();
@@ -260,7 +286,9 @@ impl UsageService {
         Ok(())
     }
     pub fn is_running(&self) -> bool {
-        let Ok(mut state) = self.state.lock() else { return false };
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
         let alive = state.process.as_mut().is_some_and(Process::healthy);
         if !alive {
             state.process = None;
@@ -271,11 +299,16 @@ impl UsageService {
     /// Bounded, account-free pipe heartbeat. Intended for a supervisor (e.g. every
     /// 30 seconds), not every rendered key. Failure releases this child only.
     pub fn check_health(&self) -> bool {
-        let Ok(mut state) = self.state.lock() else { return false };
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
         let healthy = state.process.as_mut().is_some_and(|process| {
             process.healthy()
                 && process
-                    .request(json!({"method":"health"}), self.timeout.min(Duration::from_millis(500)))
+                    .request(
+                        json!({"method":"health"}),
+                        self.timeout.min(Duration::from_millis(500)),
+                    )
                     .ok()
                     .is_some_and(|v| v.get("alive") == Some(&json!(true)))
         });
@@ -294,7 +327,10 @@ impl UsageService {
             .process
             .as_mut()
             .ok_or(UsageError("The usage reader is inactive."))?
-            .request(json!({"method":"snapshot","provider":provider}), self.timeout);
+            .request(
+                json!({"method":"snapshot","provider":provider}),
+                self.timeout,
+            );
         match result.and_then(|v| serde_json::from_value::<UsageSnapshot>(v).map_err(error)) {
             Ok(snapshot) if snapshot.provider == provider => Ok(snapshot.guarded(now_ms())),
             _ => {
@@ -306,7 +342,13 @@ impl UsageService {
     }
     /// Call on the app's worker path, never the UI thread. Inactive/error => caller
     /// renders unknown. No last-good numeric PNG is cached by this service.
-    pub fn render(&self, provider: Provider, view: &str, width: u32, height: u32) -> Result<UsageRender> {
+    pub fn render(
+        &self,
+        provider: Provider,
+        view: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<UsageRender> {
         if !USAGE_VIEWS.contains(&view)
             || view == "tokens" && provider != Provider::Codex
             || ![(196, 196), (458, 196)].contains(&(width, height))
@@ -317,11 +359,15 @@ impl UsageService {
         if !state.active.iter().any(|c| c.provider == provider) {
             return Err(UsageError("The usage reader is inactive."));
         }
-        let result = state.process.as_mut().ok_or(UsageError("The usage reader is inactive."))?.request(
-            json!({
+        let result = state
+            .process
+            .as_mut()
+            .ok_or(UsageError("The usage reader is inactive."))?
+            .request(
+                json!({
             "method":"render","provider":provider,"view":view,"width":width,"height":height}),
-            self.timeout,
-        );
+                self.timeout,
+            );
         let result = result.and_then(|v| serde_json::from_value::<UsageRender>(v).map_err(error));
         let mut rendered = match result {
             Ok(v) => v,
@@ -358,12 +404,17 @@ fn valid_png(data: &[u8], width: u32, height: u32) -> bool {
         return false;
     }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
-    decoder.set_limits(png::Limits { bytes: 2 * 1024 * 1024 });
+    decoder.set_limits(png::Limits {
+        bytes: 2 * 1024 * 1024,
+    });
     let mut reader = match decoder.read_info() {
         Ok(v) => v,
         Err(_) => return false,
     };
-    if reader.info().width != width || reader.info().height != height || reader.info().animation_control.is_some() {
+    if reader.info().width != width
+        || reader.info().height != height
+        || reader.info().animation_control.is_some()
+    {
         return false;
     }
     let size = match reader.output_buffer_size() {
@@ -425,8 +476,14 @@ impl Process {
                 return Err(e);
             }
         };
-        let mut input = child.stdin.take().ok_or(UsageError("Usage input pipe unavailable."))?;
-        let output = child.stdout.take().ok_or(UsageError("Usage output pipe unavailable."))?;
+        let mut input = child
+            .stdin
+            .take()
+            .ok_or(UsageError("Usage input pipe unavailable."))?;
+        let output = child
+            .stdout
+            .take()
+            .ok_or(UsageError("Usage output pipe unavailable."))?;
         let (write_tx, write_rx) = mpsc::sync_channel::<Vec<u8>>(1);
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let write_errors = reply_tx.clone();
@@ -446,7 +503,10 @@ impl Process {
             let mut reader = BufReader::new(output);
             loop {
                 let mut line = Vec::new();
-                let got = reader.by_ref().take((MAX_REPLY + 1) as u64).read_until(b'\n', &mut line);
+                let got = reader
+                    .by_ref()
+                    .take((MAX_REPLY + 1) as u64)
+                    .read_until(b'\n', &mut line);
                 if !matches!(got,Ok(n) if n>0) || line.len() > MAX_REPLY || !line.ends_with(b"\n") {
                     read_alive.store(false, Ordering::SeqCst);
                     let _ = reply_tx.send(Err(()));
@@ -472,7 +532,10 @@ impl Process {
     }
     fn request(&mut self, mut value: Value, timeout: Duration) -> Result<Value> {
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).ok_or(UsageError("Usage request limit reached."))?;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(UsageError("Usage request limit reached."))?;
         value["id"] = json!(id);
         let mut bytes = serde_json::to_vec(&value).map_err(error)?;
         bytes.push(b'\n');
@@ -484,11 +547,18 @@ impl Process {
             .ok_or(UsageError("Usage pipe closed."))?
             .try_send(bytes)
             .map_err(error)?;
-        let reply = self.replies.recv_timeout(timeout).map_err(error)?.map_err(error)?;
+        let reply = self
+            .replies
+            .recv_timeout(timeout)
+            .map_err(error)?
+            .map_err(error)?;
         if reply.get("id").and_then(Value::as_u64) != Some(id) || reply.get("error").is_some() {
             return Err(UsageError("Usage reader rejected the request."));
         }
-        reply.get("result").cloned().ok_or(UsageError("Usage result missing."))
+        reply
+            .get("result")
+            .cloned()
+            .ok_or(UsageError("Usage result missing."))
     }
     fn healthy(&mut self) -> bool {
         self.alive.load(Ordering::SeqCst) && matches!(self.child.try_wait(), Ok(None))
@@ -574,7 +644,9 @@ mod tests {
     fn fixture(name: &str) -> PathBuf {
         std::env::var_os("UC_USAGE_TEST_FIXTURES")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../companions/usage-reader/tests"))
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../companions/usage-reader/tests")
+            })
             .join(name)
     }
     fn service(name: &str) -> (tempfile::TempDir, UsageService) {
@@ -610,7 +682,10 @@ mod tests {
     fn inactive_calls_never_spawn_or_read_accounts() {
         let (_dir, s) = service("fixture.mjs");
         assert!(!s.is_running());
-        assert_eq!(s.snapshot(Provider::Codex).unwrap().status, UsageStatus::Inactive);
+        assert_eq!(
+            s.snapshot(Provider::Codex).unwrap().status,
+            UsageStatus::Inactive
+        );
         assert!(s.render(Provider::Codex, "rings", 196, 196).is_err());
         assert!(!s.is_running());
         s.set_active_providers(&[]).unwrap();
@@ -631,14 +706,22 @@ mod tests {
         assert_eq!(result.snapshot.status, UsageStatus::Unavailable);
         assert!(result.snapshot.five_hour.is_none());
         assert!(valid_png(
-            &s.render(Provider::Codex, "wide-dashboard", 458, 196).unwrap().png,
+            &s.render(Provider::Codex, "wide-dashboard", 458, 196)
+                .unwrap()
+                .png,
             458,
             196
         ));
-        assert_eq!(s.snapshot(Provider::Codex).unwrap().status, UsageStatus::Unavailable);
+        assert_eq!(
+            s.snapshot(Provider::Codex).unwrap().status,
+            UsageStatus::Unavailable
+        );
         s.shutdown();
         assert!(!s.is_running());
-        assert_eq!(s.snapshot(Provider::Codex).unwrap().status, UsageStatus::Inactive);
+        assert_eq!(
+            s.snapshot(Provider::Codex).unwrap().status,
+            UsageStatus::Inactive
+        );
     }
     #[test]
     fn hung_reader_has_a_deadline_and_no_automatic_restart() {
@@ -679,7 +762,10 @@ mod tests {
         while s.is_running() && start.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!s.is_running(), "child death must not remain a running process object");
+        assert!(
+            !s.is_running(),
+            "child death must not remain a running process object"
+        );
         assert!(!s.check_health());
         assert!(s.render(Provider::Codex, "rings", 196, 196).is_err());
     }
@@ -707,7 +793,10 @@ mod tests {
     fn freshness_provenance_reset_and_logout_strip_all_current_numbers() {
         let now = now_ms();
         let raw = current();
-        assert_eq!(raw.clone().guarded(now).five_hour.unwrap().used_percent, 12.5);
+        assert_eq!(
+            raw.clone().guarded(now).five_hour.unwrap().used_percent,
+            12.5
+        );
         let mut unverified = raw.clone();
         unverified.provenance_verified = false;
         let clean = unverified.guarded(now);
@@ -764,7 +853,11 @@ mod tests {
             let mut encoder = png::Encoder::new(&mut bytes, 196, 196);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            encoder.write_header().unwrap().write_image_data(&vec![255; 196 * 196 * 4]).unwrap();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![255; 196 * 196 * 4])
+                .unwrap();
         }
         assert!(valid_png(&bytes, 196, 196));
         assert!(!valid_png(&bytes, 458, 196));

@@ -13,7 +13,6 @@ $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
 
 if (-not (Test-Path 'node_modules\.bin\tauri.cmd')) { npm install; if ($LASTEXITCODE -ne 0) { throw 'npm install failed' } }
-
 npx tauri build
 if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
 $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root 'src-tauri\target' }

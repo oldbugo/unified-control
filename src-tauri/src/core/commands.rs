@@ -127,13 +127,103 @@ pub async fn key_previews(
     if faces.len() != 14 {
         return Err(CoreError::new("A dock page has exactly 14 displays"));
     }
-    run(&core, move |_| {
-        let inputs = super::key_render::RenderInputs { clock: Some(clock), ..Default::default() };
-        let mut frames = Vec::with_capacity(14);
+    run(&core, move |app| {
+        use super::dock_service::DockHooks;
+        let runtime=app.runtime.get().ok_or_else(||CoreError::new("The app runtime is unavailable"))?;
+        let mut inputs=runtime.inputs();inputs.clock=Some(clock);
+        let mut rendered = Vec::with_capacity(14);
         for (index, face) in faces.iter().enumerate() {
-            let frame = super::key_render::render_face(&face.kind, &face.text, index == 13, &inputs).map_err(CoreError::new)?;
-            frames.push(json!({"index":index, "width":frame.width, "height":frame.height, "png":frame.png, "unknown":frame.unknown}));
+            let frame = runtime.render_one(face,index,&inputs).map_err(CoreError::new)?;
+            rendered.push(frame);
         }
+        let mut frames=Vec::with_capacity(14);let now=super::scheduler::now_ms();
+        for(index,mut frame) in rendered.into_iter().enumerate(){frame.guard_delivery(now).map_err(CoreError::new)?;frames.push(json!({"index":index,"width":frame.width,"height":frame.height,"png":frame.png,"unknown":frame.unknown}));}
         Ok(Value::Array(frames))
     }).await
+}
+
+#[tauri::command]
+pub async fn dock_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| Ok(app.dock_state())).await
+}
+#[tauri::command]
+pub async fn dock_configure(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
+    run(&core, move |app| app.dock_configure(&patch)).await
+}
+#[tauri::command]
+pub async fn dock_test_button(
+    core: State<'_, Core>,
+    index: usize,
+    pressed: bool,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| {
+        app.dock
+            .get()
+            .ok_or_else(|| CoreError::new("Dock unavailable"))?
+            .simulate_button(index, pressed)
+            .map_err(CoreError::new)?;
+        Ok(app.dock_state())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn dock_test_studio(core: State<'_, Core>, running: bool) -> Result<Value, CoreError> {
+    run(&core, move |app| {
+        app.dock
+            .get()
+            .ok_or_else(|| CoreError::new("Dock unavailable"))?
+            .set_fake_studio(running)
+            .map_err(CoreError::new)?;
+        Ok(app.dock_state())
+    })
+    .await
+}
+#[tauri::command]
+pub async fn asset_import(core: State<'_, Core>, bytes: Vec<u8>) -> Result<Value, CoreError> {
+    if bytes.len() > super::key_render::MAX_PICTURE_BYTES {
+        return Err(CoreError::new("Choose a picture of at most 4 MiB"));
+    }
+    run(&core, move |app| {
+        let runtime = app
+            .runtime
+            .get()
+            .ok_or_else(|| CoreError::new("The app runtime is unavailable"))?;
+        Ok(json!(runtime
+            .assets
+            .import(&bytes)
+            .map_err(CoreError::new)?))
+    })
+    .await
+}
+#[tauri::command]
+pub async fn monitor_list(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| {
+        let runtime = app
+            .runtime
+            .get()
+            .ok_or_else(|| CoreError::new("The app runtime is unavailable"))?;
+        if runtime.fake {
+            return Ok(json!([{"key":"fake:display-1","label":"Simulated display"}]));
+        }
+        serde_json::to_value(
+            super::actions::list_monitors(&runtime.resource_dir).map_err(CoreError::new)?,
+        )
+        .map_err(|_| CoreError::new("Monitor information unavailable"))
+    })
+    .await
+}
+#[tauri::command]
+pub async fn autostart_set(core: State<'_, Core>, enabled: bool) -> Result<Value, CoreError> {
+    run(&core, move |app| {
+        if super::buildinfo::fake_device().is_some() {
+            return Err(CoreError::new("Startup settings are disabled in test mode"));
+        }
+        if !super::autostart::set(enabled) {
+            return Err(CoreError::new(
+                "The Windows startup setting could not be changed",
+            ));
+        }
+        Ok(app.app_state())
+    })
+    .await
 }

@@ -58,6 +58,13 @@ fn main() {
         "key_previews",
         "editor_session_ready",
         "editor_quit_ready",
+        "dock_state",
+        "dock_configure",
+        "dock_test_button",
+        "dock_test_studio",
+        "asset_import",
+        "monitor_list",
+        "autostart_set",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(cmds)),

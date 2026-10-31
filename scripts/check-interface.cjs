@@ -41,6 +41,31 @@ const server = http.createServer((req,res) => {
     await page.locator('[data-edit-face="b"]').click();
     assert.equal(await page.locator('#face-text').inputValue(),'Break');
     assert.equal(await page.locator('#action-value').inputValue(),'Ctrl + Shift + M');
+    await page.locator('#face-text').fill('Undo this change');
+    await page.locator('[data-do="undo"]').click();
+    await page.locator('[data-key="6"]').click();
+    await page.locator('[data-edit-face="b"]').click();
+    assert.equal(await page.locator('#face-text').inputValue(),'Break');
+    await page.locator('#face-kind').selectOption('codex');
+    assert.equal(await page.locator('#usage-view option').count(),16);
+    await page.locator('#usage-view').selectOption('tokens');
+    await page.locator('#face-kind').selectOption('claude');
+    assert.equal(await page.locator('#usage-view option').count(),15);
+    assert.equal(await page.locator('#usage-view').inputValue(),'rings');
+    await page.locator('#face-kind').selectOption('picture');
+    const picture=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=4;canvas.height=4;return canvas.toDataURL('image/png').split(',')[1];});
+    await page.locator('#face-picture').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(picture,'base64')});
+    await page.waitForFunction(()=>document.querySelector('[data-key="6"] img')?.naturalWidth===4);
+    await page.reload();
+    await page.locator('[data-key="6"]').click();
+    await page.locator('[data-edit-face="b"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-key="6"] img')?.naturalWidth===4);
+    await page.locator('#face-kind').selectOption('text');
+    await page.locator('#action-kind').selectOption('launch');
+    await page.locator('#action-value').fill('C:\\Example\\App.exe');
+    await page.locator('#launch-args').fill('--name\nvalue with spaces\n$(literal)');
+    const launch=await page.evaluate(()=>JSON.parse(JSON.parse(localStorage.getItem('uc.interface-prototype.v1')).profiles[0].pages[0].keys[6].value));
+    assert.deepEqual(launch,{path:'C:\\Example\\App.exe',args:['--name','value with spaces','$(literal)']});
     await page.locator('#face-text').fill('<img src=x onerror=alert(1)>');
     assert.equal(await page.locator('[data-key="6"] img').count(),0);
     await page.locator('#face-text').fill('Break');
@@ -65,6 +90,7 @@ const server = http.createServer((req,res) => {
     await page.screenshot({path:path.join(output,'uc-cooler.png'),fullPage:true});
     await page.locator('[data-page="dial"]').click();
     await page.locator('[data-page="general"]').click();
+    assert.equal(await page.locator('#autostart-enabled').isDisabled(),true);
     await page.locator('[data-page="about"]').click();
     const modelCheck=await page.evaluate(async()=>{
       const {toNative,fromNative,ProfileWriter}=await import('/js/profile-model.js');
@@ -113,7 +139,7 @@ const server = http.createServer((req,res) => {
     assert.equal(await guardPage.locator('#face-text').count(),0);
     assert.equal(await guardPage.locator('[data-key]').count(),0);
     await guardPage.close();
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; inert action edits; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; no page errors.');
+    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

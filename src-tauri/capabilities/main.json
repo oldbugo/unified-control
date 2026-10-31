@@ -24,6 +24,13 @@
     "allow-profiles-save",
     "allow-key-previews",
     "allow-editor-session-ready",
-    "allow-editor-quit-ready"
+    "allow-editor-quit-ready",
+    "allow-dock-state",
+    "allow-dock-configure",
+    "allow-dock-test-button",
+    "allow-dock-test-studio",
+    "allow-asset-import",
+    "allow-monitor-list",
+    "allow-autostart-set"
   ]
 }

@@ -8,7 +8,7 @@ use super::settings::SettingsStore;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 /// What the UI is told (Tauri events in the app, a recorder in tests).
@@ -63,6 +63,9 @@ impl Debounce {
 pub struct App {
     pub settings: Arc<SettingsStore>,
     pub profiles: Arc<super::profiles::ProfileStore>,
+    pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
+    pub dock: OnceLock<Arc<super::dock_service::Controller>>,
+    dock_config_lock: Mutex<()>,
     pub sched: Scheduler,
     pub events: Arc<dyn Events>,
     pub app_version: String,
@@ -85,6 +88,9 @@ impl App {
         let app = Arc::new(App {
             settings: settings.clone(),
             profiles,
+            runtime: OnceLock::new(),
+            dock: OnceLock::new(),
+            dock_config_lock: Mutex::new(()),
             sched,
             events: events.clone(),
             app_version: app_version.to_string(),
@@ -100,6 +106,95 @@ impl App {
 
     pub fn arc(&self) -> Arc<App> {
         self.me.lock().unwrap().upgrade().expect("App alive")
+    }
+    /// Called once by the host. It starts disabled unless the user previously
+    /// enabled the dock; fake mode never opens native devices or account readers.
+    pub fn start_runtime(&self, resource_dir: PathBuf) -> CoreResult<()> {
+        if self.dock.get().is_some() {
+            return Ok(());
+        }
+        let fake = super::buildinfo::fake_device().is_some();
+        let resources =
+            super::runtime_resources::RuntimeResources::new(&self.base, resource_dir, fake);
+        let controller = Arc::new(super::dock_service::Controller::new(
+            self.profiles.clone(),
+            resources.clone(),
+            fake,
+        ));
+        let settings = self.settings.load();
+        controller
+            .set_brightness(settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8)
+            .map_err(CoreError::new)?;
+        self.runtime
+            .set(resources)
+            .map_err(|_| CoreError::new("Runtime is already initialized"))?;
+        self.dock
+            .set(controller.clone())
+            .map_err(|_| CoreError::new("Dock is already initialized"))?;
+        controller
+            .set_enabled(settings.0["dock"]["enabled"].as_bool().unwrap_or(false))
+            .map_err(CoreError::new)?;
+        Ok(())
+    }
+    pub fn dock_state(&self) -> Value {
+        let mut value=self.dock.get().map(|dock|serde_json::to_value(dock.status()).unwrap_or_default()).unwrap_or_else(||json!({"state":"disabled","message":"Dock is disabled","enabled":false,"fake":super::buildinfo::fake_device().is_some()}));
+        value["brightness"] = self.settings.load().0["dock"]["brightness"].clone();
+        value["usageReaderRunning"] = json!(self
+            .runtime
+            .get()
+            .is_some_and(|runtime| runtime.usage.is_running()));
+        if let Some(id) = value["currentProfile"].as_str().map(String::from) {
+            if let Ok(profiles) = self.profiles.state() {
+                if let Some(profile) = profiles.profiles.iter().find(|p| p.id == id) {
+                    value["currentProfileName"] = json!(profile.name);
+                    if let Some(page) = profile
+                        .pages
+                        .iter()
+                        .find(|p| Some(p.id.as_str()) == value["currentPage"].as_str())
+                    {
+                        value["currentPageName"] = json!(page.name);
+                    }
+                }
+            }
+        }
+        value
+    }
+    pub fn dock_configure(&self, patch: &Value) -> CoreResult<Value> {
+        let _guard = self.dock_config_lock.lock().unwrap();
+        let controller = self
+            .dock
+            .get()
+            .ok_or_else(|| CoreError::new("Dock controller is unavailable"))?;
+        if patch.get("enabled").is_some_and(|v| !v.is_boolean())
+            || patch
+                .get("brightness")
+                .is_some_and(|v| v.as_u64().is_none_or(|n| n > 100))
+        {
+            return Err(CoreError::new("Invalid dock setting"));
+        }
+        let saved = self
+            .settings
+            .update(|state| {
+                if let Some(v) = patch.get("enabled") {
+                    state["dock"]["enabled"] = v.clone()
+                }
+                if let Some(v) = patch.get("brightness") {
+                    state["dock"]["brightness"] = v.clone()
+                }
+            })
+            .map_err(CoreError::from)?;
+        controller
+            .set_brightness(saved.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8)
+            .map_err(CoreError::new)?;
+        controller
+            .set_enabled(saved.0["dock"]["enabled"].as_bool().unwrap_or(false))
+            .map_err(CoreError::new)?;
+        if !saved.0["dock"]["enabled"].as_bool().unwrap_or(false) {
+            if let Some(runtime) = self.runtime.get() {
+                runtime.shutdown();
+            }
+        }
+        Ok(self.dock_state())
     }
 
     /// Run a task through the scheduler and wait for it (on the calling thread).
@@ -124,6 +219,7 @@ impl App {
             "fake": super::buildinfo::fake_device(),
             "page": s.page(),
             "autostart": super::autostart::is_on(),
+            "dock": self.dock_state(),
         })
     }
 
@@ -159,6 +255,7 @@ impl App {
 
     pub fn save_profiles(&self, snapshot: super::profiles::ProfileState) -> CoreResult<Value> {
         let store = self.profiles.clone();
+        let dock = self.dock.get().cloned();
         // Saves count as visible work: tray Quit and idle-safe installation wait.
         self.run_task(
             TaskSpec::new(
@@ -171,6 +268,9 @@ impl App {
                 let state = store
                     .save(&snapshot)
                     .map_err(|e| CoreError::coded("profiles", e.to_string()))?;
+                if let Some(dock) = &dock {
+                    dock.notify_profiles_changed();
+                }
                 Ok(json!({ "state": state, "notice": store.recovery_notice() }))
             },
         )
@@ -185,15 +285,26 @@ impl App {
     }
 
     pub fn shutdown(&self) {
+        self.stop_runtime();
         self.sched.cancel_where(|_| true);
         // Give cancelled tasks a moment to stop. Bounded: a running device write cannot be cancelled and is never waited for
         // longer than this.
         self.sched.wait_idle(Duration::from_secs(1), true);
     }
+    /// Must run off the UI thread; active monitor recovery is allowed to finish.
+    pub fn stop_runtime(&self) {
+        let _guard = self.dock_config_lock.lock().unwrap();
+        if let Some(dock) = self.dock.get() {
+            dock.shutdown();
+        }
+        if let Some(resources) = self.runtime.get() {
+            resources.shutdown();
+        }
+    }
 
     /// `UnifiedControl.exe --quit` refuses while a job is running.
     pub fn busy_for_quit(&self) -> bool {
-        self.sched.any_visible_job()
+        self.sched.any_visible_job() || self.dock.get().is_some_and(|dock| dock.busy())
     }
 
     /// True while something is being written to a device (close guard).

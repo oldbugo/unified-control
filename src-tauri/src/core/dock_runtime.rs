@@ -1,7 +1,7 @@
 //! Validated profiles -> rendered PNGs -> transport-independent dock. No native
 //! transport is constructed here. External actions are returned as inert data.
 use super::{
-    key_render::{render_face, FrameCache, RenderInputs},
+    key_render::{render_face, FrameCache, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState},
 };
 use ulanzi_dock::{
@@ -50,6 +50,21 @@ impl PageRuntime {
     pub fn invalidate_images(&mut self) {
         self.cache.clear();
         self.full_update = true;
+    }
+    pub fn reset_input(&mut self) {
+        self.down = [false; 14];
+    }
+    pub fn update_state(&mut self, state: ProfileState) -> Result<(), String> {
+        state.validate().map_err(|e| e.to_string())?;
+        if self.state.current_profile != state.current_profile
+            || self.state.current_page != state.current_page
+        {
+            self.faces_b = [false; 14];
+            self.back.clear();
+        }
+        self.state = state;
+        self.invalidate_images();
+        Ok(())
     }
     fn navigate(&mut self, page: String) {
         self.state.current_page = page;
@@ -110,12 +125,44 @@ impl PageRuntime {
         dock: &mut Dock<T>,
         inputs: &RenderInputs,
     ) -> Result<usize, String> {
+        self.render_and_send_with(dock, inputs, |index, face, input| {
+            render_face(&face.kind, &face.text, index == 13, input)
+        })
+    }
+    pub fn render_and_send_with<
+        T: Transport,
+        F: FnMut(usize, &Face, &RenderInputs) -> Result<RenderedFace, String>,
+    >(
+        &mut self,
+        dock: &mut Dock<T>,
+        inputs: &RenderInputs,
+        render: F,
+    ) -> Result<usize, String> {
+        self.render_and_send_guarded(dock, inputs, render, || true)
+    }
+    /// Admission is rechecked after slow rendering, immediately before transfer.
+    pub fn render_and_send_guarded<
+        T: Transport,
+        F: FnMut(usize, &Face, &RenderInputs) -> Result<RenderedFace, String>,
+        G: FnMut() -> bool,
+    >(
+        &mut self,
+        dock: &mut Dock<T>,
+        inputs: &RenderInputs,
+        mut render: F,
+        mut admit: G,
+    ) -> Result<usize, String> {
         let mut spec = PageSpec::new();
         let mut frames = Vec::with_capacity(14);
         let mut changed = Vec::new();
         for index in 0..14 {
             let face = self.face(index)?;
-            let frame = render_face(&face.kind, &face.text, index == 13, inputs)?;
+            let frame = render(index, face, inputs)?;
+            frames.push(frame);
+        }
+        let now = super::scheduler::now_ms();
+        for (index, frame) in frames.iter_mut().enumerate() {
+            frame.guard_delivery(now)?;
             if self.cache.needs_update(index, &frame.png)? {
                 changed.push(index)
             }
@@ -124,23 +171,28 @@ impl PageRuntime {
             } else {
                 spec.set_key(index, None, frame.png.clone())
             }
-            frames.push(frame.png);
         }
         if !self.full_update && changed.is_empty() {
+            return Ok(0);
+        }
+        if !admit() {
             return Ok(0);
         }
         let result = if self.full_update {
             dock.set_page(&spec)
         } else {
             let zip = build_partial_page_zip(&spec, &changed).map_err(|e| e.to_string())?;
+            if !admit() {
+                return Ok(0);
+            }
             dock.update_buttons_zip(&zip)
         };
         if let Err(error) = result {
             self.invalidate_images();
             return Err(error.to_string());
         }
-        for (index, png) in frames.iter().enumerate() {
-            self.cache.changed(index, png)?;
+        for (index, frame) in frames.iter().enumerate() {
+            self.cache.changed(index, &frame.png)?;
         }
         let count = if self.full_update { 14 } else { changed.len() };
         self.full_update = false;
@@ -226,6 +278,32 @@ mod tests {
             .handle_event(&event(0, ButtonAction::Press))
             .unwrap();
         assert_eq!(runtime.state().current_page, first);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn expired_account_png_is_replaced_before_batch_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut dock = Dock::new(FakeDock::with_out_dir(dir.path()));
+        let mut runtime = PageRuntime::new(ProfileState::default()).unwrap();
+        runtime
+            .render_and_send_with(&mut dock, &RenderInputs::default(), |index, _, input| {
+                let mut frame = render_face(
+                    "text",
+                    if index == 0 { "90%" } else { "+" },
+                    index == 13,
+                    input,
+                )?;
+                if index == 0 {
+                    frame.valid_until_ms = Some(1)
+                }
+                Ok(frame)
+            })
+            .unwrap();
+        let expected = render_face("reset", "", false, &RenderInputs::default()).unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("key_00.png")).unwrap(),
+            expected.png
+        );
     }
     #[cfg(windows)]
     #[test]

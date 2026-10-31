@@ -1,5 +1,5 @@
 //! The tray lifecycle (copied from CoolerScreen's `live_app.rs`; the cooler's live engine, pause/fps items and the
-//! sleep/lock window are not here). Unified Control always has its tray icon: Open and Quit. Closing the window hides it to
+//! sleep/lock window are not here). Unified Control always has its tray icon and dock controls. Closing the window hides it to
 //! the tray (or destroys it to free the WebView memory, see `DESTROY_ON_CLOSE`); only Quit ends the app. Nothing starts with
 //! Windows unless the user turns that on (opt-in, off by default).
 //!
@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent, Wry};
 use uc_core::core::commands::Core;
@@ -26,11 +26,16 @@ const TOOLTIP: &str = "Unified Control";
 const DESTROY_ON_CLOSE: bool = false;
 static EDITOR_READY: AtomicBool = AtomicBool::new(false);
 static PENDING_EXIT: Mutex<Option<(crate::quit_cmd::Request, bool)>> = Mutex::new(None);
+static EXIT_FINISH: Mutex<()> = Mutex::new(());
+static DOCK_TOGGLE_BUSY: AtomicBool = AtomicBool::new(false);
+static TRAY_DIRTY: AtomicBool = AtomicBool::new(true);
 
 /// The menu items (kept so later phases can change their labels from any thread).
 struct Tray {
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     open: MenuItem<Wry>,
+    dock_enabled: CheckMenuItem<Wry>,
+    profile: MenuItem<Wry>,
 }
 
 static TRAY: Mutex<Option<Tray>> = Mutex::new(None);
@@ -132,10 +137,27 @@ fn icon(app: &AppHandle) -> Image<'static> {
 fn build_tray(app: &AppHandle) {
     let items = (|| -> tauri::Result<(Menu<Wry>, Tray)> {
         let open = MenuItem::with_id(app, "open", "Open Unified Control", true, None::<&str>)?;
+        let dock_enabled = CheckMenuItem::with_id(
+            app,
+            "dock-toggle",
+            "Dock enabled",
+            true,
+            false,
+            None::<&str>,
+        )?;
+        let profile =
+            MenuItem::with_id(app, "dock-profile", "Profile: loading", false, None::<&str>)?;
         let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
         let sep = PredefinedMenuItem::separator(app)?;
-        let menu = Menu::with_items(app, &[&open, &sep, &quit])?;
-        Ok((menu, Tray { open }))
+        let menu = Menu::with_items(app, &[&open, &dock_enabled, &profile, &sep, &quit])?;
+        Ok((
+            menu,
+            Tray {
+                open,
+                dock_enabled,
+                profile,
+            },
+        ))
     })();
     let Ok((menu, tray)) = items else {
         eprintln!("could not create the tray menu");
@@ -146,6 +168,7 @@ fn build_tray(app: &AppHandle) {
         uc_core::device::log("tray: quiet test run, icon not shown");
         *TRAY.lock().unwrap() = Some(tray);
         TRAY_ON.store(true, Ordering::SeqCst);
+        start_tray_refresh(app);
         return;
     }
     // Tauri's own tray: its menu and click events are routed by Tauri to these two closures (the `tray-icon` crate's global
@@ -173,13 +196,88 @@ fn build_tray(app: &AppHandle) {
     }
     *TRAY.lock().unwrap() = Some(tray);
     TRAY_ON.store(true, Ordering::SeqCst);
+    start_tray_refresh(app);
 }
 
-/// A tray menu item was chosen (`id`: open, quit). The tray's menu handler calls this; the debug test hook (`UC_TEST_TRAY`)
+/// Keep profile/device reads off the window thread. Only changed menu labels are
+/// posted back, so the status loop does not queue repeated native menu updates.
+fn start_tray_refresh(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut previous = None;
+        while tray_on() {
+            let core = app.state::<Core>();
+            let status = core.0.dock_state();
+            let enabled = status["enabled"].as_bool().unwrap_or(false);
+            let mut profile = status["currentProfileName"].as_str().map(str::to_owned);
+            let mut page = status["currentPageName"].as_str().map(str::to_owned);
+            // A disabled controller has no active runtime yet; show the saved
+            // selection rather than claiming there is no profile.
+            if profile.is_none() {
+                if let Ok(saved) = core.0.profiles.state() {
+                    profile = saved.active_profile().map(|p| p.name.clone());
+                    page = saved.active_page().map(|p| p.name.clone());
+                }
+            }
+            let label = match (profile, page) {
+                (Some(profile), Some(page)) => format!("Profile: {profile} / {page}"),
+                (Some(profile), None) => format!("Profile: {profile}"),
+                _ => "Profile: unavailable".into(),
+            }
+            .replace('&', "&&")
+            .replace(['\r', '\n', '\t'], " ");
+            let busy = DOCK_TOGGLE_BUSY.load(Ordering::SeqCst);
+            let next = (enabled, label, busy);
+            if TRAY_DIRTY.swap(false, Ordering::SeqCst) || previous.as_ref() != Some(&next) {
+                let (enabled, label, busy) = next.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Some(tray) = TRAY.lock().unwrap().as_ref() {
+                        let _ = tray.dock_enabled.set_checked(enabled);
+                        let _ = tray.dock_enabled.set_enabled(!busy);
+                        let _ = tray.profile.set_text(label);
+                    }
+                });
+                previous = Some(next);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
+}
+
+/// A tray menu item was chosen (`id`: open, dock-toggle, quit). The tray's menu handler calls this; the debug test hook (`UC_TEST_TRAY`)
 /// calls it too.
 pub fn tray_menu_click(a: &AppHandle, id: &str) {
     match id {
         "open" => show_main(a),
+        "dock-toggle" => {
+            // Native check items flip immediately, even if the operation is
+            // refused. Force a later refresh to restore the actual saved value.
+            TRAY_DIRTY.store(true, Ordering::SeqCst);
+            if DOCK_TOGGLE_BUSY.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let app = a.clone();
+            std::thread::spawn(move || {
+                // Do not enable a device while an editor flush/exit is pending.
+                if PENDING_EXIT.lock().unwrap().is_none() {
+                    let core = app.state::<Core>();
+                    let enabled = core.0.settings.load().0["dock"]["enabled"]
+                        .as_bool()
+                        .unwrap_or(false);
+                    if let Err(error) = core
+                        .0
+                        .dock_configure(&serde_json::json!({"enabled": !enabled}))
+                    {
+                        uc_core::device::log(&format!(
+                            "tray dock setting failed: {}",
+                            error.message
+                        ));
+                    }
+                }
+                DOCK_TOGGLE_BUSY.store(false, Ordering::SeqCst);
+                TRAY_DIRTY.store(true, Ordering::SeqCst);
+            });
+        }
         "quit" => quit_app(a),
         _ => {}
     }
@@ -190,8 +288,10 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
 pub fn tray_state() -> String {
     match TRAY.lock().unwrap().as_ref() {
         Some(t) => format!(
-            "open_text={:?} icon_shown={}",
+            "open_text={:?} dock_enabled={} profile_text={:?} icon_shown={}",
             t.open.text().unwrap_or_default(),
+            t.dock_enabled.is_checked().unwrap_or(false),
+            t.profile.text().unwrap_or_default(),
             !tray_icon_hidden()
         ),
         None => "no tray".into(),
@@ -222,13 +322,22 @@ fn request_exit(app: &AppHandle, request: crate::quit_cmd::Request, background: 
             return;
         }
     }
-    if let Err(error) = finish_exit(app) {
-        uc_core::device::log(&error.message);
-    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = finish_exit(&app) {
+            uc_core::device::log(&error.message);
+        }
+    });
 }
 
 fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
-    if app.state::<Core>().0.busy_for_quit() {
+    let _finish = EXIT_FINISH.lock().unwrap();
+    // A late/unsolicited editor acknowledgement must not stop a live device.
+    if PENDING_EXIT.lock().unwrap().is_none() {
+        return Ok(());
+    }
+    // Refuse before shutdown: a busy scheduler leaves the existing runtime usable.
+    if app.state::<Core>().0.sched.any_visible_job() {
         return Err(CoreError::new(
             "Work is still running; the app has stayed open.",
         ));
@@ -236,6 +345,8 @@ fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
     let Some((request, background)) = PENDING_EXIT.lock().unwrap().take() else {
         return Ok(());
     };
+    // Prepare any fallible relaunch first. Its helper waits for this process to
+    // exit; a spawn failure must leave the current device runtime usable.
     match request {
         crate::quit_cmd::Request::Quit => {}
         crate::quit_cmd::Request::Restart => {
@@ -249,6 +360,9 @@ fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
         )
         .map_err(|e| CoreError::new(e.to_string()))?,
     }
+    // Stop admission and wait for in-flight action recovery before arming the
+    // exit watchdog. This function is always called off the window event thread.
+    app.state::<Core>().0.stop_runtime();
     arm_exit_watchdog("tray Quit");
     let a = app.clone();
     std::thread::spawn(move || {
@@ -267,13 +381,15 @@ pub fn editor_session_ready(ready: bool) {
 }
 
 #[tauri::command]
-pub fn editor_quit_ready(app: AppHandle, saved: bool) -> Result<(), CoreError> {
+pub async fn editor_quit_ready(app: AppHandle, saved: bool) -> Result<(), CoreError> {
     if !saved {
         *PENDING_EXIT.lock().unwrap() = None;
         show_main(&app);
         return Ok(());
     }
-    finish_exit(&app)
+    tauri::async_runtime::spawn_blocking(move || finish_exit(&app))
+        .await
+        .map_err(|_| CoreError::new("Could not finish shutdown"))?
 }
 
 /// Carry out a request from `--quit` / `--restart` / `--update` or the General page button: leave a detached helper when the

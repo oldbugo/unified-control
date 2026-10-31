@@ -563,7 +563,9 @@ impl Worker {
             let inputs = self.hooks.inputs();
             let hooks = self.hooks.clone();
             let flash = self.flash;
-            let result = self.runtime.as_mut().unwrap().render_and_send_with(
+            let shared = self.shared.clone();
+            let revision = self.revision;
+            let result = self.runtime.as_mut().unwrap().render_and_send_guarded(
                 self.dock.as_mut().unwrap(),
                 &inputs,
                 |index, face, input| {
@@ -573,8 +575,16 @@ impl Worker {
                         hooks.render(face, index, input)
                     }
                 },
+                || shared.safe_to_act() && shared.revision.load(Ordering::SeqCst) == revision,
             );
             self.shared.writing.store(false, Ordering::SeqCst);
+            if !self.shared.enabled.load(Ordering::SeqCst)
+                || self.shared.stop.load(Ordering::SeqCst)
+                || !matches!(self.shared.studio(), Ok(false))
+            {
+                self.release();
+                return;
+            }
             match result {
                 Ok(count) => {
                     let mut s = self.shared.status.lock().unwrap();
@@ -794,6 +804,7 @@ mod tests {
         fail: AtomicBool,
         hold: AtomicBool,
         release: AtomicBool,
+        hold_render: AtomicBool,
         active: Mutex<Vec<bool>>,
     }
     impl Hooks {
@@ -804,6 +815,7 @@ mod tests {
                 fail: AtomicBool::new(false),
                 hold: AtomicBool::new(false),
                 release: AtomicBool::new(false),
+                hold_render: AtomicBool::new(false),
                 active: Mutex::new(Vec::new()),
             }
         }
@@ -819,6 +831,9 @@ mod tests {
             _: &RenderInputs,
         ) -> Result<RenderedFace, String> {
             self.renders.fetch_add(1, Ordering::SeqCst);
+            while self.hold_render.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(5));
+            }
             let (w, h) = if index == 13 { (458, 196) } else { (196, 196) };
             let color = face.text.bytes().fold(1u8, |a, b| a.wrapping_add(b));
             let mut png = Vec::new();
@@ -834,6 +849,7 @@ mod tests {
                 height: h,
                 png,
                 unknown: false,
+                valid_until_ms: None,
             })
         }
         fn active_profile(&self, _: &ProfileState, enabled: bool) {
@@ -872,6 +888,29 @@ mod tests {
         k.value = "Ctrl + M".into();
         store.save(&state).unwrap();
         (dir, store, Arc::new(Hooks::new()))
+    }
+    #[test]
+    fn rendering_cannot_send_after_admission_is_revoked() {
+        for studio in [false, true] {
+            let (_dir, store, hooks) = setup();
+            hooks.hold_render.store(true, Ordering::SeqCst);
+            let c = Controller::new(store, hooks.clone(), true);
+            c.set_enabled(true).unwrap();
+            wait(|| hooks.renders.load(Ordering::SeqCst) > 0);
+            if studio {
+                c.set_fake_studio(true).unwrap()
+            } else {
+                c.set_enabled(false).unwrap()
+            }
+            hooks.hold_render.store(false, Ordering::SeqCst);
+            wait(|| c.status().state == if studio { "blocked" } else { "disabled" });
+            assert_eq!(
+                c.status().frames_sent,
+                0,
+                "a revoked render must never reach the dock"
+            );
+            c.shutdown();
+        }
     }
     #[test]
     fn starts_disabled_without_profile_or_device_io_and_gates_studio() {

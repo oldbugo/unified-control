@@ -1,11 +1,15 @@
 // Combined editor: native profile files in UC, local drafts in browser previews.
 import {toNative, fromNative, ProfileWriter} from './js/profile-model.js';
+import {EditorHistory} from './js/editor-history.js';
+import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
 const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
-const FACES = {text:'Large text', icon:'Icon and label', clock:'Clock', claude:'Claude allowance', codex:'Codex allowance', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'};
+const FACES = {text:'Large text', icon:'Icon and label', picture:'Picture and label', clock:'Clock', date:'Date', claude:'Claude usage', codex:'Codex usage', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'};
+const USAGE_VIEWS={rings:'Combined rings',bars:'Combined bars',trend:'Combined trends',tokens:'Daily tokens',resets:'Both reset countdowns','five-hour-ring':'Five-hour ring','weekly-ring':'Weekly ring','five-hour-number':'Five-hour number','weekly-number':'Weekly number','five-hour-reset':'Five-hour countdown','weekly-reset':'Weekly countdown','five-hour-time':'Five-hour reset time','weekly-time':'Weekly reset time','five-hour-trend':'Five-hour trend','weekly-trend':'Weekly trend','wide-dashboard':'Wide dashboard'};
+const FACE_ICONS={app:'App',folder:'Folder',back:'Back',play:'Play',pause:'Pause',next:'Next',previous:'Previous',volume:'Volume',mute:'Mute',monitor:'Monitor',globe:'Web',keyboard:'Keyboard',clock:'Clock'};
 const ACTIONS = {none:'No action', hotkey:'Hotkey', media:'Media key', launch:'Open app or file', url:'Open URL', text:'Type text', page:'Switch page', folder:'Open folder page', back:'Back', monitor:'Monitor Toggle'};
 const ICONS = {
   home:'<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
@@ -42,6 +46,11 @@ function valid(d) {
           f && Object.hasOwn(FACES,f.kind) && typeof f.text === 'string'))));
 }
 let draft = initial(), storageNote = '', state = null, selected = 0, selectedFace = 'a', previewFace = 'a', hasLocalPage = false;
+const history=new EditorHistory();
+const pendingMutations=new Set();
+const pictureEpoch=new WeakMap();
+let actionSearch='',deviceStatus=null;
+function remember(group=''){history.checkpoint(draft,group);const undo=document.querySelector('[data-do="undo"]');if(undo)undo.disabled=!history.available;}
 let profilesReady = !T, exitGuardReady = !T, guardError = '', loadRunning = false, nativeSaving = false, recoveryNote = '', previewNote = '', previewGeneration = 0;
 const writer = new ProfileWriter(invoke, (status) => {
   nativeSaving=status==='saving';
@@ -86,6 +95,8 @@ function faceMarkup(f, k) {
   if (f.kind === 'reset') return '<span class="key-main">—</span><span class="key-caption">Reset · No data</span>';
   if (f.kind === 'trend') return '<span class="trend-placeholder" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="key-caption">Trend · No data</span>';
   if (f.kind === 'icon') return `<span class="key-icon">${icon(k.action)}</span><span class="key-caption">${esc(label)}</span>`;
+  if (f.kind === 'picture') return `${f.asset?`<img class="rendered-key" data-picture="${esc(f.asset)}" alt="${esc(f.text||'Picture')}">`:'<span class="key-main">—</span>'}<span class="key-caption">${esc(f.text||'Picture')}</span>`;
+  if (f.kind === 'date') return `<span class="key-main">${new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short'})}</span>`;
   if (['cpu','gpu','ram'].includes(f.kind)) return `<span class="key-main">—</span><span class="key-caption">${f.kind.toUpperCase()} · No data</span>`;
   return `<span class="key-main">${esc(label || '+')}</span>${label?'':'<span class="key-caption">Empty key</span>'}`;
 }
@@ -94,12 +105,13 @@ function dockMarkup() {
 }
 function actionControl(k) {
   if (k.action === 'none') return '<p class="hint">This key has no action.</p>';
-  if (k.action === 'monitor') return '<p class="hint">Monitor Toggle will use the existing monitor control behavior when connected.</p>';
+  if (k.action === 'monitor') return `<div id="monitor-targets"><p class="hint">Loading available monitors…</p></div><p class="hint">Choose the displays this key will toggle.</p>`;
   if (k.action === 'back') return '<p class="hint">Return from the current folder page.</p>';
   if (['page','folder'].includes(k.action)) return field('Target page','action-value',`<select id="action-value">${options(Object.fromEntries(profile().pages.map((p,i)=>[String(i),p.name])), k.value)}</select>`);
   if (k.action === 'media') return field('Media control','action-value',`<select id="action-value">${options(Object.fromEntries(['Play / pause','Next track','Previous track','Volume up','Volume down','Mute'].map(v=>[v,v])),k.value)}</select>`);
   const labels = {hotkey:'Key combination', launch:'App or file path', url:'URL', text:'Text'};
   const placeholders = {hotkey:'Ctrl + Shift + M',launch:'C:\\Path\\App.exe',url:'https://example.com',text:'Text to type'};
+  if(k.action==='launch'){let config={path:k.value,args:[]};try{const parsed=JSON.parse(k.value);if(parsed&&typeof parsed.path==='string')config=parsed;}catch{}return field('App, file or folder','action-value',`<input id="action-value" maxlength="500" value="${esc(config.path)}" placeholder="${esc(placeholders.launch)}">`)+field('Arguments (one per line)','launch-args',`<textarea id="launch-args" rows="3" maxlength="3000">${esc((config.args||[]).join('\n'))}</textarea>`);}
   return field(labels[k.action],'action-value',`<input id="action-value" maxlength="500" value="${esc(k.value)}" placeholder="${esc(placeholders[k.action])}">`);
 }
 function editorMarkup() {
@@ -107,36 +119,50 @@ function editorMarkup() {
   return `<div class="editor-head"><div><span class="eyebrow">Selected display</span><h2>${selected===13?'Wide display':`Key ${selected+1}`}</h2></div><span class="chip">Draft</span></div>
     <div class="seg" role="group" aria-label="Edit face"><button data-edit-face="a" aria-pressed="${selectedFace==='a'}">Face A</button><button data-edit-face="b" aria-pressed="${selectedFace==='b'}">Face B</button></div>
     ${field('Presentation','face-kind',`<select id="face-kind">${options(FACES,f.kind)}</select>`)}
-    ${['text','icon'].includes(f.kind)?field('Display text','face-text',`<input id="face-text" maxlength="40" value="${esc(f.text)}" placeholder="Add a label">`):''}
-    ${['claude','codex','reset','trend'].includes(f.kind)?'<p class="hint">Account readers are not connected. No allowance or reset values are shown.</p>':''}
-    <div class="section-divider"></div><h3>On press</h3>${field('Action','action-kind',`<select id="action-kind">${options(ACTIONS,k.action)}</select>`)}
-    ${actionControl(k)}<p class="hint">Actions are edited here only. Preview presses never run them.</p>
-    <div class="section-divider"></div><button class="btn full" data-do="preview-flip">Preview flip to Face ${previewFace==='a'?'B':'A'}</button><p class="hint">Exactly two faces. Choose the same presentation twice for a fixed display.</p>`;
+    ${['text','icon','picture'].includes(f.kind)?field('Display text','face-text',`<input id="face-text" maxlength="40" value="${esc(f.text)}" placeholder="Add a label">`):''}
+    ${f.kind==='icon'?field('Icon','face-icon',`<select id="face-icon">${options(FACE_ICONS,f.icon||'app')}</select>`):''}
+    ${f.kind==='picture'?field('Picture','face-picture','<input id="face-picture" type="file" accept="image/png,image/jpeg">'):''}
+    ${['claude','codex'].includes(f.kind)?field('Usage display','usage-view',`<select id="usage-view">${options(Object.fromEntries(Object.entries(USAGE_VIEWS).filter(([id])=>f.kind==='codex'||id!=='tokens')),f.usageView||'rings')}</select>`):''}
+    ${['claude','codex','reset','trend'].includes(f.kind)?'<p class="hint">Unavailable or stale readings stay unknown. Claude needs a supporting Desktop Code session.</p>':''}
+    <div class="section-divider"></div><h3>On press</h3>${field('Find an action','action-search',`<input id="action-search" type="search" value="${esc(actionSearch)}" placeholder="Search actions">`)}${field('Action','action-kind',`<select id="action-kind">${options(Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===k.action||label.toLowerCase().includes(actionSearch.toLowerCase()))),k.action)}</select>`)}
+    ${actionControl(k)}<p class="hint">Actions run from physical keys only. Preview presses never run them.</p>
+    <div class="section-divider"></div><button class="btn full" data-do="preview-flip">Preview flip to Face ${previewFace==='a'?'B':'A'}</button>${T&&state?.fake?'<button class="btn full" data-do="simulate-press">Test simulated key press</button>':''}<p class="hint">Exactly two faces. Choose the same presentation twice for a fixed display.</p>`;
 }
 function dockPage() {
-  return `<div class="page-heading"><div><span class="eyebrow">Ulanzi D200H</span><h1>Stream dock</h1><p>Your keys, pages and actions in one place.</p></div><span class="chip accent">Interface preview</span></div>
-    <div class="device-header"><span class="device-icon">${icon('dock')}</span><div><strong>Stream dock</strong><p>Hardware connection is not implemented yet.</p></div><span class="chip">Not connected</span></div>
+  return `<div class="page-heading"><div><span class="eyebrow">Ulanzi D200H</span><h1>Stream dock</h1><p>Your keys, pages and actions in one place.</p></div><span class="chip accent">${T?(state?.fake?'Simulated dock':'D200H'):'Browser preview'}</span></div>
+    <div class="device-header"><span class="device-icon">${icon('dock')}</span><div><strong>Stream dock</strong><p id="dock-message">${esc(deviceStatus?.message||'Dock disabled')}</p></div><label class="dock-switch">Enabled <input id="dock-enabled" type="checkbox" role="switch" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Disabled')}</span></div>
+    <div class="dock-controls">${field('Brightness','dock-brightness',`<input id="dock-brightness" type="range" min="1" max="100" value="${deviceStatus?.brightness||50}" ${T?'':'disabled'}>`)}<span class="hint" id="dock-active-page"></span><button class="btn" data-do="undo" ${history.available?'':'disabled'}>Undo</button></div>
     <div class="workspace-toolbar"><div class="profile-picker">${field('Profile','profile-picker',`<select id="profile-picker">${options(Object.fromEntries(draft.profiles.map((p,i)=>[String(i),p.name])),draft.profile)}</select>`)}</div><button class="btn" data-do="add-profile">Add profile</button><span class="toolbar-spacer"></span><span class="hint">Previewing Face ${previewFace.toUpperCase()}</span><button class="btn" data-do="preview-flip">Flip A / B</button></div>
-    <div class="dock-workspace"><section class="preview-column" aria-label="Dock preview"><div id="dock-preview">${dockMarkup()}</div><div class="page-strip" role="group" aria-label="Dock pages">${profile().pages.map((p,i)=>`<button class="btn${draft.page===i?' active':''}" data-dock-page="${i}" aria-pressed="${draft.page===i}">${esc(p.name)}</button>`).join('')}<button class="btn ghost" data-do="add-page">+ Add page</button></div><div class="names-row">${field('Profile name','profile-name',`<input id="profile-name" maxlength="40" value="${esc(profile().name)}">`)}${field('Page name','page-name',`<input id="page-name" maxlength="40" value="${esc(page().name)}">`)}</div><p class="hint">Select a display to edit it. This preview sends nothing to your dock.</p></section><aside class="key-editor" aria-label="Key editor">${editorMarkup()}</aside></div>`;
+    <div class="dock-workspace"><section class="preview-column" aria-label="Dock preview"><div id="dock-preview">${dockMarkup()}</div><div class="page-strip" role="group" aria-label="Dock pages">${profile().pages.map((p,i)=>`<button class="btn${draft.page===i?' active':''}" data-dock-page="${i}" aria-pressed="${draft.page===i}">${esc(p.name)}</button>`).join('')}<button class="btn ghost" data-do="add-page">+ Add page</button></div><div class="names-row">${field('Profile name','profile-name',`<input id="profile-name" maxlength="40" value="${esc(profile().name)}">`)}${field('Page name','page-name',`<input id="page-name" maxlength="40" value="${esc(page().name)}">`)}</div><p class="hint">Select a display to edit it. Changes save as made and apply when the dock is enabled.</p></section><aside class="key-editor" aria-label="Key editor">${editorMarkup()}</aside></div>`;
 }
 function plannedPage(id) {
   const cooler = id === 'cooler';
   return `<div class="page-heading"><div><span class="eyebrow">${cooler?'Lovingcool SC70':'Ulanzi Dial'}</span><h1>${NAV[id]}</h1><p>${cooler?'Your cooler display, inside Unified Control.':'A place for your dial controls.'}</p></div><span class="chip">Planned</span></div>
     <div class="device-header"><span class="device-icon">${icon(id)}</span><div><strong>${NAV[id]}</strong><p>Engine integration is planned.</p></div><span class="chip">Not connected</span></div>
-    <section class="empty-state"><span class="empty-icon">${icon(id)}</span><h2>${cooler?'The cooler page comes next':'Dial support follows the cooler'}</h2><p>${cooler?'Themes, the library and live controls will be brought into this page after the dock passes acceptance. Keep using the current CoolerScreen app.':'The dial will get its own controls here once the dock and cooler are working in the combined app.'}</p><p class="hint">This prototype has not checked or opened your device.</p><button class="btn" data-go="dock">Explore the dock editor</button></section>`;
+    <section class="empty-state"><span class="empty-icon">${icon(id)}</span><h2>${cooler?'The cooler page comes next':'Dial support follows the cooler'}</h2><p>${cooler?'Themes, the library and live controls will be brought into this page after the dock passes acceptance. Keep using the current CoolerScreen app.':'The dial will get its own controls here once the dock and cooler are working in the combined app.'}</p><p class="hint">${cooler?'CoolerScreen':'Dial'} controls are not integrated yet.</p><button class="btn" data-go="dock">Explore the dock editor</button></section>`;
 }
 function render() {
+  document.querySelector('.preview-label').textContent=T?(state?.fake?'Simulated dock':'Device controls'):'Browser preview';
   document.querySelectorAll('.nav-item').forEach(b => {
     if (b.dataset.page===draft.current) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current');
   });
   let html = '';
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
   else if (['cooler','dial'].includes(draft.current)) html = plannedPage(draft.current);
-  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and draft actions. CoolerScreen joins this frame after dock acceptance, followed by the dial.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock','Ulanzi D200H · editable layout preview','Preview')}${deviceCard('cooler','Cooler screen','Lovingcool SC70 · engine integration next','Planned')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">Device states describe this prototype. Connected hardware has not been detected.</p>`;
-  else if (draft.current === 'general') html = `<div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div><section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>The existing app setting is shown below; editing it is not part of this prototype.</p></div><span class="chip">${state ? state.autostart?'On':'Off' : 'Not available in browser'}</span></div><div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div><div class="setting-row"><div><strong>Layout storage</strong><p>${T ? 'Profiles and pages are saved in the app data folder, with a startup backup.' : 'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div><div class="setting-row"><div><strong>Background behavior</strong><p>The installed shell uses a visible tray icon. Closing its window keeps it running; Quit stops it.</p></div></div></section>`;
-  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Combined interface prototype</h2><p>The app shell and simulated dock are built. This interface lets you explore the combined layout and draft key settings. Hardware control, action execution and usage readers are not connected.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
-  pane.innerHTML = html; showStorage(); updateNativePreviews();
+  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. CoolerScreen joins this frame after dock acceptance, followed by the dial.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Ulanzi D200H · disabled until enabled'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Disabled'):'Preview')}${deviceCard('cooler','Cooler screen','Lovingcool SC70 · engine integration next','Planned')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
+  else if (draft.current === 'general') html = `
+    <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
+    <input id="autostart-enabled" type="checkbox" role="switch" aria-label="Start with Windows" ${state?.autostart?'checked':''} ${!T||state?.fake?'disabled':''}></div>
+    <div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div>
+    <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages are saved in the app data folder, with a startup backup.':'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div>
+    <div class="setting-row"><div><strong>Background behavior</strong><p>The visible tray keeps enabled controls running. Quit waits for active work and stops them.</p></div></div></section>`;
+  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Dock preview release</h2><p>Configure key faces and actions, view usage allowances and manage your dock. Enable the dock separately. CoolerScreen and dial integration follow dock acceptance.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
+  pane.innerHTML = html; showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
 }
+async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
+async function updateMonitors(){const container=document.getElementById('monitor-targets');if(!container)return;if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}const edited=activeKey();try{const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';}catch{container.textContent='Monitor information is unavailable.';}}
+function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));}
 async function updateNativePreviews() {
   const generation=++previewGeneration;
   if (!T || !profilesReady || !exitGuardReady || draft.current!=='dock') return;
@@ -191,12 +217,16 @@ document.addEventListener('click', e => {
   const action = e.target.closest('[data-do]')?.dataset.do;
   if (action === 'load-profiles') { loadNativeProfiles(); return; }
   if (action === 'retry-save') { writer.completion=writer.drain(); return; }
+  if (action === 'undo') {const previous=history.undo();if(previous){const current=draft.current;draft=previous;draft.current=current;selected=0;persist();render();}return;}
+  if (action === 'simulate-press') {invoke('dock_test_button',{index:selected,pressed:true}).then(()=>invoke('dock_test_button',{index:selected,pressed:false})).catch(()=>{previewNote='The simulated dock is not enabled.';showStorage();});return;}
   if (action === 'preview-flip') { previewFace = previewFace==='a'?'b':'a'; render(); }
   if (action === 'add-profile' && draft.profiles.length < 50) {
+    remember();
     draft.profiles.push({name:`Profile ${draft.profiles.length+1}`,pages:[newPage('Main')]});
     draft.profile=draft.profiles.length-1; draft.page=0; selected=0; persist(); render(); document.getElementById('profile-name')?.focus();
   }
   if (action === 'add-page' && profile().pages.length < 50) {
+    remember();
     profile().pages.push(newPage(`Page ${profile().pages.length+1}`)); draft.page=profile().pages.length-1; selected=0; persist(); render(); document.getElementById('page-name')?.focus();
   }
 });
@@ -211,35 +241,48 @@ function refreshNames() {
 }
 pane.addEventListener('change', e => {
   const {id,value} = e.target;
+  if(id==='autostart-enabled'){invoke('autostart_set',{enabled:e.target.checked}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.autostart;previewNote='The Windows startup setting could not be changed.';showStorage();});return;}
+  if(id==='dock-enabled'){invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{deviceStatus=result;updateDeviceStatus();updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
+  if(id==='dock-brightness'){invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{deviceStatus=result;updateDeviceStatus();}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
+  if(e.target.dataset.monitor){remember();activeKey().value=JSON.stringify({targets:[...document.querySelectorAll('[data-monitor]:checked')].map(el=>el.dataset.monitor),mode:'toggle'});persist();return;}
+  if(id==='face-picture'){const file=e.target.files?.[0];if(!file)return;const dest=activeKey()[selectedFace],epoch=Symbol();pictureEpoch.set(dest,epoch);remember();const mutation=(async()=>{try{if(file.size>4*1024*1024)throw new Error();const asset=T?await invoke('asset_import',{bytes:[...new Uint8Array(await file.arrayBuffer())]}):await savePreviewPicture(file);if(pictureEpoch.get(dest)!==epoch)return;dest.asset=asset;persist();render();}catch{previewNote='Choose a valid PNG or JPEG of at most 4 MiB and 4096 pixels per side.';showStorage();}})();pendingMutations.add(mutation);mutation.finally(()=>pendingMutations.delete(mutation));return;}
+  if(id==='usage-view'||id==='face-icon'){remember();activeKey()[selectedFace][id==='usage-view'?'usageView':'icon']=value;persist();render();return;}
   // A blur-triggered change must not replace the next button before its click.
-  if (id === 'action-value') { activeKey().value=value; persist(); return; }
+  if (id === 'action-value'||id==='launch-args') {updateActionValue();persist();return;}
   if (id === 'profile-name' || id === 'page-name') {
     const target = id === 'profile-name' ? profile() : page();
     target.name=value.trim() || (id === 'profile-name' ? 'Untitled profile' : 'Untitled page');
     e.target.value=target.name; refreshNames(); persist(); return;
   }
   if (!['profile-picker','face-kind','action-kind'].includes(id)) return;
+  if(id!=='profile-picker')remember();
   const k=activeKey();
   if (id === 'profile-picker') { draft.profile=Number(value); draft.page=0; selected=0; }
-  else if (id === 'face-kind') { k[selectedFace].kind=value; previewFace=selectedFace; }
+  else if (id === 'face-kind') { k[selectedFace].kind=value;if(!['claude','codex'].includes(value))delete k[selectedFace].usageView;if(value==='claude'&&k[selectedFace].usageView==='tokens')k[selectedFace].usageView='rings';previewFace=selectedFace; }
   else if (id === 'action-kind') { k.action=value; k.value=['page','folder'].includes(value)?'0':value==='media'?'Play / pause':''; }
   else return;
   persist(); render();
 });
 pane.addEventListener('input', e => {
   const {id,value} = e.target;
-  if (id === 'face-text') { activeKey()[selectedFace].text=value; previewFace=selectedFace; document.getElementById('dock-preview').innerHTML=dockMarkup(); updateNativePreviews(); }
-  else if (id === 'action-value') activeKey().value=value;
+  if(id==='action-search'){actionSearch=value;const choices=Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===activeKey().action||label.toLowerCase().includes(value.toLowerCase())));document.getElementById('action-kind').innerHTML=options(choices,activeKey().action);return;}
+  if(!['face-text','action-value','launch-args','profile-name','page-name'].includes(id))return;
+  remember(`${draft.profile}/${draft.page}/${selected}/${selectedFace}/${id}`);
+  if (id === 'face-text') { activeKey()[selectedFace].text=value; previewFace=selectedFace; document.getElementById('dock-preview').innerHTML=dockMarkup(); updateNativePreviews(); updatePictures(); }
+  else if (id === 'action-value'||id==='launch-args') updateActionValue();
   else if (id === 'profile-name') { profile().name=value; refreshNames(); }
   else if (id === 'page-name') { page().name=value; refreshNames(); }
   else return;
   persist();
 });
+function updateActionValue(){const input=document.getElementById('action-value');if(!input)return;if(activeKey().action==='launch'){const args=(document.getElementById('launch-args')?.value||'').split('\n').filter(v=>v.length>0);activeKey().value=JSON.stringify({path:input.value,args});}else activeKey().value=input.value;}
+document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(event.target.tagName)){event.preventDefault();document.querySelector('[data-do="undo"]')?.click();}});
 render();
 if (T) {
   loadNativeProfiles();
   invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
     document.querySelector('.app').inert=true;
+    await Promise.all([...pendingMutations]);
     const saved=await writer.flush();
     try {
       await invoke('editor_quit_ready',{saved});
@@ -250,8 +293,9 @@ if (T) {
   })}).then(()=>invoke('editor_session_ready',{ready:true})).then(()=>{exitGuardReady=true;guardError='';render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
   window.addEventListener('beforeunload',()=>invoke('editor_session_ready',{ready:false}).catch(()=>{}));
 }
-invoke('app_state').then(s => {state=s; if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page; render();}).catch(()=>{});
+invoke('app_state').then(s => {state=s; deviceStatus=s.dock||deviceStatus; if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page; render();}).catch(()=>{});
 setInterval(() => {
   if (draft.current === 'dock') document.querySelectorAll('.clock-value').forEach(el => { el.textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false}); });
-  if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>k[previewFace].kind==='clock')) updateNativePreviews();
+  if(T)invoke('dock_state').then(result=>{deviceStatus=result;updateDeviceStatus();}).catch(()=>{});
+  if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>['clock','date','cpu','gpu','ram','claude','codex','reset','trend'].includes(k[previewFace].kind))) updateNativePreviews();
 },1000);

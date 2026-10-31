@@ -99,6 +99,21 @@ pub struct RenderedFace {
     pub png: Vec<u8>,
     /// True when the face represents unavailable data.
     pub unknown: bool,
+    /// Deadline for current numerical account pixels. Rechecked at batch send.
+    pub valid_until_ms: Option<u64>,
+}
+impl RenderedFace {
+    pub fn guard_delivery(&mut self, now: u64) -> Result<(), String> {
+        if self.valid_until_ms.is_some_and(|deadline| deadline <= now) {
+            *self = render_face(
+                "reset",
+                "",
+                self.width == WIDE_SIZE.0,
+                &RenderInputs::default(),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn font() -> Result<&'static FontArc, String> {
@@ -421,6 +436,7 @@ fn encode_rgb(rgb: &[u8], dimensions: (u32, u32), unknown: bool) -> Result<Rende
         height: h,
         png,
         unknown,
+        valid_until_ms: None,
     })
 }
 

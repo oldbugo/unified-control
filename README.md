@@ -1,7 +1,8 @@
 # Unified Control
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
-the Ulanzi Dial. Private. Combined editor, native profile storage and dock foundations; no real device control enabled yet. Rules for working on it: `CLAUDE.md`.
+the Ulanzi Dial. Private. Dock MVP preview with native profiles, rendering, actions and explicitly enabled dock control.
+Hardware acceptance is pending. Rules for working on it: `CLAUDE.md`.
 
 ## Current direction (2026-10-30)
 
@@ -24,7 +25,7 @@ Unified Control is one product maintained across separate private repositories. 
 
 The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `a467475` in
 `uc-ulanzi`. This development pin is immutable; tagged dependencies follow when releases are made. The profile/render
-pipeline is tested through the simulated dock; the app does not automatically open native HID. CoolerScreen engine integration is still planned. Reviewed work is committed and pushed
+pipeline is tested through the simulated dock; native HID opens only after the user enables the dock and Studio is absent. CoolerScreen engine integration is still planned. Reviewed work is committed and pushed
 to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
 
 ## Current implementation
@@ -33,20 +34,19 @@ The native editor saves validated profiles and pages in the UC app-data folder, 
 journaled recovery. Changes save as made; errors remain visible and retryable. Browser-only previews keep a separate
 local draft. They are not silently imported into native profiles. [Storage contract](docs/profiles.md).
 
-Built: combined six-page frame; native profile editing; PNG text/clock/unknown-data faces at 196x196 and 458x196;
-transport-independent A/B routing, duplicate-press suppression, folder/back navigation and changed-key updates. A
-saved profile is rendered and sent through the real ZIP/packet pipeline to the simulated dock in integration tests.
-The separate hardware crate implements native Windows HID, serialized writes and reconnect, tested with fake transports
-only. Cached reconnect-image replay is off by default so stale usage pictures cannot be silently replayed.
+Built in the 0.1.0 preview: six-page editor, native profile storage, strict A/B routing, navigation, undo, searchable actions,
+bounded PNG/JPEG imports, 13 fixed icons, text/clock/date and on-demand CPU/RAM/NVIDIA GPU faces. Hotkey, media, Unicode text,
+direct launch/URL and preserved Monitor Toggle adapters are wired to physical presses. Usage readers render all 16 views
+through a managed Node helper; account provenance/freshness gates run before publication, rendering, receipt and delivery.
+The dock remains disabled until explicitly enabled. Studio detection, ownership, reconnect, brightness and tray controls
+are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/dock-mvp.md).
 
-Still to build/check: app-level Studio coexistence and native-device enablement, real action execution, account readers
-and the full 16 usage faces, sensors, icon/picture rendering, physical dock acceptance and the later cooler/dial engines.
-Initial native icon faces use their text label; allowance/reset/trend and unavailable sensors show unknown values.
-No accounts are read and no launch, hotkey, media or monitor action is executed by this stage. No new installation is included.
-
-Checked: 52 UC library tests pass (one helper ignored); 30 driver tests pass. Headless browser checks cover the combined
-interface, stable ID conversion, single-flight saves/retry, draft recovery and three window widths. A separate quiet
-native WebView test exercises actual IPC, isolated profile files, A/B persistence and physical-size PNG previews.
+Checked: 88 UC library tests pass (one helper ignored), four app lifecycle tests, 61 reader tests and the original 105
+Toolkit tests pass. The separate driver has 30 passing fake-transport tests from the foundation checkpoint. Browser checks
+cover undo, picture persistence, all usage choices, literal launch arguments and three window widths. A quiet native WebView
+check covers real IPC/files, image import, A/B persistence, physical-size PNGs, fake Studio block/reconnect, duplicate press
+suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
+for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 

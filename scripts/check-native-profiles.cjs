@@ -54,6 +54,32 @@ async function run() {
     await page.waitForFunction(()=>document.querySelectorAll('img.rendered-key').length===14 && [...document.querySelectorAll('img.rendered-key')].every(img=>img.naturalWidth>0));
     const widths=await page.locator('img.rendered-key').evaluateAll(images=>images.map(img=>[img.naturalWidth,img.naturalHeight]));
     assert.deepEqual(widths[0],[196,196]);assert.deepEqual(widths[13],[458,196]);
+    // Import a locally generated fixture picture through the real native path.
+    const picture=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=4;canvas.height=4;const context=canvas.getContext('2d');context.fillStyle='#5aa9ff';context.fillRect(0,0,4,4);return canvas.toDataURL('image/png').split(',')[1];});
+    await page.locator('#face-kind').selectOption('picture');
+    await page.locator('#face-picture').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(picture,'base64')});
+    await page.waitForFunction(async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return !!data.state.profiles[0].pages[0].keys[0].b.asset;});
+    await page.locator('#action-kind').selectOption('hotkey');
+    await page.locator('#action-value').fill('Ctrl + Shift + M');
+    await page.locator('[data-key="1"]').click();
+    await page.locator('#face-kind').selectOption('codex');
+    await page.locator('#usage-view').selectOption('weekly-number');
+    await page.waitForFunction(async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return data.state.profiles[0].pages[0].keys[1].b.usageView==='weekly-number';});
+    await page.evaluate(async()=>{
+      const invoke=window.__TAURI_INTERNALS__.invoke;
+      await invoke('dock_test_studio',{running:true});
+      await invoke('dock_configure',{patch:{enabled:true,brightness:42}});
+    });
+    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='blocked';});
+    await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_test_studio',{running:false}));
+    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='connected'&&state.framesSent>=14;});
+    const readerRunning=await page.evaluate(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.usageReaderRunning;});
+    assert.equal(readerRunning,false,'fake app must never activate real account readers');
+    await page.evaluate(async()=>{const invoke=window.__TAURI_INTERNALS__.invoke;for(const pressed of [true,true,false,true,false])await invoke('dock_test_button',{index:0,pressed});});
+    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.actions===2;});
+    await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}}));
+    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
+    await page.locator('[data-key="0"]').click();
     const index=JSON.parse(fs.readFileSync(path.join(home,'profiles','index.json'),'utf8'));
     const profile=JSON.parse(fs.readFileSync(path.join(home,'profiles',`profile-${index.currentProfile}.json`),'utf8'));
     assert.equal(profile.pages[0].keys[0].a.text,'Native A');
@@ -72,24 +98,30 @@ async function run() {
     // The host's real tray-Quit test hook fires at 30s. Hold the first edit in
     // the client and queue a newer one, so no backend job can hide this risk.
     await delay(Math.max(0,28500-(Date.now()-started)));
-    await page.evaluate(()=>{
+    await page.evaluate(picture=>{
       const T=window.__TAURI_INTERNALS__, original=T.invoke.bind(T);
       let delayed=false;
       T.invoke=(command,args)=>{
+        if(command==='asset_import')return new Promise(resolve=>setTimeout(resolve,2500)).then(()=>original(command,args));
         if(command==='profiles_save' && !delayed) {delayed=true;return new Promise(resolve=>setTimeout(resolve,2500)).then(()=>original(command,args));}
         return original(command,args);
       };
       const input=document.getElementById('face-text');
       for(const value of ['Queued first','Queued last']) {input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}
+      const bytes=Uint8Array.from(atob(picture),c=>c.charCodeAt(0));
+      const transfer=new DataTransfer();transfer.items.add(new File([bytes],'late-picture.png',{type:'image/png'}));
+      const file=document.getElementById('face-picture');file.files=transfer.files;file.dispatchEvent(new Event('change',{bubbles:true}));
       // Normal window Close must preserve the JS queue while it hides to tray.
       return original('win_close');
-    });
+    },picture);
     const quitResult=await Promise.race([exited,delay(10000).then(()=>null)]);
     assert.ok(quitResult,'tray Quit did not finish after the queued saves');
     assert.equal(quitResult.code,0);
     const finalProfile=JSON.parse(fs.readFileSync(path.join(home,'profiles',`profile-${index.currentProfile}.json`),'utf8'));
     assert.equal(finalProfile.pages[0].keys[0].b.text,'Queued last','closing and tray Quit must preserve the newest queued edit');
-    console.log('PASS: quiet native WebView; real IPC profile files; A/B reload; 14 PNG previews; normal close preserves queued edits; tray Quit flushes newest edit before exit. No device opened.');
+    assert.notEqual(finalProfile.pages[0].keys[0].b.asset,profile.pages[0].keys[0].b.asset,'Quit must also await a pending picture import');
+    assert.ok(fs.existsSync(path.join(home,'assets',`${finalProfile.pages[0].keys[0].b.asset}.png`)));
+    console.log('PASS: quiet native WebView; actual IPC/files; picture imports; A/B reload; 14 PNGs; Studio block/reconnect; deduplicated fake presses; inactive account readers; disable; tray Quit preserves queued edits and pending import. No physical device opened.');
     console.log(`Isolated test data: ${home}`);
   } finally {
     if(child.exitCode===null) {
