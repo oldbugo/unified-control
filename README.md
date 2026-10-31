@@ -59,6 +59,9 @@ The 0.1.1 idle retest failed within 10–15 seconds while heartbeats and minute 
 zero errors/reconnects. Prepared 0.1.2 adds a known Background-mode keepalive after the first full page and every five
 seconds. A deterministic fake test confirms the cadence, stop-on-disable, unchanged key/wide images and no page resends.
 Physical efficacy remains pending. See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest).
+The 0.1.2 installer was built from `1322bc2` and ran successfully, but the old updater restarted its original packaged
+0.1.1 copy. That copy was quit normally. User Start-menu launch/version verification is required before the keepalive trial;
+do not claim the running app was upgraded from installer success alone.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 
