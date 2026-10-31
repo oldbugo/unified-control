@@ -20,7 +20,7 @@ use std::{
 use ulanzi_dock::{
     dock::{Dock, Transport},
     fake::FakeDock,
-    protocol::{ButtonAction, Event, Packet},
+    protocol::{ButtonAction, Event, Packet, SmallWindowData, SmallWindowMode},
 };
 
 pub trait DockHooks: Send + Sync {
@@ -45,6 +45,7 @@ pub struct DockStatus {
     pub current_page: Option<String>,
     pub pages_sent: u64,
     pub frames_sent: u64,
+    pub keep_alives_sent: u64,
     pub actions: u64,
     pub errors: u64,
 }
@@ -132,6 +133,7 @@ impl Controller {
                 current_page: None,
                 pages_sent: 0,
                 frames_sent: 0,
+                keep_alives_sent: 0,
                 actions: 0,
                 errors: 0,
             }),
@@ -307,6 +309,7 @@ struct Worker {
     inbound: u64,
     heartbeats: u64,
     acknowledgements: u64,
+    next_keep_alive: Option<Instant>,
 }
 impl Worker {
     fn new(
@@ -341,6 +344,7 @@ impl Worker {
             inbound: 0,
             heartbeats: 0,
             acknowledgements: 0,
+            next_keep_alive: None,
         }
     }
     fn activity(&mut self, enabled: bool) {
@@ -356,6 +360,7 @@ impl Worker {
         self.dock = None;
         self.owner = None;
         self.brightness = None;
+        self.next_keep_alive = None;
         self.flash = [None; 14];
         if let Some(r) = &mut self.runtime {
             r.reset_input();
@@ -371,6 +376,35 @@ impl Worker {
         self.shared.set_state("error", message);
         self.retry_at = now + self.retry_delay;
         self.retry_delay = (self.retry_delay * 2).min(Duration::from_secs(30));
+    }
+    /// The documented D200 small-window keepalive, with background mode chosen
+    /// explicitly so the existing wide PNG is retained (the default is a clock).
+    /// A full page must have supplied SmallViewMode:2 and its wide Icon first.
+    fn keep_alive(&mut self, now: Instant) -> bool {
+        if !self.next_keep_alive.is_some_and(|due| now >= due) {
+            return true;
+        }
+        if !self.shared.safe_to_act() {
+            self.release();
+            return false;
+        }
+        let Some(dock) = &mut self.dock else {
+            self.next_keep_alive = None;
+            return true;
+        };
+        self.shared.writing.store(true, Ordering::SeqCst);
+        let result = dock.set_small_window(&SmallWindowData {
+            mode: SmallWindowMode::Background,
+            ..SmallWindowData::default()
+        });
+        self.shared.writing.store(false, Ordering::SeqCst);
+        if result.is_err() {
+            self.failed(now, "Dock keepalive write failed; reconnecting");
+            return false;
+        }
+        self.shared.status.lock().unwrap().keep_alives_sent += 1;
+        self.next_keep_alive = Some(now + Duration::from_secs(5));
+        true
     }
     fn run(mut self, rx: Receiver<Control>) {
         while !self.shared.stop.load(Ordering::SeqCst) {
@@ -454,7 +488,7 @@ impl Worker {
     fn step(&mut self, now: Instant) {
         if self.shared.enabled.load(Ordering::SeqCst) && now >= self.next_diagnostic {
             let s = self.shared.status();
-            crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,now.saturating_duration_since(self.last_activity).as_millis()));
+            crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} keepalive={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,s.keep_alives_sent,now.saturating_duration_since(self.last_activity).as_millis()));
             self.next_diagnostic = now + Duration::from_secs(10);
         }
         while let Ok(done) = self.completed.try_recv() {
@@ -531,6 +565,7 @@ impl Worker {
                     self.owner = owner;
                     self.generation += 1;
                     self.brightness = None;
+                    self.next_keep_alive = None;
                     self.retry_delay = Duration::from_secs(1);
                     self.last_activity = now;
                     self.last_fake_heartbeat = now;
@@ -568,6 +603,10 @@ impl Worker {
                 return;
             }
             self.brightness = Some(value);
+        }
+        // Service a due keepalive before a potentially slow account render.
+        if !self.keep_alive(now) {
+            return;
         }
         if now >= self.next_render {
             if !self.shared.enabled.load(Ordering::SeqCst)
@@ -607,6 +646,9 @@ impl Worker {
                     s.frames_sent += count as u64;
                     if count == 14 {
                         s.pages_sent += 1;
+                        if self.next_keep_alive.is_none() {
+                            self.next_keep_alive = Some(now);
+                        }
                     }
                 }
                 Err(_) => {
@@ -624,6 +666,11 @@ impl Worker {
             {
                 self.next_render = self.next_render.min(*until);
             }
+        }
+        // The initial keepalive follows successful full-page delivery, never
+        // preceding the PNG/SmallViewMode baseline it refers to.
+        if !self.keep_alive(now) {
+            return;
         }
         if self.shared.fake
             && now.duration_since(self.last_fake_heartbeat) >= Duration::from_secs(10)
@@ -916,6 +963,89 @@ mod tests {
         k.value = "Ctrl + M".into();
         store.save(&state).unwrap();
         (dir, store, Arc::new(Hooks::new()))
+    }
+    #[test]
+    fn background_keepalive_runs_every_five_seconds_without_resending_or_replacing_images() {
+        let (_dir, store, hooks) = setup();
+        let output = tempfile::tempdir().unwrap();
+        let shared = Arc::new(Shared {
+            status: Mutex::new(DockStatus {
+                state: "connected".into(),
+                message: "Simulated dock connected".into(),
+                enabled: true,
+                fake: true,
+                current_profile: None,
+                current_page: None,
+                pages_sent: 0,
+                frames_sent: 0,
+                keep_alives_sent: 0,
+                actions: 0,
+                errors: 0,
+            }),
+            enabled: AtomicBool::new(true),
+            brightness: AtomicU8::new(50),
+            revision: AtomicU64::new(0),
+            stop: AtomicBool::new(false),
+            fake_studio: AtomicBool::new(false),
+            writing: AtomicBool::new(false),
+            action_busy: AtomicBool::new(false),
+            queued_actions: AtomicUsize::new(0),
+            action_epoch: AtomicU64::new(0),
+            fake: true,
+        });
+        let (actions, _action_rx) = mpsc::sync_channel(16);
+        let (_completed, complete_rx) = mpsc::sync_channel(16);
+        let mut worker = Worker::new(shared.clone(), store, hooks, actions, complete_rx);
+        let start = Instant::now();
+        worker.dock = Some(Dock::new(Link::Fake(FakeDock::with_out_dir(output.path()))));
+        assert!(worker.next_keep_alive.is_none());
+        worker.step(start);
+        assert_eq!(shared.status().pages_sent, 1);
+        assert_eq!(shared.status().keep_alives_sent, 1);
+        let pictures = || {
+            (0..14)
+                .map(|index| {
+                    std::fs::read(output.path().join(if index == 13 {
+                        "wide.png".into()
+                    } else {
+                        format!("key_{index:02}.png")
+                    }))
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let baseline = pictures();
+        for (millis, expected) in [(4999, 1), (5000, 2), (9999, 2), (10000, 3)] {
+            worker.step(start + Duration::from_millis(millis));
+            assert_eq!(shared.status().keep_alives_sent, expected);
+            assert_eq!(shared.status().pages_sent, 1);
+            assert_eq!(shared.status().frames_sent, 14);
+            assert_eq!(
+                pictures(),
+                baseline,
+                "all thirteen keys and the wide image must stay intact"
+            );
+        }
+        let Link::Fake(fake) = worker.dock.as_ref().unwrap().transport() else {
+            panic!("fake only")
+        };
+        assert_eq!(fake.small_window.as_deref(), Some("2|0|0|00:00:00|0|24H|"));
+        assert_eq!(fake.pages_received, 1);
+        assert_eq!(fake.partial_updates_received, 0);
+        assert!(fake.errors.is_empty());
+        assert_eq!(
+            fake.commands_received
+                .iter()
+                .filter(|&&command| command == 0x0006)
+                .count(),
+            3
+        );
+        shared.enabled.store(false, Ordering::SeqCst);
+        worker.step(start + Duration::from_secs(15));
+        worker.step(start + Duration::from_secs(25));
+        assert_eq!(shared.status().keep_alives_sent, 3);
+        assert!(worker.next_keep_alive.is_none());
+        assert!(worker.dock.is_none());
     }
     #[test]
     fn rendering_cannot_send_after_admission_is_revoked() {

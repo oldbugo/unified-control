@@ -34,7 +34,13 @@ if (Test-Path -LiteralPath $exe) {
             "the app quit and the installer was started, but the new build is not running yet: check again in a minute"; exit 1
         }
         2 { "the app is busy (a job is running): not installing, try again when idle"; exit 2 }
-        3 { }  # it stopped between the check above and now: install as if it was not running
+        3 {
+            # A different packaged/default app-data scope can make the named
+            # endpoint unreachable. Never let that bypass a live app's guard.
+            if (Get-Process UnifiedControl -ErrorAction SilentlyContinue) {
+                "a running Unified Control instance could not be reached by its update guard: quit it from its tray before installing"; exit 2
+            }
+        }
         4 { "that file is not a Unified Control installer: $Setup"; exit 1 }
         default { "the app did not quit (--update exit code $($p.ExitCode)): not installing"; exit 2 }
     }

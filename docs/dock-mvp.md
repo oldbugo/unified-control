@@ -42,3 +42,13 @@ Packaging prevention: dependency installation happens in the isolated build copy
 6. Verify disable releases the dock and stops demand-driven sources; quit from tray and verify clean exit. Reopen and confirm settings. Keep Studio as fallback until acceptance passes.
 
 Hardware actions, reconnect/sleep, monitor recovery, large-key behavior and installation rollback have not been physically verified by the software test suite. Phase 2 starts after acceptance, then CoolerScreen integration, then Dial.
+
+## Idle-fallback retest
+
+User-reported on 0.1.1: after a dock restart and enabling UC, the physical screen returned to the built-in startup/default display within roughly 10–15 seconds. UC diagnostics showed zero errors/reconnects, continuing ten-second inbound heartbeats and minute clock partial updates after the reported fallback. The physical display itself is not visible to the agent. This does not support calling the USB link disconnected or claiming the ACK patch fixed the issue.
+
+0.1.2 tests a narrow host-idle hypothesis using the existing `0x0006` small-window command, explicit Background mode 2, immediately after the first full page and then every five seconds. The [Bitfocus implementation](https://github.com/bitfocus/companion-surface-ulanzi-stream-controller/blob/d467064ddab2a4508106244c05291931151b88ee/src/device.ts#L85) supplies this cadence; its [mode contract](https://github.com/bitfocus/companion-surface-ulanzi-stream-controller/blob/d467064ddab2a4508106244c05291931151b88ee/src/protocol.ts#L43) uses the earlier wide PNG/SmallViewMode2 baseline already sent by UC. No clock/stats overlay or guessed command is added. Both the reference constructor leaving keepalive off by default and the lack of D200H physical proof limit the conclusion: this is a controlled compatibility trial, not a proven watchdog requirement.
+
+89 core tests plus five host tests pass. Deterministic fake steps at 0/4.999/5/9.999/10 seconds verify cadence, preserved PNG bytes for all thirteen keys and the wide display, no extra full/partial pages, and stop/reset on disable. Diagnostics count successful host keepalive writes; they do not establish firmware display state. The serial worker can be delayed by a blocking render/HID operation, so the cadence is scheduled rather than hard realtime.
+
+Installed update IPC now uses the same stable default identity as the single-instance lock; explicit UC_HOME/debug requests retain isolated channels. The installer refuses to proceed if another UC process exists but cannot be reached through its update guard. This closes the packaged-path admission gap; a running-update check remains separate evidence.
