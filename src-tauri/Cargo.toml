@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"
@@ -21,7 +21,7 @@ dirs = "6"
 ab_glyph = "0.2"
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "a46747589f9f8295541ed207ac71d31808cd0992" }
+ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
 
 [dev-dependencies]
 tempfile = "3"

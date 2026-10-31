@@ -67,6 +67,9 @@ impl Shared {
     }
     fn set_state(&self, state: &str, message: &str) {
         let mut s = self.status.lock().unwrap();
+        if s.state != state || s.message != message {
+            crate::device::log(&format!("dock state={state}: {message}"));
+        }
         s.state = state.into();
         s.message = message.into();
         s.enabled = self.enabled.load(Ordering::SeqCst);
@@ -300,6 +303,10 @@ struct Worker {
     brightness: Option<u8>,
     flash: [Option<Instant>; 14],
     providers_enabled: bool,
+    next_diagnostic: Instant,
+    inbound: u64,
+    heartbeats: u64,
+    acknowledgements: u64,
 }
 impl Worker {
     fn new(
@@ -330,6 +337,10 @@ impl Worker {
             brightness: None,
             flash: [None; 14],
             providers_enabled: false,
+            next_diagnostic: now,
+            inbound: 0,
+            heartbeats: 0,
+            acknowledgements: 0,
         }
     }
     fn activity(&mut self, enabled: bool) {
@@ -441,6 +452,11 @@ impl Worker {
         }
     }
     fn step(&mut self, now: Instant) {
+        if self.shared.enabled.load(Ordering::SeqCst) && now >= self.next_diagnostic {
+            let s = self.shared.status();
+            crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,now.saturating_duration_since(self.last_activity).as_millis()));
+            self.next_diagnostic = now + Duration::from_secs(10);
+        }
         while let Ok(done) = self.completed.try_recv() {
             let mut status = self.shared.status.lock().unwrap();
             if done.executed {
@@ -624,6 +640,15 @@ impl Worker {
         });
         match result {
             Ok(Some(event)) => {
+                self.inbound += 1;
+                match &event {
+                    Event::Heartbeat(_) => self.heartbeats += 1,
+                    Event::In010b(_) | Event::BrightnessAck(_) => self.acknowledgements += 1,
+                    Event::DeviceInfo(_) => {
+                        crate::device::log("dock inbound device-info (payload omitted)")
+                    }
+                    _ => {}
+                }
                 self.last_activity = now;
                 // Studio can start between periodic probes. Recheck before handling
                 // a physical event and again inside the serial action executor.
@@ -670,7 +695,9 @@ impl Worker {
                             self.flash = [None; 14];
                             self.activity(true);
                         }
-                        self.next_render = now;
+                        if matches!(event, Event::Button(_)) {
+                            self.next_render = now;
+                        }
                     }
                     Err(_) => {
                         self.shared.status.lock().unwrap().errors += 1;
@@ -685,7 +712,8 @@ impl Worker {
                     return;
                 }
             }
-            Err(_) => {
+            Err(error) => {
+                crate::device::log(&format!("dock input failure kind={:?}", error.kind()));
                 self.failed(now, "Dock disconnected; reconnecting");
                 return;
             }

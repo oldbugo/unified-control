@@ -23,7 +23,7 @@ Unified Control is one product maintained across separate private repositories. 
 | [coolerscreen](https://github.com/oldbugo/coolerscreen) | CoolerScreen app and reusable cooler engine; keeps its own version history |
 | [ulanzi-toolkit](https://github.com/oldbugo/ulanzi-toolkit) | Existing Studio plugins, including usage readers and Monitor Toggle |
 
-The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `a467475` in
+The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `9ea93c0` in
 `uc-ulanzi`. This development pin is immutable; tagged dependencies follow when releases are made. The profile/render
 pipeline is tested through the simulated dock; native HID opens only after the user enables the dock and Studio is absent. CoolerScreen engine integration is still planned. Reviewed work is committed and pushed
 to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
@@ -50,6 +50,9 @@ for delayed image import and queued saves. Automated tests never open the physic
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
 must show unknown. Preview 0.1.0 is built and installed (source `1b6926e`), left closed for the user to open from Start.
 Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
+Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.
+UC was observed still reporting Connected. The 0.1.1 update tolerates nonstandard acknowledgement lengths and adds
+sanitized connection/heartbeat/frame diagnostics. The physical failure cause and recovery remain unverified.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 
