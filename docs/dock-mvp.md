@@ -20,13 +20,17 @@ The native dock engine is currently an owner thread in the host; separate device
 
 Review regressions: render admission is checked again after slow rendering; expired account images are replaced before delivery; settings save/apply is serialized; quit refusal happens before irreversible controller shutdown. Active monitor recovery finishes before the exit watchdog is armed. Tests never change real monitor/audio/input state.
 
-Live usage evidence is recorded separately below after the idle read check. Live account switching/logout and physical readability remain acceptance checks. Current Codex metadata cannot uniquely distinguish same-name workspaces; see [usage limits](usage.md).
+Live Codex verification on 2026-10-31 ran for 360 seconds: 12 fresh samples and six distinct verified observation timestamps, including an observation after the five-minute cutoff. No model turns, token-history requests or auth-file reads. The owned helper exited cleanly. Claude's existing bridge output was observed separately without cleanup/writes and stayed stale throughout (zero fresh observations); full live Claude helper integration is not established. Its numerical gauges must stay suppressed. Live account switching/logout and physical readability remain acceptance checks. Current Codex metadata cannot uniquely distinguish same-name workspaces; see [usage limits](usage.md).
 
 ## Build and install
 
 `npm run release` stages the locked reader dependency, installed Node binary and notices, then builds the per-user NSIS installer under `dist/UnifiedControl_0.1.0_x64-setup.exe`. The bundle includes monitor helpers, the reader and its Node runtime; it does not require Node on PATH after installation. Build staging reads no credentials or application settings. The Node installation used for staging must have its LICENSE file beside node.exe.
 
 Use `tools/install-when-idle.ps1 -Setup <absolute installer path>`; never force-stop the app. Open Unified Control from the Windows Start menu after a fresh install. It starts with dock control off and Windows autostart off. Real dock access starts only when the user enables it; Studio is never closed by UC.
+
+Installed 0.1.0 through that script on 2026-10-31, with the app left closed. Release source: `1b6926e3c322fe046bc87848d9ce5a211907197e`. Installer SHA-256: `F27DA87EA3CB1BDDDEE5CF89E6F1C1FC0D902B4C43F476ADA9088BF95CD79AF4`. The installed reader/resources were checked using `UC_RESOURCE_DIR=<install folder> node scripts/check-bundled-reader.cjs`: bundled Node and rasterizer create a physical-size unknown PNG, preserve inactive provider state and quit cleanly without starting UC or an account reader. Installation rollback and the user-visible Start-menu launch remain acceptance checks.
+
+Packaging prevention: dependency installation happens in the isolated build copy, because running development readers can lock the source native rasterizer. Restart/update helpers wait for the exact parent process to finish action recovery rather than abandoning an update after 30 seconds.
 
 ## Hands-on acceptance, with the user present
 

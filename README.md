@@ -47,6 +47,9 @@ cover undo, picture persistence, all usage choices, literal launch arguments and
 check covers real IPC/files, image import, A/B persistence, physical-size PNGs, fake Studio block/reconnect, duplicate press
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
+Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
+must show unknown. Preview 0.1.0 is built and installed (source `1b6926e`), left closed for the user to open from Start.
+Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 
