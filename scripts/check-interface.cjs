@@ -162,15 +162,19 @@ const server = http.createServer((req,res) => {
       window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
         if(command==='app_state'||command==='settings_update')return appState;
         if(command==='dock_state')return dock;
+        if(command==='profiles_save'){window.__lastSavedSnapshot=structuredClone(args.snapshot);return 0;}
         if(command==='profiles_state')return {state:{version:1,currentProfile:'p',currentPage:'pg',profiles:[{id:'p',name:'Fixture',pages:[{id:'pg',name:'Main',keys:Array.from({length:14},(_,index)=>({a:{kind:index===0?'clock':'text',text:''},b:{kind:'text',text:''},action:'none',value:''}))}]}]}};
         if(command==='key_previews'){
           window.__previewCalls++;
-          if(!frames.has(window.__previewRevision)){
+          window.__lastPreviewFaces=structuredClone(args.faces);
+          const text=args.faces.map(face=>face.text).join(''),frameKey=`${window.__previewRevision}/${JSON.stringify(args.faces)}`;
+          if(!frames.has(frameKey)){
             const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;
             const context=canvas.getContext('2d');context.fillStyle=['#267fef','#ef7f26','#26ef7f'][window.__previewRevision%3];context.fillRect(0,0,2,2);
-            frames.set(window.__previewRevision,Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),char=>char.charCodeAt(0))));
+            context.fillStyle=`rgb(${text.length*37%256},90,140)`;context.fillRect(0,0,1,1);
+            frames.set(frameKey,Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),char=>char.charCodeAt(0))));
           }
-          return Array.from({length:14},(_,index)=>({index,png:frames.get(window.__previewRevision)}));
+          return Array.from({length:14},(_,index)=>({index,png:frames.get(frameKey)}));
         }
         return 0;
       }};
@@ -185,6 +189,22 @@ const server = http.createServer((req,res) => {
     assert.equal(await nativePreview.evaluate(()=>[...document.querySelectorAll('img.rendered-key')].every((image,index)=>image===window.__firstPreviewImages[index]&&image.complete&&image.naturalWidth===2)),true,'slow replacement must not blank the displayed frame');
     await nativePreview.evaluate(()=>{window.__holdPreviewDecode=false;window.__pendingPreviewDecodes.splice(0).forEach(resolve=>resolve());});
     await nativePreview.waitForFunction(()=>[...document.querySelectorAll('img.rendered-key')].every((image,index)=>image!==window.__firstPreviewImages[index]&&image.complete&&image.naturalWidth===2));
+    // Typing while previewing the other face must switch to the edited face
+    // without rebuilding the native key or flashing the HTML fallback label.
+    await nativePreview.locator('[data-key="1"]').click();
+    await nativePreview.locator('[data-do="preview-flip"]').first().click();
+    await nativePreview.waitForFunction(()=>document.querySelectorAll('img.rendered-key').length===14 && [...document.querySelectorAll('img.rendered-key')].every(image=>image.complete&&image.naturalWidth===2));
+    await nativePreview.evaluate(()=>{window.__typingKey=document.querySelector('[data-key="1"]');window.__typingImage=window.__typingKey.firstChild;window.__holdPreviewDecode=true;});
+    await nativePreview.locator('#face-text').fill('First');
+    await nativePreview.locator('#face-text').fill('Latest preview label');
+    await nativePreview.waitForFunction(()=>window.__pendingPreviewDecodes.length>0);
+    assert.equal(await nativePreview.evaluate(()=>document.querySelector('[data-key="1"]')===window.__typingKey && window.__typingKey.firstChild===window.__typingImage && window.__typingImage.complete&&window.__typingImage.naturalWidth===2),true,'typing must retain the decoded native key rather than flash HTML');
+    assert.equal(await nativePreview.locator('.workspace-toolbar .hint').textContent(),'Previewing Face A');
+    assert.equal(await nativePreview.evaluate(()=>window.__lastSavedSnapshot.profiles[0].pages[0].keys[1].a.text),'Latest preview label');
+    assert.equal(await nativePreview.evaluate(()=>window.__lastPreviewFaces[1].text),'Latest preview label');
+    await nativePreview.evaluate(()=>{window.__holdPreviewDecode=false;window.__pendingPreviewDecodes.splice(0).forEach(resolve=>resolve());});
+    await nativePreview.waitForFunction(()=>document.querySelector('[data-key="1"] img')!==window.__typingImage);
+    assert.equal(await nativePreview.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;const context=canvas.getContext('2d');context.drawImage(document.querySelector('[data-key="1"] img'),0,0);return context.getImageData(0,0,1,1).data[0];}),'Latest preview label'.length*37%256,'only the latest typed label frame may replace the old image');
     await nativePreview.evaluate(()=>{window.__oldPreviewKey=document.querySelector('[data-key="0"]');window.__oldPreviewImage=window.__oldPreviewKey.firstChild;window.__holdPreviewDecode=true;window.__previewRevision=2;});
     await nativePreview.waitForFunction(()=>window.__pendingPreviewDecodes.length>0);
     await nativePreview.locator('[data-page="home"]').click();
@@ -193,7 +213,7 @@ const server = http.createServer((req,res) => {
     assert.equal(await nativePreview.evaluate(()=>window.__oldPreviewKey.firstChild===window.__oldPreviewImage),true,'late decoded frames must not update detached keys after navigation');
     assert.deepEqual(nativeErrors,[]);
     await nativePreview.close();
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview unchanged-node retention/decoded swap/detached-frame guard; no page errors.');
+    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview unchanged-node retention/decoded swap/typing stability/detached-frame guard; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

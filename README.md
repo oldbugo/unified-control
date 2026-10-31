@@ -4,6 +4,7 @@ One Windows tray app for the user's devices: the Ulanzi D200H stream dock first,
 the Ulanzi Dial. Private. Dock MVP preview with native profiles, rendering, actions and explicitly enabled dock control.
 Hardware acceptance is pending. Rules for working on it: `CLAUDE.md`.
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
+UI and navigation follow-ups: [backlog](docs/backlog.md).
 
 ## Current direction (2026-10-30)
 

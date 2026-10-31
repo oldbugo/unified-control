@@ -4,6 +4,8 @@
 
 Fix light flicker in UC's software dock previews: retain identical decoded images across polling, decode changed frames before swapping them in, and discard stale/detached results. Browser regressions cover unchanged-node retention, delayed decoding and navigation. Queued for the next build; installed 0.1.4 remains unchanged during hardware acceptance. Tracks issue #3.
 
+Native text input also retains decoded preview nodes instead of rebuilding an HTML fallback on each keystroke. Rapid-typing regression verifies latest text persistence, render requests and the final decoded frame without a size flash.
+
 ## 0.1.4 — 2026-10-31
 
 Editing one face of a physical key now shows that edited face as soon as its saved change reaches the dock, even if the key was displaying its other face. Clock, date, icon and other face edits no longer need an A/B round trip. Unrelated key selections, held-press deduplication and folder history stay intact. Name/action-only edits do not flip keys; a bulk change to both faces retains the current selection. Saving an edit never executes the key action.

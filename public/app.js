@@ -266,7 +266,15 @@ pane.addEventListener('input', e => {
   if(id==='action-search'){actionSearch=value;const choices=Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===activeKey().action||label.toLowerCase().includes(value.toLowerCase())));document.getElementById('action-kind').innerHTML=options(choices,activeKey().action);return;}
   if(!['face-text','action-value','launch-args','profile-name','page-name'].includes(id))return;
   remember(`${draft.profile}/${draft.page}/${selected}/${selectedFace}/${id}`);
-  if (id === 'face-text') { activeKey()[selectedFace].text=value; previewFace=selectedFace; document.getElementById('dock-preview').innerHTML=dockMarkup(); updateNativePreviews(); updatePictures(); }
+  if (id === 'face-text') {
+    activeKey()[selectedFace].text=value; previewFace=selectedFace;
+    // Native previews keep their decoded image until the edited PNG is ready.
+    // Browser-only previews still update their HTML label immediately.
+    if(!T){document.getElementById('dock-preview').innerHTML=dockMarkup();updatePictures();}
+    const label=document.querySelector('.workspace-toolbar .hint');
+    if(label)label.textContent=`Previewing Face ${previewFace.toUpperCase()}`;
+    updateNativePreviews();
+  }
   else if (id === 'action-value'||id==='launch-args') updateActionValue();
   else if (id === 'profile-name') { profile().name=value; refreshNames(); }
   else if (id === 'page-name') { page().name=value; refreshNames(); }
