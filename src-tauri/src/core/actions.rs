@@ -753,6 +753,15 @@ fn monitor_group_key(spec: &MonitorSpec) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Read-only Windows monitor discovery; run explicitly with user present"]
+    fn windows_monitor_discovery_read_only() {
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let monitors = list_monitors(&resources).expect("Read-only monitor discovery failed");
+        assert!(!monitors.is_empty(), "No active displays were discovered");
+        println!("Read-only discovery found {} displays", monitors.len());
+    }
     #[derive(Default)]
     struct Fake {
         held: Vec<u16>,
