@@ -13,6 +13,12 @@ Implement working dock support first, run normal functional and real-device acce
 then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
 until its integration is built and tested.
 
+User direction on 2026-11-02: prioritize Monitor Toggle for immediate use. The live picker failure was traced to a canonical
+Windows resource path rejected by PowerShell 5.1's path provider. 0.2.3 normalizes filesystem paths at the adapter boundary;
+the original helper is unchanged. A temporary installed-helper correction restored discovery, and the user confirmed the
+physical Dell toggle worked on Key 10. The permanent adapter passes the canonical-path read-only regression. Installation
+and a final live check of 0.2.3 follow. [Evidence and limits](docs/function-failures.md).
+
 User direction on 2026-11-01: integrate CoolerScreen now, then refine the UI. Preview 0.2.0 reuses the existing cooler
 interface and engine in a supervised worker. First enable copies settings/library/gallery into UC, preserving the original
 fallback; close the separate CoolerScreen app yourself before enabling. No uninstall or automatic device enablement.
