@@ -40,7 +40,7 @@ Unified Control is one product maintained across separate private repositories. 
 
 The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `9ea93c0` in
 `uc-ulanzi`. This development pin is immutable; tagged dependencies follow when releases are made. The profile/render
-pipeline is tested through the simulated dock; native HID opens only after the user enables the dock and Studio is absent. CoolerScreen engine integration is still planned. Reviewed work is committed and pushed
+pipeline is tested through the simulated dock; native HID opens only after the user enables the dock and Studio is absent. CoolerScreen worker integration is built in the 0.2.0 preview. Reviewed work is committed and pushed
 to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
 
 ## Current implementation
@@ -63,8 +63,9 @@ check covers real IPC/files, image import, A/B persistence, physical-size PNGs, 
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
-must show unknown. Preview 0.1.5/source `b66df93` is installed and left closed for Start-menu launch; the idle-safe installer
-verified installed version 0.1.5. Running startup version and physical follow/flicker confirmation remain pending.
+must show unknown. Preview 0.2.0/source `9b9ffca` is installed and running after cooperative idle-safe update; new PID and
+startup version were verified at 05:17:43 UTC on 2026-11-01. Dock reconnected with a fresh full page and zero errors. Cooler
+remains disabled; installed worker hash matches the staged pinned binary. Physical cooler/import and remaining dock checks remain pending.
 The request-only executable override avoids the packaged shell's stale installed-file view.
 Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
 Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.

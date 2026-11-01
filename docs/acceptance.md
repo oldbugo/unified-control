@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-01. Installed version: 0.1.5 (`b66df93`), left closed for Start-menu launch; new startup version and physical follow/flicker verification pending. These results distinguish user observation from software/transport evidence. Phase 1 is not yet fully accepted; CoolerScreen and Dial engines remain unintegrated.
+Updated 2026-11-01. Installed/running version: 0.2.0 (`9b9ffca`), new startup/PID verified after cooperative update. User authorized proceeding with CoolerScreen integration before UI polish; remaining dock tests stay open. Cooler engine/interface are integrated in preview, default disabled; physical cooler and real-data import acceptance remain pending. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -13,8 +13,15 @@ Updated 2026-11-01. Installed version: 0.1.5 (`b66df93`), left closed for Start-
 | Hotkey/text/launch/media/Monitor Toggle | Software/fake checks pass; user reported functions mostly work, but individual physical action results remain incomplete. Monitor/audio actions require a suitable hands-on check. |
 | Profiles, autosave and restart persistence | User confirmed on 0.1.4: profile, Test page and assignments remained after tray Quit/Start-menu reopen, and UC reconnected. Automated IPC/storage/quit tests also pass. |
 | Usage and account states | Codex idle source refresh verified; source freshness/unknown/account gates tested. Claude fresh-source/account-panel comparison and account-switch/logout acceptance remain pending. |
+| Reported AI Usage and Monitor Toggle failures | User reports both nonworking. 0.2.0 fixes zero/one-monitor discovery and adds usage status messages; actual causes/physical resolution remain open in [functional follow-ups](function-failures.md). Installed startup logged finite `reader-unavailable`, not successful live usage. |
 | Sleep/resume | Deferred at the user's request; cannot do this now. Remains pending and will be revisited later. |
 | Editor usability/scaling | Browser checks at three widths pass; full user review pending. Minor preview flicker tracked below. |
+
+## Cooler integration preview
+
+Software checks pass for existing embedded themes UI, chunked imports, copied-data migration, saved Live settings, busy-safe Quit and worker crash/restart while dock stays connected. Corrected awaited IPC polling and actual native iframe routing are included in the checks. Physical Live/Embedded, imported user themes/settings and combined-device recovery remain pending. Sleep/resume stays deferred. Original CoolerScreen app/data are retained; it must be closed by the user before enabling the cooler engine in UC. No full phase2 acceptance or old-app replacement is claimed. See [architecture](device-app/architecture.md).
+
+0.2.0 installer SHA-256: `917B7626FE2CE93B646F097A9DF983BCD15C57699644AE88CCFF51BBE635E693`. Running source `9b9ffca`; engine pin `58cb2da`. Startup 05:17:43 UTC, dock Connected and initial full page with zero errors; no cooler worker starts while disabled.
 
 ## Nonblocking UI bug
 
