@@ -14,7 +14,7 @@ async function run() {
   }
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'uc-native-profiles-'));
   const port=await new Promise(resolve=>{const server=net.createServer();server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(()=>resolve(port));});});
-  const env={...process.env,UC_HOME:home,UC_TEST_QUIET:'1',UC_MULTI:'1',UC_FAKE_DEVICE:'1',UC_TEST_TRAY_QUIT_MS:'30000',
+  const env={...process.env,UC_HOME:home,UC_TEST_QUIET:'1',UC_MULTI:'1',UC_FAKE_DEVICE:'1',UC_TEST_TRAY_QUIT_MS:'45000',
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
   const output=process.env.UC_PREVIEW_OUTPUT || path.join(os.tmpdir(),'uc-interface-preview');
   fs.mkdirSync(output,{recursive:true});
@@ -77,6 +77,30 @@ async function run() {
     assert.equal(readerRunning,false,'fake app must never activate real account readers');
     await page.evaluate(async()=>{const invoke=window.__TAURI_INTERNALS__.invoke;for(const pressed of [true,true,false,true,false])await invoke('dock_test_button',{index:0,pressed});});
     await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.actions===2;});
+    // Physical folder/Back updates the editor after the fake full-page transfer.
+    // Observing the device must not save the navigation back into profile files.
+    await page.locator('[data-do="add-page"]').click();
+    await page.locator('#page-name').fill('Follow target');
+    await page.locator('#action-kind').selectOption('back');
+    await page.locator('[data-dock-page="0"]').click();
+    await page.locator('[data-key="12"]').click();
+    await page.locator('#action-kind').selectOption('folder');
+    await page.locator('#action-value').selectOption('1');
+    await page.waitForFunction(async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.profiles[0].pages.length===2&&state.profiles[0].pages[0].keys[12].value===state.profiles[0].pages[1].id&&state.profiles[0].pages[1].keys[0].action==='back';});
+    assert.equal(await page.locator('#follow-physical-page').isChecked(),true);
+    const mainPage=await page.evaluate(async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.currentPage;});
+    await page.waitForFunction(async id=>(await window.__TAURI_INTERNALS__.invoke('dock_state')).currentPage===id,mainPage);
+    await page.evaluate(async()=>{for(const pressed of [true,false])await window.__TAURI_INTERNALS__.invoke('dock_test_button',{index:12,pressed});});
+    await page.waitForFunction(()=>document.querySelector('[data-dock-page="1"]')?.getAttribute('aria-pressed')==='true');
+    assert.equal(await page.evaluate(async()=>(await window.__TAURI_INTERNALS__.invoke('profiles_state')).state.currentPage),mainPage,'following physical navigation must not save it back');
+    await page.evaluate(async()=>{for(const pressed of [true,false])await window.__TAURI_INTERNALS__.invoke('dock_test_button',{index:0,pressed});});
+    await page.waitForFunction(()=>document.querySelector('[data-dock-page="0"]')?.getAttribute('aria-pressed')==='true');
+    await page.locator('#follow-physical-page').uncheck();
+    await page.waitForFunction(async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===false);
+    await page.reload();
+    await page.waitForFunction(()=>document.getElementById('follow-physical-page')?.checked===false);
+    await page.locator('#follow-physical-page').check();
+    await page.waitForFunction(async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===true);
     await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}}));
     await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
     await page.locator('[data-key="0"]').click();
@@ -95,9 +119,9 @@ async function run() {
     await page.waitForFunction(()=>document.querySelectorAll('img.rendered-key').length===14);
     await page.screenshot({path:path.join(output,'uc-native-dock.png')});
     assert.deepEqual(errors,[]);
-    // The host's real tray-Quit test hook fires at 30s. Hold the first edit in
+    // The host's real tray-Quit test hook fires at 45s. Hold the first edit in
     // the client and queue a newer one, so no backend job can hide this risk.
-    await delay(Math.max(0,28500-(Date.now()-started)));
+    await delay(Math.max(0,43500-(Date.now()-started)));
     await page.evaluate(picture=>{
       const T=window.__TAURI_INTERNALS__, original=T.invoke.bind(T);
       let delayed=false;
@@ -121,7 +145,7 @@ async function run() {
     assert.equal(finalProfile.pages[0].keys[0].b.text,'Queued last','closing and tray Quit must preserve the newest queued edit');
     assert.notEqual(finalProfile.pages[0].keys[0].b.asset,profile.pages[0].keys[0].b.asset,'Quit must also await a pending picture import');
     assert.ok(fs.existsSync(path.join(home,'assets',`${finalProfile.pages[0].keys[0].b.asset}.png`)));
-    console.log('PASS: quiet native WebView; actual IPC/files; picture imports; A/B reload; 14 PNGs; Studio block/reconnect; deduplicated fake presses; inactive account readers; disable; tray Quit preserves queued edits and pending import. No physical device opened.');
+    console.log('PASS: quiet native WebView; actual IPC/files; picture imports; A/B reload; 14 PNGs; Studio block/reconnect; deduplicated fake presses; delivered physical folder/Back follow without save-back; persisted follow preference; inactive account readers; disable; tray Quit preserves queued edits and pending import. No physical device opened.');
     console.log(`Isolated test data: ${home}`);
   } finally {
     if(child.exitCode===null) {

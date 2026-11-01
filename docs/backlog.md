@@ -1,6 +1,6 @@
 # Dock follow-up backlog
 
-User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. These follow-ups do not undo that acceptance result; no new install is required during current hands-on checks.
+User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. Updated 2026-11-01: preview fixes and virtual page following are built and software-tested for 0.1.5; user-visible verification remains pending.
 
 | Item | Priority and next check |
 | --- | --- |
@@ -10,4 +10,4 @@ User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. Th
 
 The renderer runs before input polling and builds all fourteen faces before transferring a navigated page; shared usage helper calls can block. These are identified code paths, not a measured cause of the physical delay. Reuse frames only with the existing freshness/account safeguards intact.
 
-Issue #3 typing extension is now prepared and headless-tested: native text input retains decoded nodes until the latest requested frame is decoded; no HTML fallback is inserted while typing. The fix is not in installed 0.1.4. Issues #4 and #5 remain investigation/requested behavior, respectively.
+Issues #3 and #5 are implemented for 0.1.5. Native text input retains decoded nodes until the latest requested frame is decoded. Virtual page following uses successfully delivered page IDs, has a saved opt-out, waits for active edits/imports/saves and never saves observational navigation back. Browser checks cover these guards; quiet native fake IPC verifies Folder/Back following and preference persistence. Physical confirmation remains pending. Issue #4 remains an investigation; no navigation speedup is claimed. Sleep/resume is deferred at the user's request.

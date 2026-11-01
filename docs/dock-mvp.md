@@ -76,3 +76,11 @@ User-reported on 0.1.3: assigning clock/date/icon did not become visible on the 
 Installed 0.1.4 cooperatively from 0.1.3; startup logs verify source `b212fe2fad2034de6135fe85c221ed4d87f45fb4` at 12:05:35 UTC, a new PID and Connected state. 95 core and five host tests pass. Installer SHA-256: `E9E1F1E00108756E093F8587D3E6844BA9B8F88150456A275FBD3C43940D8CBB`. No user layout was changed during verification; the physical edit check is for the user to perform.
 
 User subsequently confirmed immediate physical edit refresh on 0.1.4. USB unplug/replug also returned the layout without toggling Enabled or reopening UC; logs corroborate reconnect plus fresh full-page rendering during the intentional recovery check. [Current acceptance status](acceptance.md) tracks remaining checks. The minor software preview flicker is recorded separately as [issue #3](https://github.com/oldbugo/unified-control/issues/3), without blocking physical acceptance.
+
+## Virtual page following and preview stability
+
+0.1.5 implements [issue #5](https://github.com/oldbugo/unified-control/issues/5): the virtual dock follows the current delivered physical profile/page, including Folder and Back. The user-requested default is on; Follow physical page can be turned off and persists in app settings. Only connected, successfully transferred pages are observed. Following changes the editor selection without saving navigation back to the dock or executing actions; manual page inspection is not undone by unchanged status. Pending edits/imports/saves defer following, and polling is single-flight with stale-result guards. This does not introduce automatic account reads or hardware enablement.
+
+The release also includes the prepared polling and typing preview fixes: unchanged decoded image nodes remain visible, changed PNGs decode before replacement, and typing no longer rebuilds an HTML fallback. Source/bundled behavior is checked in headless and quiet native fake tests before installation. Physical follow/flicker confirmation is still required. Navigation performance issue #4 remains a separate measurement task; no physical speedup is claimed.
+
+Sleep/resume remains deferred at the user's explicit request on 2026-10-31. Continue other work without marking that check passed or asking for it again during this checkpoint.

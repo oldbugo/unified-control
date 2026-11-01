@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 — 2026-11-01
 
-Fix light flicker in UC's software dock previews: retain identical decoded images across polling, decode changed frames before swapping them in, and discard stale/detached results. Browser regressions cover unchanged-node retention, delayed decoding and navigation. Queued for the next build; installed 0.1.4 remains unchanged during hardware acceptance. Tracks issue #3.
+The virtual dock follows completed physical profile/page navigation, including Folder and Back. Follow physical page is enabled by default for the user's requested behavior and can be turned off. Observational page following never sends navigation back to the dock and waits for pending edits/imports/saves; manual inspection and disconnected states do not cause polling to pull the editor back. The preference persists in app settings. Physical page status is published after full-page transfer succeeds.
+
+Fix light flicker in UC's software dock previews: retain identical decoded images across polling, decode changed frames before swapping them in, and discard stale/detached results. Browser regressions cover unchanged-node retention, delayed decoding and navigation. Tracks issue #3.
 
 Native text input also retains decoded preview nodes instead of rebuilding an HTML fallback on each keystroke. Rapid-typing regression verifies latest text persistence, render requests and the final decoded frame without a size flash.
 

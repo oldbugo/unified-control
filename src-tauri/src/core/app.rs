@@ -218,6 +218,7 @@ impl App {
             "build": { "hash": super::buildinfo::HASH, "commitDate": super::buildinfo::COMMIT_DATE, "builtAt": super::buildinfo::built_at(), "note": super::buildinfo::screen_note() },
             "fake": super::buildinfo::fake_device(),
             "page": s.page(),
+            "followPhysicalPage": s.0["ui"]["followPhysicalPage"].as_bool().unwrap_or(true),
             "autostart": super::autostart::is_on(),
             "dock": self.dock_state(),
         })
@@ -225,6 +226,10 @@ impl App {
 
     /// `{ page? }`: saved at once (no Save button).
     pub fn settings_update(&self, body: &Value) -> CoreResult<Value> {
+        let follow = body.get("followPhysicalPage");
+        if follow.is_some_and(|value| !value.is_boolean()) {
+            return Err(CoreError::new("Invalid follow-physical-page setting"));
+        }
         let page = body.get("page").and_then(Value::as_str).map(String::from);
         if let Some(p) = &page {
             if !super::settings::PAGES.contains(&p.as_str()) {
@@ -233,6 +238,9 @@ impl App {
         }
         self.settings
             .update(|s| {
+                if let Some(follow) = follow {
+                    s["ui"]["followPhysicalPage"] = follow.clone();
+                }
                 if let Some(p) = page {
                     s["ui"]["page"] = json!(p);
                 }
@@ -342,6 +350,21 @@ mod tests {
         assert!(a.settings_update(&json!({ "page": "unknown" })).is_err());
     }
 
+    #[test]
+    fn physical_page_follow_is_saved_without_changing_profiles() {
+        let (dir, app) = app();
+        let profiles = app.profiles.state().unwrap();
+        assert_eq!(app.app_state()["followPhysicalPage"], true);
+        app.settings_update(&json!({"followPhysicalPage":false}))
+            .unwrap();
+        let reopened = App::new(dir.path(), Arc::new(NoEvents), "test");
+        assert_eq!(reopened.app_state()["followPhysicalPage"], false);
+        assert_eq!(reopened.profiles.state().unwrap(), profiles);
+        assert!(app
+            .settings_update(&json!({"followPhysicalPage":"yes"}))
+            .is_err());
+        assert_eq!(app.app_state()["followPhysicalPage"], false);
+    }
     #[test]
     fn profile_commands_persist_and_reject_invalid_snapshots() {
         let (dir, app) = app();

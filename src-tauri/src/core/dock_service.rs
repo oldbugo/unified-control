@@ -712,6 +712,11 @@ impl Worker {
                     s.frames_sent += count as u64;
                     if count == 14 {
                         s.pages_sent += 1;
+                        // Publish the displayed page only after its full transfer
+                        // succeeds, so editor following never leads the dock.
+                        let state = self.runtime.as_ref().unwrap().state();
+                        s.current_profile = Some(state.current_profile.clone());
+                        s.current_page = Some(state.current_page.clone());
                         if self.next_keep_alive.is_none() {
                             self.next_keep_alive = Some(now);
                         }
@@ -831,11 +836,6 @@ impl Worker {
                 self.failed(now, "Dock disconnected; reconnecting");
                 return;
             }
-        }
-        if let Some(runtime) = &self.runtime {
-            let mut s = self.shared.status.lock().unwrap();
-            s.current_profile = Some(runtime.state().current_profile.clone());
-            s.current_page = Some(runtime.state().current_page.clone());
         }
     }
 }
@@ -1295,6 +1295,39 @@ mod tests {
         assert!(c.simulate_button(0, true).is_err());
         c.set_fake_studio(false).unwrap();
         wait(|| c.status().pages_sent == 3);
+        c.shutdown();
+    }
+    #[test]
+    fn displayed_page_status_waits_for_successful_navigation_transfer() {
+        let (_dir, store, hooks) = setup();
+        let mut state = store.state().unwrap();
+        let main = state.current_page.clone();
+        let page = super::super::profiles::Page::new("Test");
+        let target = page.id.clone();
+        state.profiles[0].pages[0].keys[0].action = "folder".into();
+        state.profiles[0].pages[0].keys[0].value = target.clone();
+        state.profiles[0].pages.push(page);
+        store.save(&state).unwrap();
+        let c = Controller::new(store, hooks.clone(), true);
+        struct Unblock(Arc<Hooks>);
+        impl Drop for Unblock {
+            fn drop(&mut self) {
+                self.0.hold_render.store(false, Ordering::SeqCst);
+            }
+        }
+        let _unblock = Unblock(hooks.clone());
+        c.set_enabled(true).unwrap();
+        wait(|| c.status().pages_sent == 1);
+        assert_eq!(c.status().current_page.as_deref(), Some(main.as_str()));
+        let renders = hooks.renders.load(Ordering::SeqCst);
+        hooks.hold_render.store(true, Ordering::SeqCst);
+        c.simulate_button(0, true).unwrap();
+        wait(|| hooks.renders.load(Ordering::SeqCst) > renders);
+        let during = c.status().current_page;
+        hooks.hold_render.store(false, Ordering::SeqCst);
+        wait(|| c.status().pages_sent == 2);
+        assert_eq!(during.as_deref(), Some(main.as_str()));
+        assert_eq!(c.status().current_page.as_deref(), Some(target.as_str()));
         c.shutdown();
     }
     #[test]

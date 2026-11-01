@@ -213,7 +213,150 @@ const server = http.createServer((req,res) => {
     assert.equal(await nativePreview.evaluate(()=>window.__oldPreviewKey.firstChild===window.__oldPreviewImage),true,'late decoded frames must not update detached keys after navigation');
     assert.deepEqual(nativeErrors,[]);
     await nativePreview.close();
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview unchanged-node retention/decoded swap/typing stability/detached-frame guard; no page errors.');
+    // Delivered physical pages are observed without saving them back to the
+    // device. Delayed writes/imports and old polls must not discard editor work.
+    const followPage=await browser.newPage();
+    const followErrors=[];followPage.on('pageerror',error=>followErrors.push(error.message));
+    await followPage.addInitScript(()=>{
+      const keys=label=>Array.from({length:14},()=>({a:{kind:'text',text:label},b:{kind:'text',text:''},action:'none',value:''}));
+      window.__profileSnapshot={version:1,currentProfile:'p',currentPage:'main',profiles:[{id:'p',name:'Fixture',pages:[{id:'main',name:'Main',keys:keys('Main')},{id:'test',name:'Test',keys:keys('Test')},{id:'other',name:'Other',keys:keys('Other')}]}]};
+      window.__dock={state:'connected',enabled:true,fake:true,message:'Fixture connected',currentProfile:'p',currentPage:'main'};
+      window.__followPreference=true;window.__appPage='dock';window.__saveCalls=0;window.__settingsPatches=[];
+      window.__holdSaves=false;window.__failSaves=false;window.__saveWaiters=[];window.__holdAssets=false;window.__assetWaiters=[];
+      window.__holdStatus=false;window.__statusWaiters=[];window.__statusCalls=0;window.__statusActive=0;window.__maxStatusActive=0;
+      window.__holdPreferences=false;window.__preferenceWaiters=[];window.__callbacks=[];window.__quitReadyCalls=0;
+      const appState=()=>({page:window.__appPage,followPhysicalPage:window.__followPreference,appVersion:'fixture',autostart:false,dock:structuredClone(window.__dock)});
+      const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
+      const png=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
+      window.__TAURI_INTERNALS__={transformCallback:callback=>window.__callbacks.push(callback)-1,invoke:async(command,args)=>{
+        if(command==='plugin:event|listen'){window.__quitHandler=window.__callbacks[args.handler];return 0;}
+        if(command==='editor_quit_ready'){window.__quitReadyCalls++;return 0;}
+        if(command==='app_state')return appState();
+        if(command==='settings_update'){
+          window.__settingsPatches.push(structuredClone(args.patch));
+          if(window.__holdPreferences&&typeof args.patch.followPhysicalPage==='boolean')await new Promise(resolve=>window.__preferenceWaiters.push(resolve));
+          if(typeof args.patch.followPhysicalPage==='boolean')window.__followPreference=args.patch.followPhysicalPage;
+          if(args.patch.page)window.__appPage=args.patch.page;
+          return appState();
+        }
+        if(command==='profiles_state')return {state:structuredClone(window.__profileSnapshot)};
+        if(command==='profiles_save'){
+          window.__saveCalls++;
+          if(window.__holdSaves)await new Promise(resolve=>window.__saveWaiters.push(resolve));
+          if(window.__failSaves)throw new Error('Fixture save failed');
+          window.__profileSnapshot=structuredClone(args.snapshot);return 0;
+        }
+        if(command==='asset_import'){
+          if(window.__holdAssets)await new Promise(resolve=>window.__assetWaiters.push(resolve));
+          return 'asset-fixture';
+        }
+        if(command==='dock_state'){
+          window.__statusCalls++;window.__statusActive++;window.__maxStatusActive=Math.max(window.__maxStatusActive,window.__statusActive);
+          const snapshot=structuredClone(window.__dock);
+          try{if(window.__holdStatus)await new Promise(resolve=>window.__statusWaiters.push(resolve));return snapshot;}
+          finally{window.__statusActive--;}
+        }
+        if(command==='key_previews')return Array.from({length:14},(_,index)=>({index,png}));
+        return 0;
+      }};
+    });
+    await followPage.goto(base);
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main'&&document.querySelectorAll('img.rendered-key').length===14);
+    const nextFollowPoll=async()=>{const count=await followPage.evaluate(()=>window.__statusCalls);await followPage.waitForFunction(count=>window.__statusCalls>count,count);};
+    await followPage.locator('#face-text').focus();
+    await followPage.evaluate(()=>window.__dock.currentPage='test');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    assert.equal(await followPage.locator('[data-dock-page="1"]').getAttribute('aria-pressed'),'true');
+    await followPage.evaluate(()=>window.__dock.currentPage='main');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main');
+    assert.equal(await followPage.evaluate(()=>window.__saveCalls),0,'physical page following must not save navigation back');
+    await followPage.locator('[data-dock-page="1"]').click();
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Test','unchanged physical state must not undo manual editor selection');
+    await followPage.evaluate(()=>window.__dock.currentPage='other');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Other');
+    const manualSaveCount=await followPage.evaluate(()=>window.__saveCalls);
+    await followPage.locator('#follow-physical-page').uncheck();
+    await followPage.evaluate(()=>window.__dock.currentPage='test');
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Other');
+    await followPage.locator('#follow-physical-page').check();
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    assert.equal(await followPage.evaluate(()=>window.__followPreference),true);
+    assert.equal(await followPage.evaluate(()=>window.__saveCalls),manualSaveCount);
+    await followPage.evaluate(()=>window.__dock.currentPage='main');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main');
+    await followPage.evaluate(()=>window.__holdSaves=true);
+    await followPage.locator('#face-text').fill('Pending label');
+    await followPage.evaluate(()=>window.__dock.currentPage='test');
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Main','a pending text save defers physical following');
+    assert.equal(await followPage.locator('#face-text').inputValue(),'Pending label');
+    await followPage.evaluate(()=>{window.__holdSaves=false;window.__saveWaiters.splice(0).forEach(resolve=>resolve());});
+    await followPage.waitForFunction(()=>window.__profileSnapshot.profiles[0].pages[0].keys[0].a.text==='Pending label');
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Main','saving must not end an active modified text gesture');
+    await followPage.locator('#face-text').fill('Pending label continues');
+    await followPage.waitForFunction(()=>window.__profileSnapshot.profiles[0].pages[0].keys[0].a.text==='Pending label continues');
+    await followPage.locator('.page-heading h1').click();
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    assert.equal(await followPage.evaluate(()=>window.__profileSnapshot.profiles[0].pages[0].keys[0].a.text),'Pending label continues');
+    await followPage.locator('#face-kind').selectOption('picture');
+    await followPage.waitForFunction(()=>window.__profileSnapshot.profiles[0].pages[1].keys[0].a.kind==='picture');
+    await followPage.evaluate(()=>window.__holdAssets=true);
+    await followPage.locator('#face-picture').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(picture,'base64')});
+    await followPage.waitForFunction(()=>window.__assetWaiters.length===1);
+    await followPage.evaluate(()=>window.__dock.currentPage='main');
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Test','a pending picture import defers physical following');
+    await followPage.evaluate(()=>{window.__holdAssets=false;window.__assetWaiters.splice(0).forEach(resolve=>resolve());});
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main');
+    assert.equal(await followPage.evaluate(()=>window.__profileSnapshot.profiles[0].pages[1].keys[0].a.asset),'asset-fixture');
+    await followPage.evaluate(()=>window.__failSaves=true);
+    await followPage.locator('#face-text').fill('Retry retained');
+    await followPage.waitForFunction(()=>document.getElementById('storage-status').textContent.includes('could not be saved'));
+    await followPage.evaluate(()=>window.__dock.currentPage='test');await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Main','failed saves retain the editing page');
+    await followPage.evaluate(()=>window.__failSaves=false);
+    await followPage.locator('[data-do="retry-save"]').click();
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    assert.equal(await followPage.evaluate(()=>window.__profileSnapshot.profiles[0].pages[0].keys[0].a.text),'Retry retained');
+    await followPage.evaluate(()=>window.__dock.currentPage='main');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main');
+    await followPage.evaluate(()=>{window.__dock.state='disabled';window.__dock.enabled=false;window.__dock.currentPage='test';});
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Main','disconnected state cannot change editor selection');
+    await followPage.evaluate(()=>{window.__dock.state='connected';window.__dock.enabled=true;});
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    const beforeSidebar=await followPage.evaluate(()=>window.__saveCalls);
+    await followPage.locator('[data-page="home"]').click();
+    await followPage.evaluate(()=>window.__dock.currentPage='other');await nextFollowPoll();
+    assert.equal(await followPage.locator('[data-page="home"]').getAttribute('aria-current'),'page','status must not jump from Home into the dock');
+    await followPage.locator('[data-page="dock"]').click();
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Other');
+    assert.equal(await followPage.evaluate(()=>window.__saveCalls),beforeSidebar,'following/sidebar selection must not write profiles');
+    await followPage.evaluate(()=>{window.__holdStatus=true;window.__dock.currentPage='test';});
+    await followPage.waitForFunction(()=>window.__statusWaiters.length===1);
+    await followPage.waitForTimeout(1200);
+    assert.equal(await followPage.evaluate(()=>window.__statusWaiters.length),1,'status polling must remain single-flight');
+    await followPage.locator('[data-dock-page="0"]').click();
+    await followPage.evaluate(()=>{window.__dock.currentPage='other';window.__holdStatus=false;window.__statusWaiters.splice(0).forEach(resolve=>resolve());});
+    await nextFollowPoll();
+    assert.equal(await followPage.locator('#page-name').inputValue(),'Main','a poll begun before manual selection must not pull the editor back');
+    assert.equal(await followPage.evaluate(()=>window.__maxStatusActive),1);
+    await followPage.evaluate(()=>window.__dock.currentPage='test');
+    await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Test');
+    await followPage.evaluate(()=>window.__holdPreferences=true);
+    await followPage.locator('#follow-physical-page').uncheck();
+    await followPage.waitForFunction(()=>window.__preferenceWaiters.length===1);
+    await followPage.evaluate(()=>{window.__quitPromise=window.__quitHandler();});
+    assert.equal(await followPage.evaluate(()=>window.__quitReadyCalls),0,'Quit waits for the page-follow preference write');
+    await followPage.evaluate(()=>{window.__holdPreferences=false;window.__preferenceWaiters.splice(0).forEach(resolve=>resolve());});
+    await followPage.waitForFunction(()=>window.__quitReadyCalls===1);
+    assert.equal(await followPage.evaluate(()=>window.__followPreference),false);
+    assert.deepEqual(followErrors,[]);
+    await followPage.close();
+    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview retention/decoded swap/typing stability; physical page follow/back/optout/manual/pending-edit/import/stale-poll guards; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

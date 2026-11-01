@@ -22,7 +22,9 @@ instance in that Windows session from driving the dock concurrently.
 Control/event and action queues have fixed bounds (32 and 16). Profile changes
 coalesce through an atomic revision; the latest durable profile state is loaded.
 Physical page navigation stays inside `PageRuntime` and is reported through status
-IDs. It never writes a whole editor snapshot back to disk. Native reads use 10 ms
+IDs after the full page transfer succeeds. A pending or failed transfer cannot
+publish its target as the displayed page. It never writes a whole editor snapshot
+back to disk. Native reads use 10 ms
 waits. A missed 35-second input/heartbeat deadline or transport failure releases
 the handle and retries with a 1-to-30-second backoff. A new transport clears input
 latches and frame acceptance, then re-renders a fresh full page through the hooks;

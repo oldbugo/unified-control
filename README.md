@@ -43,7 +43,7 @@ through a managed Node helper; account provenance/freshness gates run before pub
 The dock remains disabled until explicitly enabled. Studio detection, ownership, reconnect, brightness and tray controls
 are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/dock-mvp.md).
 
-Checked: 95 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
+Checked: 97 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
 Toolkit tests pass. The separate driver has 30 passing fake-transport tests from the foundation checkpoint. Browser checks
 cover undo, picture persistence, all usage choices, literal launch arguments and three window widths. A quiet native WebView
 check covers real IPC/files, image import, A/B persistence, physical-size PNGs, fake Studio block/reconnect, duplicate press
@@ -68,7 +68,10 @@ The first 100 seconds of 0.1.3 live diagnostics show three acknowledged response
 errors/reconnects, with Background keepalive continuing. This is bounded connection evidence, not full hardware acceptance.
 Version 0.1.4 fixes physical edit refresh: editing one face selects and redraws that edited face immediately, without an
 A/B round trip. Other keys, held-press suppression and folder history are preserved; edits never execute actions. Tests
-verify clock/date/icon PNG delivery through the simulated dock. Physical confirmation follows installation.
+verify clock/date/icon PNG delivery through the simulated dock; the user confirmed this fix.
+Version 0.1.5 adds virtual page following after successful physical page delivery, with a saved opt-out and guards for
+active edits/imports/saves. It also bundles the tested polling/typing flicker fixes. Sleep/resume is deferred at the user's
+request; remaining hardware acceptance and the navigation-latency investigation remain open.
 Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
 failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
 

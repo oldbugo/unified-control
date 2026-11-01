@@ -3,6 +3,7 @@ import {toNative, fromNative, ProfileWriter} from './js/profile-model.js';
 import {EditorHistory} from './js/editor-history.js';
 import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
 import {KeyPreviewRenderer} from './js/key-preview.js';
+import {DevicePageFollower} from './js/device-page-follow.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -51,6 +52,10 @@ const history=new EditorHistory();
 const pendingMutations=new Set();
 const pictureEpoch=new WeakMap();
 let actionSearch='',deviceStatus=null;
+let followPhysicalPage=true,followPreferenceReady=!T,followPreferenceEpoch=0,savedFollowPhysicalPage=true,followPreferenceWrite=Promise.resolve();
+let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0;
+let editGesture=null;
+const pageFollower=new DevicePageFollower();
 function remember(group=''){history.checkpoint(draft,group);const undo=document.querySelector('[data-do="undo"]');if(undo)undo.disabled=!history.available;}
 let profilesReady = !T, exitGuardReady = !T, guardError = '', loadRunning = false, nativeSaving = false, recoveryNote = '', previewNote = '', previewGeneration = 0;
 const keyPreviews=new KeyPreviewRenderer();
@@ -71,6 +76,7 @@ const profile = () => draft.profiles[draft.profile];
 const page = () => profile().pages[draft.page];
 const activeKey = () => page().keys[selected];
 function persist() {
+  editorIntentEpoch++;
   if (T) {
     if (profilesReady && exitGuardReady) writer.enqueue(toNative(draft));
     return;
@@ -133,7 +139,7 @@ function editorMarkup() {
 function dockPage() {
   return `<div class="page-heading"><div><span class="eyebrow">Ulanzi D200H</span><h1>Stream dock</h1><p>Your keys, pages and actions in one place.</p></div><span class="chip accent">${T?(state?.fake?'Simulated dock':'D200H'):'Browser preview'}</span></div>
     <div class="device-header"><span class="device-icon">${icon('dock')}</span><div><strong>Stream dock</strong><p id="dock-message">${esc(deviceStatus?.message||'Dock disabled')}</p></div><label class="dock-switch">Enabled <input id="dock-enabled" type="checkbox" role="switch" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Disabled')}</span></div>
-    <div class="dock-controls">${field('Brightness','dock-brightness',`<input id="dock-brightness" type="range" min="1" max="100" value="${deviceStatus?.brightness||50}" ${T?'':'disabled'}>`)}<span class="hint" id="dock-active-page"></span><button class="btn" data-do="undo" ${history.available?'':'disabled'}>Undo</button></div>
+    <div class="dock-controls">${field('Brightness','dock-brightness',`<input id="dock-brightness" type="range" min="1" max="100" value="${deviceStatus?.brightness||50}" ${T?'':'disabled'}>`)}<label class="dock-switch">Follow physical page <input id="follow-physical-page" type="checkbox" ${followPhysicalPage?'checked':''} ${T?'':'disabled'}></label><span class="hint" id="dock-active-page"></span><button class="btn" data-do="undo" ${history.available?'':'disabled'}>Undo</button></div>
     <div class="workspace-toolbar"><div class="profile-picker">${field('Profile','profile-picker',`<select id="profile-picker">${options(Object.fromEntries(draft.profiles.map((p,i)=>[String(i),p.name])),draft.profile)}</select>`)}</div><button class="btn" data-do="add-profile">Add profile</button><span class="toolbar-spacer"></span><span class="hint">Previewing Face ${previewFace.toUpperCase()}</span><button class="btn" data-do="preview-flip">Flip A / B</button></div>
     <div class="dock-workspace"><section class="preview-column" aria-label="Dock preview"><div id="dock-preview">${dockMarkup()}</div><div class="page-strip" role="group" aria-label="Dock pages">${profile().pages.map((p,i)=>`<button class="btn${draft.page===i?' active':''}" data-dock-page="${i}" aria-pressed="${draft.page===i}">${esc(p.name)}</button>`).join('')}<button class="btn ghost" data-do="add-page">+ Add page</button></div><div class="names-row">${field('Profile name','profile-name',`<input id="profile-name" maxlength="40" value="${esc(profile().name)}">`)}${field('Page name','page-name',`<input id="page-name" maxlength="40" value="${esc(page().name)}">`)}</div><p class="hint">Select a display to edit it. Changes save as made and apply when the dock is enabled.</p></section><aside class="key-editor" aria-label="Key editor">${editorMarkup()}</aside></div>`;
 }
@@ -165,6 +171,36 @@ function render() {
 async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
 async function updateMonitors(){const container=document.getElementById('monitor-targets');if(!container)return;if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}const edited=activeKey();try{const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';}catch{container.textContent='Monitor information is unavailable.';}}
 function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));}
+function followDeliveredPage(){
+  const target=pageFollower.take(draft,{enabled:followPhysicalPage,ready:profilesReady&&exitGuardReady&&followPreferenceReady,
+    busy:writer.running||!!writer.pending||writer.failed||nativeSaving||pendingMutations.size>0||!!(editGesture?.isConnected&&document.activeElement===editGesture),visible:draft.current==='dock'});
+  if(!target)return false;
+  draft.profile=target.profile;draft.page=target.page;selected=0;selectedFace='a';previewFace='a';actionSearch='';
+  render();return true;
+}
+function applyDockStatus(result,ticket,intent){
+  if(intent!==editorIntentEpoch||ticket<lastDockStatusTicket)return;
+  lastDockStatusTicket=ticket;deviceStatus=result;pageFollower.observe(result);
+  if(!followDeliveredPage())updateDeviceStatus();
+}
+async function pollDockState(){
+  if(!T||dockPollRunning)return;
+  dockPollRunning=true;
+  const ticket=++dockRequestTicket,intent=editorIntentEpoch;
+  try{applyDockStatus(await invoke('dock_state'),ticket,intent);}catch{}
+  finally{dockPollRunning=false;}
+}
+function setFollowPhysicalPage(enabled){
+  const epoch=++followPreferenceEpoch;followPhysicalPage=enabled;followPreferenceReady=true;
+  if(enabled)pageFollower.requestSync();else pageFollower.manualSelection();
+  followDeliveredPage();
+  followPreferenceWrite=followPreferenceWrite.catch(()=>{}).then(()=>invoke('settings_update',{patch:{followPhysicalPage:enabled}})).then(result=>{
+    savedFollowPhysicalPage=result.followPhysicalPage!==false;
+    if(epoch===followPreferenceEpoch){state=result;followPhysicalPage=savedFollowPhysicalPage;const control=document.getElementById('follow-physical-page');if(control)control.checked=followPhysicalPage;}
+  }).catch(()=>{
+    if(epoch===followPreferenceEpoch){followPhysicalPage=savedFollowPhysicalPage;previewNote='The page-follow setting could not be saved.';showStorage();const control=document.getElementById('follow-physical-page');if(control)control.checked=followPhysicalPage;}
+  });
+}
 async function updateNativePreviews() {
   const generation=++previewGeneration;
   if (!T || !profilesReady || !exitGuardReady || draft.current!=='dock') return;
@@ -196,11 +232,16 @@ async function loadNativeProfiles() {
     profilesReady=false; storageNote='Saved layouts could not be loaded. Existing files have been kept.';
   }
   loadRunning=false;
-  render();
+  render();followDeliveredPage();
 }
 function navigate(id) {
   if (!Object.hasOwn(NAV,id)) return;
-  hasLocalPage = true; draft.current = id; persist(); render(); pane.scrollTop = 0;
+  hasLocalPage = true; draft.current = id;editGesture=null;
+  // Sidebar navigation changes only the app section. Saving profiles here could
+  // send an editor-inspected page back to a physically navigated dock.
+  if(T)editorIntentEpoch++;else persist();
+  render(); pane.scrollTop = 0;
+  if(id==='dock'){pageFollower.requestSync();followDeliveredPage();}
   invoke('settings_update',{patch:{page:id}}).then(s=>{state=s;}).catch(()=>{});
 }
 document.addEventListener('click', e => {
@@ -211,7 +252,7 @@ document.addEventListener('click', e => {
   const editFace = e.target.closest('[data-edit-face]');
   if (editFace) { selectedFace = editFace.dataset.editFace; previewFace = selectedFace; render(); return; }
   const pg = e.target.closest('[data-dock-page]');
-  if (pg) { draft.page=Number(pg.dataset.dockPage); selected=0; persist(); render(); return; }
+  if (pg) { editGesture=null;pageFollower.manualSelection();draft.page=Number(pg.dataset.dockPage); selected=0; persist(); render(); return; }
   const action = e.target.closest('[data-do]')?.dataset.do;
   if (action === 'load-profiles') { loadNativeProfiles(); return; }
   if (action === 'retry-save') { writer.completion=writer.drain(); return; }
@@ -237,13 +278,20 @@ function refreshNames() {
     document.querySelectorAll('#action-value option').forEach(o => { o.textContent = profile().pages[Number(o.value)]?.name || 'Untitled page'; });
   }
 }
+function markEditGesture(element){
+  // Text entry spans keystrokes; committed dropdowns are protected by the writer.
+  if(element.matches('textarea,input')&&!['checkbox','file','range','button','submit'].includes(element.type))editGesture=element;
+}
+pane.addEventListener('focusout',e=>{if(e.target===editGesture)editGesture=null;});
 pane.addEventListener('change', e => {
   const {id,value} = e.target;
+  markEditGesture(e.target);
+  if(id==='follow-physical-page'){setFollowPhysicalPage(e.target.checked);return;}
   if(id==='autostart-enabled'){invoke('autostart_set',{enabled:e.target.checked}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.autostart;previewNote='The Windows startup setting could not be changed.';showStorage();});return;}
-  if(id==='dock-enabled'){invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{deviceStatus=result;updateDeviceStatus();updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
-  if(id==='dock-brightness'){invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{deviceStatus=result;updateDeviceStatus();}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
+  if(id==='dock-enabled'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{applyDockStatus(result,ticket,intent);updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
+  if(id==='dock-brightness'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{applyDockStatus(result,ticket,intent);}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
   if(e.target.dataset.monitor){remember();activeKey().value=JSON.stringify({targets:[...document.querySelectorAll('[data-monitor]:checked')].map(el=>el.dataset.monitor),mode:'toggle'});persist();return;}
-  if(id==='face-picture'){const file=e.target.files?.[0];if(!file)return;const dest=activeKey()[selectedFace],epoch=Symbol();pictureEpoch.set(dest,epoch);remember();const mutation=(async()=>{try{if(file.size>4*1024*1024)throw new Error();const asset=T?await invoke('asset_import',{bytes:[...new Uint8Array(await file.arrayBuffer())]}):await savePreviewPicture(file);if(pictureEpoch.get(dest)!==epoch)return;dest.asset=asset;persist();render();}catch{previewNote='Choose a valid PNG or JPEG of at most 4 MiB and 4096 pixels per side.';showStorage();}})();pendingMutations.add(mutation);mutation.finally(()=>pendingMutations.delete(mutation));return;}
+  if(id==='face-picture'){const file=e.target.files?.[0];if(!file)return;editorIntentEpoch++;const dest=activeKey()[selectedFace],epoch=Symbol();pictureEpoch.set(dest,epoch);remember();const mutation=(async()=>{try{if(file.size>4*1024*1024)throw new Error();const asset=T?await invoke('asset_import',{bytes:[...new Uint8Array(await file.arrayBuffer())]}):await savePreviewPicture(file);if(pictureEpoch.get(dest)!==epoch)return;dest.asset=asset;persist();render();}catch{previewNote='Choose a valid PNG or JPEG of at most 4 MiB and 4096 pixels per side.';showStorage();}})();pendingMutations.add(mutation);mutation.finally(()=>pendingMutations.delete(mutation));return;}
   if(id==='usage-view'||id==='face-icon'){remember();activeKey()[selectedFace][id==='usage-view'?'usageView':'icon']=value;persist();render();return;}
   // A blur-triggered change must not replace the next button before its click.
   if (id === 'action-value'||id==='launch-args') {updateActionValue();persist();return;}
@@ -255,7 +303,7 @@ pane.addEventListener('change', e => {
   if (!['profile-picker','face-kind','action-kind'].includes(id)) return;
   if(id!=='profile-picker')remember();
   const k=activeKey();
-  if (id === 'profile-picker') { draft.profile=Number(value); draft.page=0; selected=0; }
+  if (id === 'profile-picker') { editGesture=null;pageFollower.manualSelection();draft.profile=Number(value); draft.page=0; selected=0; }
   else if (id === 'face-kind') { k[selectedFace].kind=value;if(!['claude','codex'].includes(value))delete k[selectedFace].usageView;if(value==='claude'&&k[selectedFace].usageView==='tokens')k[selectedFace].usageView='rings';previewFace=selectedFace; }
   else if (id === 'action-kind') { k.action=value; k.value=['page','folder'].includes(value)?'0':value==='media'?'Play / pause':''; }
   else return;
@@ -263,6 +311,7 @@ pane.addEventListener('change', e => {
 });
 pane.addEventListener('input', e => {
   const {id,value} = e.target;
+  markEditGesture(e.target);
   if(id==='action-search'){actionSearch=value;const choices=Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===activeKey().action||label.toLowerCase().includes(value.toLowerCase())));document.getElementById('action-kind').innerHTML=options(choices,activeKey().action);return;}
   if(!['face-text','action-value','launch-args','profile-name','page-name'].includes(id))return;
   remember(`${draft.profile}/${draft.page}/${selected}/${selectedFace}/${id}`);
@@ -289,6 +338,7 @@ if (T) {
   invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
     document.querySelector('.app').inert=true;
     await Promise.all([...pendingMutations]);
+    await followPreferenceWrite;
     const saved=await writer.flush();
     try {
       await invoke('editor_quit_ready',{saved});
@@ -299,9 +349,16 @@ if (T) {
   })}).then(()=>invoke('editor_session_ready',{ready:true})).then(()=>{exitGuardReady=true;guardError='';render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
   window.addEventListener('beforeunload',()=>invoke('editor_session_ready',{ready:false}).catch(()=>{}));
 }
-invoke('app_state').then(s => {state=s; deviceStatus=s.dock||deviceStatus; if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page; render();}).catch(()=>{});
+const initialPreferenceEpoch=followPreferenceEpoch,initialDockTicket=++dockRequestTicket,initialIntent=editorIntentEpoch;
+invoke('app_state').then(s => {
+  state=s;
+  if(followPreferenceEpoch===initialPreferenceEpoch){followPhysicalPage=s.followPhysicalPage!==false;savedFollowPhysicalPage=followPhysicalPage;followPreferenceReady=true;}
+  if(s.dock)applyDockStatus(s.dock,initialDockTicket,initialIntent);
+  if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page;
+  render();followDeliveredPage();
+}).catch(()=>{});
 setInterval(() => {
   if (draft.current === 'dock') document.querySelectorAll('.clock-value').forEach(el => { el.textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false}); });
-  if(T)invoke('dock_state').then(result=>{deviceStatus=result;updateDeviceStatus();}).catch(()=>{});
+  pollDockState();
   if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>['clock','date','cpu','gpu','ram','claude','codex','reset','trend'].includes(k[previewFace].kind))) updateNativePreviews();
 },1000);
