@@ -83,4 +83,6 @@ User subsequently confirmed immediate physical edit refresh on 0.1.4. USB unplug
 
 The release also includes the prepared polling and typing preview fixes: unchanged decoded image nodes remain visible, changed PNGs decode before replacement, and typing no longer rebuilds an HTML fallback. Source/bundled behavior is checked in headless and quiet native fake tests before installation. Physical follow/flicker confirmation is still required. Navigation performance issue #4 remains a separate measurement task; no physical speedup is claimed.
 
-Sleep/resume remains deferred at the user's explicit request on 2026-10-31. Continue other work without marking that check passed or asking for it again during this checkpoint.
+Sleep/resume remains deferred at the user's explicit request. Continue other work without marking that check passed or asking for it again during this checkpoint.
+
+On 2026-11-01, 0.1.5/source `b66df93` built and installed through the idle-safe script. No UC host was running, so installation left it closed for Start-menu launch. Installed file version 0.1.5 was verified; actual startup and physical follow/flicker checks remain pending. Installer SHA-256: `888DEA571659300CB788CEE0F3CDBAF7CD6C1968AD68C786F5A92766D5435A5D`. Private tag `v0.1.5` points to that exact source. Checks: 97 core/five host tests, full headless interface suite and quiet native fake IPC pass. No cooler/dial integration or physical navigation speedup is claimed.

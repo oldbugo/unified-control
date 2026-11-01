@@ -50,8 +50,9 @@ check covers real IPC/files, image import, A/B persistence, physical-size PNGs, 
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
-must show unknown. Preview 0.1.4/source `b212fe2` is installed; its new running PID and startup version were verified after
-cooperative update from 0.1.3. The request-only executable override avoids the packaged shell's stale installed-file view.
+must show unknown. Preview 0.1.5/source `b66df93` is installed and left closed for Start-menu launch; the idle-safe installer
+verified installed version 0.1.5. Running startup version and physical follow/flicker confirmation remain pending.
+The request-only executable override avoids the packaged shell's stale installed-file view.
 Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
 Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.
 UC was observed still reporting Connected. The 0.1.1 update tolerates nonstandard acknowledgement lengths and adds

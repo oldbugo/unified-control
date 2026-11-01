@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-10-31. Installed version: 0.1.4 (`b212fe2`). These results distinguish user observation from software/transport evidence. Phase 1 is not yet fully accepted; CoolerScreen and Dial engines remain unintegrated.
+Updated 2026-11-01. Installed version: 0.1.5 (`b66df93`), left closed for Start-menu launch; new startup version and physical follow/flicker verification pending. These results distinguish user observation from software/transport evidence. Phase 1 is not yet fully accepted; CoolerScreen and Dial engines remain unintegrated.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -18,7 +18,7 @@ Updated 2026-10-31. Installed version: 0.1.4 (`b212fe2`). These results distingu
 
 ## Nonblocking UI bug
 
-[Preview flicker — issue #3](https://github.com/oldbugo/unified-control/issues/3): user sees a light flicker every few seconds in UC's software preview on 0.1.4. Physical edit refresh is confirmed working. Source inspection found every preview image is replaced before decoding on every polling tick, even for byte-identical frames. Keep unchanged images and decode changed frames before replacement; stale/detached results must be discarded. A quiet browser regression and the next suitable release should verify the fix. Keep the installed 0.1.4 running during current hands-on acceptance; no restart is needed merely to record this issue.
+[Preview flicker — issue #3](https://github.com/oldbugo/unified-control/issues/3): user saw a light flicker every few seconds in UC's software preview on 0.1.4. Physical edit refresh is confirmed working. Source inspection found every preview image was replaced before decoding on every polling tick, even for byte-identical frames. Version 0.1.5 retains unchanged images and decodes changed frames before replacement; stale/detached results are discarded. Browser and quiet native checks pass; installed user-visible confirmation is pending.
 
 The 0.1.5 build includes `KeyPreviewRenderer`: unchanged image nodes are retained, replacements decode first and stale/detached results are rejected while temporary URLs are released. The headless suite passes unchanged-image/URL/decode-count checks, a delayed replacement retaining all fourteen old images, and late results after navigation. Issue remains open until installed user-visible verification.
 
