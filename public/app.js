@@ -174,7 +174,32 @@ function render() {
   pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
 }
 async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
-async function updateMonitors(){const container=document.getElementById('monitor-targets');if(!container)return;if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}const edited=activeKey();try{const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';}catch{container.textContent='Monitor information is unavailable.';}}
+const MONITOR_DISCOVERY_ERRORS=new Set([
+  'Monitor discovery returned an invalid result','Monitor discovery returned no display list',
+  'Monitor discovery exceeded its display limit','A discovered monitor has no stable key',
+  'A discovered monitor has an invalid stable key','Monitor action lock is unavailable',
+  'Monitor Toggle resources are unavailable','Windows system folder is unavailable',
+  'Monitor Toggle helper could not be started','Monitor operation failed; check its configured targets and saved layout',
+  'Monitor helper result exceeds its size limit','Monitor helper returned an invalid result',
+  'Monitor information unavailable','Monitor discovery requires Windows',
+]);
+async function updateMonitors(){
+  const container=document.getElementById('monitor-targets');if(!container)return;
+  if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}
+  const edited=activeKey();
+  container.textContent='Loading available monitors…';
+  try{
+    const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;
+    let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}
+    for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});
+    container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';
+  }catch(error){
+    if(!container.isConnected||edited!==activeKey())return;
+    const candidate=typeof error==='string'?error:error?.error||error?.message;
+    const message=MONITOR_DISCOVERY_ERRORS.has(candidate)?candidate:'Monitor information is unavailable.';
+    container.innerHTML=`<p class="hint" role="status">${esc(message)}</p><button class="btn" data-do="retry-monitors">Retry monitor detection</button>`;
+  }
+}
 function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();}
 function updateUsageStatus(){
   const selected=deviceStatus?.usageStatus?.providers?.filter(item=>item.selected)||[];
@@ -271,6 +296,7 @@ document.addEventListener('click', e => {
   const action = e.target.closest('[data-do]')?.dataset.do;
   if (action === 'load-profiles') { loadNativeProfiles(); return; }
   if (action === 'retry-save') { writer.completion=writer.drain(); return; }
+  if (action === 'retry-monitors') { updateMonitors(); return; }
   if (action === 'undo') {const previous=history.undo();if(previous){const current=draft.current;draft=previous;draft.current=current;selected=0;persist();render();}return;}
   if (action === 'simulate-press') {invoke('dock_test_button',{index:selected,pressed:true}).then(()=>invoke('dock_test_button',{index:selected,pressed:false})).catch(()=>{previewNote='The simulated dock is not enabled.';showStorage();});return;}
   if (action === 'preview-flip') { previewFace = previewFace==='a'?'b':'a'; render(); }
