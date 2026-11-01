@@ -20,6 +20,11 @@ fallback; close the separate CoolerScreen app yourself before enabling. No unins
 reported nonworking; [functional follow-ups](docs/function-failures.md) distinguish the parser fix from unverified source
 and physical behavior. Sleep/resume stays deferred.
 
+Installed 0.2.1 adds the requested [background connection diagnostics](docs/cooler-connection-health.md), with a saved
+Connection diagnostics switch on the cooler page. It records bounded local evidence while UC stays in the tray; it never
+resets devices automatically. One approved targeted reset did not recover this incident. Physical screen USB access is
+unavailable now; Windows still reports matched descriptor failure43. The installed, non-simulated health log is recording it.
+
 Software checked for 0.2.0: 103 core tests (one helper ignored), five host tests, three cooler-worker tests, full headless
 interface and cooler bridge checks, plus quiet native fake IPC. The native integration verifies the embedded themes UI,
 chunked imports, busy-safe Quit, saved Live settings, cooler worker crash/restart while the dock stays connected and clean
@@ -63,9 +68,10 @@ check covers real IPC/files, image import, A/B persistence, physical-size PNGs, 
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
-must show unknown. Preview 0.2.0/source `9b9ffca` is installed and running after cooperative idle-safe update; new PID and
-startup version were verified at 05:17:43 UTC on 2026-11-01. Dock reconnected with a fresh full page and zero errors. Cooler
-remains disabled; installed worker hash matches the staged pinned binary. Physical cooler/import and remaining dock checks remain pending.
+must show unknown. Preview 0.2.1/source `f079a96` is installed and running after cooperative idle-safe update; new PID and
+startup version were verified at 10:50:10 UTC on 2026-11-01. Dock reconnected with a fresh full page and zero errors. Cooler
+is enabled but fails USB enumeration; background health records code43 with one exact-matched descriptor failure and no
+normal nodes. A USB port-cycle request did not recover it; physical reconnect is deferred because its cable is inaccessible.
 The request-only executable override avoids the packaged shell's stale installed-file view.
 Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
 Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.

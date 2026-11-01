@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-01. Installed/running version: 0.2.0 (`9b9ffca`), new startup/PID verified after cooperative update. User authorized proceeding with CoolerScreen integration before UI polish; remaining dock tests stay open. Cooler engine/interface are integrated in preview, default disabled; physical cooler and real-data import acceptance remain pending. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
+Updated 2026-11-01. Installed/running version: 0.2.1 (`f079a96`), new startup/PID verified after cooperative update. User authorized proceeding with CoolerScreen integration before UI polish; remaining dock tests stay open. Cooler engine/interface are integrated in preview; current enabled cooler cannot enumerate, so physical acceptance has not passed. Real-data import/content continuity remains unverified. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -19,9 +19,13 @@ Updated 2026-11-01. Installed/running version: 0.2.0 (`9b9ffca`), new startup/PI
 
 ## Cooler integration preview
 
+Current recurring-failure incident: initial normal USB nodes had problem0 while writes timed out before any successful Live connection in the retained UC session. One exact user-approved USB port cycle was accepted but failed recovery; post-reset Windows reports matched descriptor failure43. User cannot access the screen USB cable now, so physical reconnect is deferred. 0.2.1 background diagnostics are installed and verified producing non-simulated local records. No initiating cause or recovery pass is claimed. [Evidence and monitoring](cooler-connection-health.md), [issue9](https://github.com/oldbugo/unified-control/issues/9).
+
 Software checks pass for existing embedded themes UI, chunked imports, copied-data migration, saved Live settings, busy-safe Quit and worker crash/restart while dock stays connected. Corrected awaited IPC polling and actual native iframe routing are included in the checks. Physical Live/Embedded, imported user themes/settings and combined-device recovery remain pending. Sleep/resume stays deferred. Original CoolerScreen app/data are retained; it must be closed by the user before enabling the cooler engine in UC. No full phase2 acceptance or old-app replacement is claimed. See [architecture](device-app/architecture.md).
 
 0.2.0 installer SHA-256: `917B7626FE2CE93B646F097A9DF983BCD15C57699644AE88CCFF51BBE635E693`. Running source `9b9ffca`; engine pin `58cb2da`. Startup 05:17:43 UTC, dock Connected and initial full page with zero errors; no cooler worker starts while disabled.
+
+0.2.1 installer SHA-256: `2FB3B8C38011334D3643E0BF8FCD5E238FB34BD4CE7F578172FDE88DA22AFAB5`. Running source `f079a96`; engine pin `88cd041`. Startup 10:50:10 UTC/new PID verified; dock Connected with fresh full page and zero errors. First health transition 10:50:20 UTC reports descriptor_failure, normalNodes0, exactMatchedDescriptorCount1 and problemCodes[43], simulatedfalse. The first installer attempt refused busy work; a later idle-safe attempt succeeded without force quit.
 
 ## Nonblocking UI bug
 

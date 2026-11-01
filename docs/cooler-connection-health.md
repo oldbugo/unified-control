@@ -8,6 +8,8 @@ Before recovery, Windows showed normal cooler nodes with statusOK/problem0. UC's
 
 The old Reconnect path treated any normal USB identity as already connected and returned without resetting, even when firmware writes timed out. The new manual ResetPresent path was dry-run verified against exactly one cooler parent/port/hub interface. After the user approved Windows elevation, one port-cycle request succeeded around10:31:17UTC, but normal enumeration did not return within twenty seconds. Windows subsequently showed descriptor failure/problem43. The reset did not recover the screen. Only a physical USB reconnect/power removal can establish the next recovery result; a port cycle need not remove power. No broad hub reset, PC reboot/sleep, firmware update or unrelated-device reset was performed.
 
+User says the screen USB cable is not accessible now. Physical recovery is deferred; do not keep resetting it or reboot/suspend the PC. 0.2.1 is installed and running, and the real background log confirms the ongoing matched code43 failure. Logging is evidence collection, not a remedy for the physical fault.
+
 ## Local diagnostics
 
 Connection diagnostics is visible on the cooler page, enabled for the user's explicit request and saved as cooler.diagnostics. Turning it off stops sampling and disk writes, including discarding in-flight samples. UC closing to the tray keeps the watcher; Quit stops it.
