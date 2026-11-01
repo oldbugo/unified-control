@@ -642,6 +642,48 @@ impl ActionPlatform for WindowsPlatform<'_> {
 }
 
 #[cfg(windows)]
+fn powershell_filesystem_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    // Tauri/canonicalize can return extended Win32 paths. PowerShell 5.1's
+    // FileSystem provider cannot resolve these as $PSScriptRoot/Join-Path, and
+    // its .NET Framework APIs also reject verbatim snapshot paths. Normalize
+    // filesystem disk/UNC prefixes only; preserve UTF-16 without lossy decoding.
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if !wide.starts_with(&[92, 92, 63, 92]) {
+        return path.to_path_buf();
+    }
+    let disk = wide.len() >= 7
+        && ((65..=90).contains(&wide[4]) || (97..=122).contains(&wide[4]))
+        && wide[5] == 58
+        && wide[6] == 92;
+    let unc = matches!(wide.get(4..8), Some([85 | 117, 78 | 110, 67 | 99, 92]));
+    let normalized = if disk {
+        wide[4..].to_vec()
+    } else if unc {
+        [vec![92, 92], wide[8..].to_vec()].concat()
+    } else {
+        // Never reinterpret arbitrary verbatim/device namespaces as files.
+        return path.to_path_buf();
+    };
+    PathBuf::from(OsString::from_wide(&normalized))
+}
+
+#[cfg(windows)]
+fn powershell_monitor_args(args: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index > 0 && args[index - 1] == std::ffi::OsStr::new("-SnapshotPath") {
+                powershell_filesystem_path(Path::new(arg)).into_os_string()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect()
+}
+
+#[cfg(windows)]
 fn monitor_helper(
     resource_dir: &Path,
     args: &[std::ffi::OsString],
@@ -667,8 +709,8 @@ fn monitor_helper(
             "Bypass",
             "-File",
         ])
-        .arg(script)
-        .args(args)
+        .arg(powershell_filesystem_path(&script))
+        .args(powershell_monitor_args(args))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -761,6 +803,86 @@ mod tests {
         let monitors = list_monitors(&resources).expect("Read-only monitor discovery failed");
         assert!(!monitors.is_empty(), "No active displays were discovered");
         println!("Read-only discovery found {} displays", monitors.len());
+    }
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Read-only Windows monitor discovery through canonical resources; run explicitly with user present"]
+    fn windows_monitor_discovery_canonical_resources_read_only() {
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .canonicalize()
+            .unwrap();
+        let monitors =
+            list_monitors(&resources).expect("Canonical-path read-only discovery failed");
+        assert!(!monitors.is_empty(), "No active displays were discovered");
+        println!(
+            "Canonical-path read-only discovery found {} displays",
+            monitors.len()
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn monitor_powershell_filesystem_paths_preserve_disk_unc_and_unicode() {
+        for (input, expected) in [
+            (
+                r"\\?\C:\应用 folder\监视器.ps1",
+                r"C:\应用 folder\监视器.ps1",
+            ),
+            (
+                r"\\?\UNC\server\共享\layout.bin",
+                r"\\server\共享\layout.bin",
+            ),
+            (
+                r"\\?\unc\server\share\layout.bin",
+                r"\\server\share\layout.bin",
+            ),
+            (
+                r"C:\normal folder\monitor.ps1",
+                r"C:\normal folder\monitor.ps1",
+            ),
+            (r"\\server\share\monitor.ps1", r"\\server\share\monitor.ps1"),
+            (r"relative\monitor.ps1", r"relative\monitor.ps1"),
+            (
+                r"\\?\GLOBALROOT\Device\Example",
+                r"\\?\GLOBALROOT\Device\Example",
+            ),
+            (r"\\.\Device\Example", r"\\.\Device\Example"),
+        ] {
+            assert_eq!(
+                powershell_filesystem_path(Path::new(input)),
+                PathBuf::from(expected)
+            );
+        }
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let mut wide: Vec<u16> = r"\\?\C:\".encode_utf16().collect();
+        wide.push(0xd800);
+        let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+        assert_eq!(
+            powershell_filesystem_path(&path)
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            wide[4..]
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn monitor_powershell_normalizes_only_snapshot_path_argument() {
+        use std::ffi::OsString;
+        let args: Vec<OsString> = [
+            "-Action",
+            "toggle",
+            "-TargetKeys",
+            r"device:\\?\DISPLAY#fixture",
+            "-SnapshotPath",
+            r"\\?\C:\监视器\group.bin",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        let normalized = powershell_monitor_args(&args);
+        assert_eq!(normalized[..5], args[..5]);
+        assert_eq!(normalized[5], OsString::from(r"C:\监视器\group.bin"));
     }
     #[derive(Default)]
     struct Fake {
