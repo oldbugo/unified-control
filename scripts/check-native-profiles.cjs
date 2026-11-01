@@ -139,25 +139,34 @@ async function run() {
     // The host's real tray-Quit test hook fires at 45s. Hold the first edit in
     // the client and queue a newer one, so no backend job can hide this risk.
     await delay(Math.max(0,43500-(Date.now()-started)));
-    await page.evaluate(picture=>{
-      const T=window.__TAURI_INTERNALS__, original=T.invoke.bind(T);
-      let delayed=false;
-      T.invoke=(command,args)=>{
-        if(command==='asset_import')return new Promise(resolve=>setTimeout(resolve,2500)).then(()=>original(command,args));
-        if(command==='profiles_save' && !delayed) {delayed=true;return new Promise(resolve=>setTimeout(resolve,2500)).then(()=>original(command,args));}
-        return original(command,args);
+    const queuedAt=Date.now();
+    await page.evaluate(async picture=>{
+      // Tauri seals invoke. Delay the shared writer prototype and browser file
+      // read instead, and assert both hooks were reached before claiming a pass.
+      const {ProfileWriter}=await import('/js/profile-model.js');
+      const originalDrain=ProfileWriter.prototype.drain,originalRead=File.prototype.arrayBuffer;
+      let delayed=false;window.__nativeDelay={saves:0,reads:0,saveStarted:0,saveFinished:0,readStarted:0,readFinished:0};
+      ProfileWriter.prototype.drain=async function(){
+        if(!delayed){delayed=true;window.__nativeDelay.saves++;window.__nativeDelay.saveStarted=Date.now();this.running=true;this.onStatus('saving');await new Promise(resolve=>setTimeout(resolve,2500));this.running=false;window.__nativeDelay.saveFinished=Date.now();}
+        return originalDrain.call(this);
+      };
+      File.prototype.arrayBuffer=async function(){
+        if(this.name==='late-picture.png'){window.__nativeDelay.reads++;window.__nativeDelay.readStarted=Date.now();await new Promise(resolve=>setTimeout(resolve,2500));window.__nativeDelay.readFinished=Date.now();}
+        return originalRead.call(this);
       };
       const input=document.getElementById('face-text');
       for(const value of ['Queued first','Queued last']) {input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}
       const bytes=Uint8Array.from(atob(picture),c=>c.charCodeAt(0));
       const transfer=new DataTransfer();transfer.items.add(new File([bytes],'late-picture.png',{type:'image/png'}));
       const file=document.getElementById('face-picture');file.files=transfer.files;file.dispatchEvent(new Event('change',{bubbles:true}));
+      if(window.__nativeDelay.saves!==1||window.__nativeDelay.reads!==1)throw Error('Queued-save and file-read fixtures did not intercept the work');
       // Normal window Close must preserve the JS queue while it hides to tray.
-      return original('win_close');
+      return window.__TAURI_INTERNALS__.invoke('win_close');
     },picture);
     const quitResult=await Promise.race([exited,delay(10000).then(()=>null)]);
     assert.ok(quitResult,'tray Quit did not finish after the queued saves');
     assert.equal(quitResult.code,0);
+    assert.ok(Date.now()-queuedAt>=2400,'Quit must wait for the active 2.5s file-read/save fixtures');
     const finalProfile=JSON.parse(fs.readFileSync(path.join(home,'profiles',`profile-${index.currentProfile}.json`),'utf8'));
     assert.equal(finalProfile.pages[0].keys[0].b.text,'Queued last','closing and tray Quit must preserve the newest queued edit');
     assert.notEqual(finalProfile.pages[0].keys[0].b.asset,profile.pages[0].keys[0].b.asset,'Quit must also await a pending picture import');
