@@ -1,6 +1,7 @@
 //! Unified Control core: settings (save on every change), the job scheduler (busy/idle for quit and installs), paths and
 //! start-up entry. Copied from CoolerScreen's `core/` (commit in README.md); only the app-shell parts.
 pub mod actions;
+pub mod agent;
 pub mod app;
 pub mod assets;
 pub mod autostart;

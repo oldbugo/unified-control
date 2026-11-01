@@ -265,6 +265,11 @@ impl fmt::Display for ProfileError {
     }
 }
 impl std::error::Error for ProfileError {}
+impl ProfileError {
+    pub fn is_conflict(&self) -> bool {
+        self.0 == "Dock layout changed; read the latest revision and retry"
+    }
+}
 impl From<io::Error> for ProfileError {
     fn from(e: io::Error) -> Self {
         Self(format!("Dock profile storage failed: {e}"))
@@ -319,10 +324,19 @@ struct Index {
     profiles: Vec<String>,
 }
 
-#[derive(Default)]
 struct Memory {
     state: Option<ProfileState>,
     notice: Option<String>,
+    revision: String,
+}
+impl Default for Memory {
+    fn default() -> Self {
+        Self {
+            state: None,
+            notice: None,
+            revision: new_id("revision"),
+        }
+    }
 }
 
 pub struct ProfileStore {
@@ -347,6 +361,11 @@ impl ProfileStore {
     pub fn state(&self) -> Result<ProfileState> {
         self.load()
     }
+    pub fn state_with_revision(&self) -> Result<(ProfileState, String)> {
+        let mut memory = self.memory.lock().unwrap();
+        let state = self.load_locked(&mut memory)?;
+        Ok((state, memory.revision.clone()))
+    }
     pub fn load(&self) -> Result<ProfileState> {
         self.load_locked(&mut self.memory.lock().unwrap())
     }
@@ -354,12 +373,35 @@ impl ProfileStore {
     /// Every successful call persists the whole validated state; no separate Save action exists.
     /// Use one store per UC_HOME; its mutex serializes all in-process writers.
     pub fn save(&self, state: &ProfileState) -> Result<ProfileState> {
+        self.save_versioned(state, None).map(|(state, _)| state)
+    }
+    pub fn save_with_revision(&self, state: &ProfileState) -> Result<(ProfileState, String)> {
+        self.save_versioned(state, None)
+    }
+    pub fn save_if_revision(
+        &self,
+        state: &ProfileState,
+        expected: &str,
+    ) -> Result<(ProfileState, String)> {
+        self.save_versioned(state, Some(expected))
+    }
+    fn save_versioned(
+        &self,
+        state: &ProfileState,
+        expected: Option<&str>,
+    ) -> Result<(ProfileState, String)> {
         state.validate()?;
         let mut memory = self.memory.lock().unwrap();
         self.load_locked(&mut memory)?; // establish a valid startup backup before the first edit
+        if expected.is_some_and(|revision| revision != memory.revision) {
+            return Err(invalid(
+                "Dock layout changed; read the latest revision and retry",
+            ));
+        }
         self.write_transaction(state)?;
         memory.state = Some(state.clone());
-        Ok(state.clone())
+        memory.revision = new_id("revision");
+        Ok((state.clone(), memory.revision.clone()))
     }
 
     fn load_locked(&self, memory: &mut Memory) -> Result<ProfileState> {

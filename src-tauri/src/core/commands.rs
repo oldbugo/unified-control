@@ -14,6 +14,11 @@ pub struct Core(pub Arc<App>);
 pub struct TauriEvents(pub tauri::AppHandle);
 
 impl Events for TauriEvents {
+    fn agent(&self, event: &str, payload: Value) {
+        let _ = self
+            .0
+            .emit("uc:agent-event", json!({"event":event,"payload":payload}));
+    }
     fn cooler(&self, event: &str, payload: Value) {
         let _ = self
             .0
@@ -35,6 +40,11 @@ impl Events for TauriEvents {
 pub struct EventRelay(pub std::sync::OnceLock<Arc<dyn Events>>);
 
 impl Events for EventRelay {
+    fn agent(&self, event: &str, payload: Value) {
+        if let Some(e) = self.0.get() {
+            e.agent(event, payload);
+        }
+    }
     fn cooler(&self, event: &str, payload: Value) {
         if let Some(e) = self.0.get() {
             e.cooler(event, payload);
@@ -124,8 +134,28 @@ pub async fn profiles_state(core: State<'_, Core>) -> Result<Value, CoreError> {
 pub async fn profiles_save(
     core: State<'_, Core>,
     snapshot: super::profiles::ProfileState,
+    expected_revision: String,
 ) -> Result<Value, CoreError> {
-    run(&core, move |app| app.save_profiles(snapshot)).await
+    run(&core, move |app| {
+        app.save_profiles_if_revision(snapshot, expected_revision)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn agent_editor_present(
+    core: State<'_, Core>,
+    present: bool,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| app.agent_editor_present(present)).await
+}
+#[tauri::command]
+pub async fn agent_editor_ready(
+    core: State<'_, Core>,
+    lease_id: String,
+    saved: bool,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| app.agent_editor_ready(lease_id, saved)).await
 }
 
 #[tauri::command]

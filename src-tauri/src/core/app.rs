@@ -13,6 +13,7 @@ use std::time::Duration;
 
 /// What the UI is told (Tauri events in the app, a recorder in tests).
 pub trait Events: Send + Sync + 'static {
+    fn agent(&self, _event: &str, _payload: Value) {}
     fn cooler(&self, _event: &str, _payload: Value) {}
     fn job(&self, _job: &Job) {}
     /// Settings changed: the UI reloads `app_state` (debounced).
@@ -62,13 +63,14 @@ impl Debounce {
 }
 
 pub struct App {
+    pub agent: super::agent::AgentState,
     pub settings: Arc<SettingsStore>,
     pub profiles: Arc<super::profiles::ProfileStore>,
     pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
     pub dock: OnceLock<Arc<super::dock_service::Controller>>,
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
     cooler_config_lock: Mutex<()>,
-    closing: AtomicBool,
+    pub(crate) closing: AtomicBool,
     dock_config_lock: Mutex<()>,
     pub sched: Scheduler,
     pub events: Arc<dyn Events>,
@@ -90,6 +92,7 @@ impl App {
             Arc::new(SinkAdapter(events.clone())),
         );
         let app = Arc::new(App {
+            agent: super::agent::AgentState::default(),
             settings: settings.clone(),
             profiles,
             runtime: OnceLock::new(),
@@ -322,6 +325,8 @@ impl App {
             "fake": super::buildinfo::fake_device(),
             "page": s.page(),
             "followPhysicalPage": s.0["ui"]["followPhysicalPage"].as_bool().unwrap_or(true),
+            "agentAccess": s.0["ui"]["agentAccess"].as_bool().unwrap_or(false),
+            "agentBusy": self.agent_busy(),
             "autostart": super::autostart::is_on(),
             "dock": self.dock_state(),
             "cooler": self.cooler_state(),
@@ -330,6 +335,10 @@ impl App {
 
     /// `{ page? }`: saved at once (no Save button).
     pub fn settings_update(&self, body: &Value) -> CoreResult<Value> {
+        let agent_access = body.get("agentAccess");
+        if agent_access.is_some_and(|value| !value.is_boolean()) {
+            return Err(CoreError::new("Invalid agent access setting"));
+        }
         let diagnostics = body.get("coolerDiagnostics");
         if diagnostics.is_some_and(|value| !value.is_boolean()) {
             return Err(CoreError::new("Invalid cooler diagnostics setting"));
@@ -346,6 +355,9 @@ impl App {
         }
         self.settings
             .update(|s| {
+                if let Some(enabled) = agent_access {
+                    s["ui"]["agentAccess"] = enabled.clone();
+                }
                 if let Some(diagnostics) = diagnostics {
                     s["cooler"]["diagnostics"] = diagnostics.clone();
                 }
@@ -370,14 +382,30 @@ impl App {
     }
 
     pub fn profiles_state(&self) -> CoreResult<Value> {
-        let state = self
+        let (state, revision) = self
             .profiles
-            .state()
+            .state_with_revision()
             .map_err(|e| CoreError::coded("profiles", e.to_string()))?;
-        Ok(json!({ "state": state, "notice": self.profiles.recovery_notice() }))
+        Ok(
+            json!({ "state": state, "revision":revision, "notice": self.profiles.recovery_notice() }),
+        )
     }
 
     pub fn save_profiles(&self, snapshot: super::profiles::ProfileState) -> CoreResult<Value> {
+        self.save_profiles_versioned(snapshot, None)
+    }
+    pub fn save_profiles_if_revision(
+        &self,
+        snapshot: super::profiles::ProfileState,
+        expected_revision: String,
+    ) -> CoreResult<Value> {
+        self.save_profiles_versioned(snapshot, Some(expected_revision))
+    }
+    fn save_profiles_versioned(
+        &self,
+        snapshot: super::profiles::ProfileState,
+        expected_revision: Option<String>,
+    ) -> CoreResult<Value> {
         let store = self.profiles.clone();
         let dock = self.dock.get().cloned();
         // Saves count as visible work: tray Quit and idle-safe installation wait.
@@ -389,13 +417,15 @@ impl App {
             )
             .visible(),
             move |_| {
-                let state = store
-                    .save(&snapshot)
-                    .map_err(|e| CoreError::coded("profiles", e.to_string()))?;
+                let (state,revision) = if let Some(expected)=&expected_revision {
+                    store.save_if_revision(&snapshot,expected)
+                } else {
+                    store.save_with_revision(&snapshot)
+                }.map_err(|e| {if e.is_conflict(){CoreError::coded("revision_conflict","Dock layout changed; read the latest revision and retry").status(409)}else{CoreError::coded("profiles", e.to_string())}})?;
                 if let Some(dock) = &dock {
                     dock.notify_profiles_changed();
                 }
-                Ok(json!({ "state": state, "notice": store.recovery_notice() }))
+                Ok(json!({ "state": state, "revision":revision, "notice": store.recovery_notice() }))
             },
         )
     }
@@ -418,6 +448,7 @@ impl App {
     /// Stop cooler admission before preparing a relaunch helper. Refusal leaves
     /// the host and dock usable; a failed helper can restore the cooler engine.
     pub fn prepare_cooler_exit(&self) -> CoreResult<()> {
+        self.agent_begin_close()?;
         let _guard = self.cooler_config_lock.lock().unwrap();
         self.closing.store(true, Ordering::SeqCst);
         if let Some(cooler) = self.cooler.get() {
@@ -455,7 +486,8 @@ impl App {
 
     /// `UnifiedControl.exe --quit` refuses while a job is running.
     pub fn busy_for_quit(&self) -> bool {
-        self.sched.any_visible_job()
+        self.agent_busy()
+            || self.sched.any_visible_job()
             || self.dock.get().is_some_and(|dock| dock.busy())
             || self.cooler.get().is_some_and(|cooler| cooler.busy())
     }
