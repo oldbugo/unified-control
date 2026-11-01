@@ -24,6 +24,14 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await call('cooler_configure',{enabled:true});
     await waitNative(async()=>{const s=await window.__TAURI_INTERNALS__.invoke('cooler_state');return s.state==='running'&&!s.busy;});
     const state=await call('cooler_state');assert.equal(state.state,'running',JSON.stringify(state));assert.equal(state.fake,true);assert.ok(state.pid);
+    assert.equal(state.diagnosticsEnabled,true);
+    await call('settings_update',{patch:{coolerDiagnostics:false}});
+    assert.equal((await call('cooler_state')).diagnosticsEnabled,false);
+    await call('settings_update',{patch:{coolerDiagnostics:true}});
+    await waitNative(async()=>!!(await window.__TAURI_INTERNALS__.invoke('cooler_state')).health?.lastSampleAt);
+    const sampled=(await call('cooler_state')).health.lastSampleAt;
+    await call('win_close');
+    await waitNative(async previous=>(await window.__TAURI_INTERNALS__.invoke('cooler_state')).health?.lastSampleAt!==previous,sampled,{timeout:20000});
     const engine=await call('cooler_call',{command:'app_state',args:{}});assert.ok(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]+$/.test(engine.mediaBase));
     await page.locator('[data-page="cooler"]').click();
     await page.waitForFunction(()=>!!document.getElementById('cooler-frame'));
@@ -52,7 +60,8 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await call('cooler_configure',{enabled:false});
     assert.equal((await call('cooler_state')).enabled,false);
     assert.equal(await requestQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
-    console.log('PASS: quiet native UC/worker IPC; embedded themes UI; chunked file import; staged-import Quit refusal; saved Live settings; worker crash/restart leaves dock connected; disable/clean Quit. Fake devices only.');
+    const healthLog=path.join(home,'devices','cooler','connection-health.jsonl');assert.ok(fs.existsSync(healthLog));assert.ok(fs.readFileSync(healthLog,'utf8').trim().split('\n').every(line=>JSON.parse(line).health));
+    console.log('PASS: quiet native UC/worker IPC; embedded themes UI; background health while window closed; diagnostics opt-out; chunked file import; staged-import Quit refusal; saved Live settings; worker crash/restart leaves dock connected; disable/clean Quit. Fake devices only.');
     console.log(`Isolated evidence: ${home}`);
   }finally{
     if(child.exitCode===null){await requestQuit();await Promise.race([exit,delay(10000)]);}

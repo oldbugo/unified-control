@@ -21,6 +21,7 @@ const server=http.createServer((req,res)=>{
       const invoke=async(command,args={})=>{
         window.__calls.push({command,args:args.command==='import_append'?{...args,args:{...args.args,bytesLength:args.args.bytes.length,bytes:args.args.bytes.length<10?args.args.bytes:null}}:args});
         if(command==='cooler_state')return window.__coolerState;
+        if(command==='settings_update'){window.__coolerState.diagnosticsEnabled=args.patch.coolerDiagnostics;return {cooler:window.__coolerState};}
         if(command==='cooler_configure'){window.__coolerState={enabled:args.enabled,state:args.enabled?'running':'disabled',message:'Fixture engine'};return window.__coolerState;}
         if(command!=='cooler_call')throw new Error('unexpected host command');
         const c=args.command;
@@ -29,6 +30,8 @@ const server=http.createServer((req,res)=>{
         if(c==='sources_list')return {sources:[],ticked:[]};
         if(c==='activity')return {jobs:[],rev:1,deviceBusy:false};
         if(c==='device_check')return {state:'ready'};
+        if(c==='device_reconnect')return {jobId:'fake-reset'};
+        if(c==='job_get'&&args.args.jobId==='fake-reset')return {status:'done',result:{firmwareVerified:true}};
         if(c==='import_begin'){const transferId='fixture-'+(++window.__transferNext);window.__transfers.set(transferId,{...args.args,received:0});return {transferId};}
         if(c==='import_append'){
           const value=args.args,transfer=window.__transfers.get(value.transferId);
@@ -45,9 +48,17 @@ const server=http.createServer((req,res)=>{
       window.__panel=new CoolerPanel(invoke,true);const container=document.createElement('div');container.id='cooler-test';container.innerHTML=window.__panel.markup();document.getElementById('pane').replaceChildren(container);window.__panel.mount(container);
     });
     await page.locator('#cooler-enabled').check();await page.waitForSelector('#cooler-frame');
+    await page.locator('#cooler-diagnostics').uncheck();
+    await page.waitForFunction(()=>window.__coolerState.diagnosticsEnabled===false);
+    assert.match(await page.locator('#cooler-health').textContent(),/off/);
+    await page.locator('#cooler-diagnostics').check();
+    await page.waitForFunction(()=>window.__coolerState.diagnosticsEnabled===true);
     await page.waitForFunction(()=>document.getElementById('cooler-frame')?.contentWindow?.location.pathname==='/cooler/index.html');
     const frame=page.frames().find(f=>f.url().includes('/cooler/index.html'));
     await page.waitForFunction(()=>window.__calls.some(c=>c.command==='cooler_call'&&c.args.command==='activity'));
+    await page.locator('#cooler-reset').click();
+    await page.waitForFunction(()=>document.getElementById('cooler-health')?.textContent.includes('answered after the USB reset'));
+    assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.command==='cooler_call'&&c.args.command==='device_reconnect').length),1);
     assert.equal(await frame.locator('#cs-titlebar').count(),0,'embedded UI has no independent native titlebar');
     assert.equal(await frame.locator('#setRestart').isVisible(),false);
     await frame.locator('#navMine').click();assert.equal(await frame.locator('#mineView').isVisible(),true,'existing My themes view works');

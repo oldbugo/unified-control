@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-11-01
+
+Add the requested background Connection diagnostics in UC, on with a saved opt-out. Read-only worker health runs every ten seconds; passive Windows USB status every thirty seconds. State transitions and minute snapshots go to bounded local rotating logs. Worker timeouts, USB write failures, matched descriptor failures and intentional holds remain distinct; raw messages, device/account IDs and media paths are excluded. Logging continues with the editor closed and stops when UC exits. No automatic USB resets or elevation.
+
+Add explicit Reset cooler USB for a normally enumerated but unresponsive screen. It saves edits, uses the exclusive device job, requests Windows approval, selects one exact cooler parent/port/interface, resets once and checks for a genuine firmware reply. Failed enumeration keeps the existing exact remembered-port recovery path. Successful reset request alone is never reported as recovered hardware.
+
+Current incident remains unresolved: initial PnP nodes were OK while writes timed out before the session's first successful Live connection. One user-approved targeted reset was accepted, but normal enumeration did not return; Windows then reported code43. Physical USB reconnect is the next recovery step. This does not establish development work, firmware, power or a cable as the initiating cause.
+
 ## 0.2.0 — 2026-11-01
 
 Integrate CoolerScreen themes, library, Live, Embedded and settings into the cooler page using the existing interface and a separate supervised engine from the private CoolerScreen repository. Devices remain separately enabled; cooler starts off. First enable imports a separate copy of the old settings/library/gallery and preserves the fallback. Existing CoolerScreen must be closed by the user before UC takes ownership.

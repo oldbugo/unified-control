@@ -7,6 +7,7 @@ pub mod autostart;
 pub mod buildinfo;
 pub mod commands;
 pub mod cooler;
+pub mod cooler_health;
 pub mod cooler_migration;
 pub mod cooler_transfer;
 pub mod dock_runtime;

@@ -137,6 +137,11 @@ impl App {
             fake,
         ));
         let settings = self.settings.load();
+        cooler.set_diagnostics(
+            settings.0["cooler"]["diagnostics"]
+                .as_bool()
+                .unwrap_or(true),
+        );
         controller
             .set_brightness(settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8)
             .map_err(CoreError::new)?;
@@ -325,6 +330,10 @@ impl App {
 
     /// `{ page? }`: saved at once (no Save button).
     pub fn settings_update(&self, body: &Value) -> CoreResult<Value> {
+        let diagnostics = body.get("coolerDiagnostics");
+        if diagnostics.is_some_and(|value| !value.is_boolean()) {
+            return Err(CoreError::new("Invalid cooler diagnostics setting"));
+        }
         let follow = body.get("followPhysicalPage");
         if follow.is_some_and(|value| !value.is_boolean()) {
             return Err(CoreError::new("Invalid follow-physical-page setting"));
@@ -337,6 +346,9 @@ impl App {
         }
         self.settings
             .update(|s| {
+                if let Some(diagnostics) = diagnostics {
+                    s["cooler"]["diagnostics"] = diagnostics.clone();
+                }
                 if let Some(follow) = follow {
                     s["ui"]["followPhysicalPage"] = follow.clone();
                 }
@@ -345,6 +357,11 @@ impl App {
                 }
             })
             .map_err(|e| CoreError::new(e.to_string()))?;
+        if let Some(diagnostics) = diagnostics {
+            if let Some(cooler) = self.cooler.get() {
+                cooler.set_diagnostics(diagnostics.as_bool().unwrap());
+            }
+        }
         Ok(self.app_state())
     }
 
@@ -476,6 +493,18 @@ mod tests {
             assert_eq!(a.app_state()["page"], page);
         }
         assert!(a.settings_update(&json!({ "page": "unknown" })).is_err());
+    }
+
+    #[test]
+    fn cooler_diagnostics_can_be_disabled_and_survive_restart() {
+        let (dir, app) = app();
+        app.settings_update(&json!({"coolerDiagnostics":false}))
+            .unwrap();
+        let reopened = App::new(dir.path(), Arc::new(NoEvents), "test");
+        assert_eq!(reopened.settings.load().0["cooler"]["diagnostics"], false);
+        assert!(app
+            .settings_update(&json!({"coolerDiagnostics":"yes"}))
+            .is_err());
     }
 
     #[test]

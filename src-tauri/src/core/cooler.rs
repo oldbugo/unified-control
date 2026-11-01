@@ -32,6 +32,7 @@ struct State {
     ready: bool,
     next_start: Instant,
     failures: u32,
+    generation: u64,
 }
 pub struct Cooler {
     state: Mutex<State>,
@@ -46,6 +47,8 @@ pub struct Cooler {
     events: EventSink,
     transfers: Mutex<super::cooler_transfer::Transfers>,
     finishing_transfers: Mutex<HashMap<u64, String>>,
+    diagnostics: super::cooler_health::Diagnostics,
+    health_blocked: AtomicBool,
 }
 
 impl Cooler {
@@ -69,6 +72,7 @@ impl Cooler {
                 ready: false,
                 next_start: Instant::now(),
                 failures: 0,
+                generation: 0,
             }),
             operation: RwLock::new(()),
             inflight: AtomicUsize::new(0),
@@ -78,6 +82,10 @@ impl Cooler {
                 home.join("transfers"),
             )),
             finishing_transfers: Mutex::new(HashMap::new()),
+            diagnostics: super::cooler_health::Diagnostics::new(
+                home.join("connection-health.jsonl"),
+            ),
+            health_blocked: AtomicBool::new(false),
             executable,
             home,
             resources,
@@ -93,11 +101,23 @@ impl Cooler {
             }
             this.supervise();
         });
+        let weak = Arc::downgrade(&this);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let Some(this) = weak.upgrade() else { break };
+            if this.stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            this.sample_health();
+        });
         this
+    }
+    pub fn set_diagnostics(&self, enabled: bool) {
+        self.diagnostics.set_enabled(enabled);
     }
     pub fn status(&self) -> Value {
         let state = self.state.lock().unwrap();
-        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock().unwrap().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id())})
+        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock().unwrap().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id()),"diagnosticsEnabled":self.diagnostics.enabled(),"health":self.diagnostics.status()})
     }
     pub fn busy(&self) -> bool {
         let state = self.state.lock().unwrap();
@@ -205,6 +225,8 @@ impl Cooler {
                     pending,
                     alive,
                 });
+                state.generation = state.generation.saturating_add(1);
+                self.health_blocked.store(false, Ordering::SeqCst);
                 state.ready = false;
                 state.phase = "starting";
                 state.message = "Starting CoolerScreen engine".into();
@@ -338,6 +360,89 @@ impl Cooler {
             _ => {}
         }
         self.request(command, args, Duration::from_secs(120))
+    }
+    fn sample_health(&self) {
+        let Some(ticket) = self.diagnostics.begin(Instant::now()) else {
+            return;
+        };
+        let worker = {
+            let state = self.state.lock().unwrap();
+            json!({"enabled":state.enabled,"ready":state.ready,"state":state.phase,"generation":state.generation,"restarts":state.generation.saturating_sub(1)})
+        };
+        let pnp = if ticket.sample_pnp {
+            Some(super::cooler_health::pnp_snapshot(self.fake))
+        } else {
+            None
+        };
+        let reply = if worker["enabled"] != true || worker["ready"] != true {
+            Err("worker_unavailable")
+        } else if let Ok(_operation) = self.operation.try_read() {
+            self.health_request()
+        } else {
+            Err("sample_deferred")
+        };
+        self.diagnostics
+            .finish(ticket, &worker, reply, pnp, Instant::now());
+    }
+    /// Read-only probes use distinct IDs/pending entries but never mutation
+    /// uncertainty or job busy flags. A lost health reply cannot prevent Quit.
+    fn health_request(&self) -> Result<Value, &'static str> {
+        // Permit only one tiny probe after the last confirmed worker reply.
+        // A hung reader cannot accumulate diagnostic writes in its pipe.
+        if self.health_blocked.load(Ordering::SeqCst) {
+            return Err("worker_timeout");
+        }
+        if self.inflight.load(Ordering::SeqCst) > 0 {
+            return Err("sample_deferred");
+        }
+        let id = self.ids.fetch_add(1, Ordering::SeqCst);
+        let (input, pending) = {
+            let state = self.state.lock().unwrap();
+            if !state.enabled || !state.ready {
+                return Err("worker_unavailable");
+            }
+            if !state.uncertain.is_empty() {
+                return Err("sample_deferred");
+            }
+            let Some(session) = state.session.as_ref() else {
+                return Err("worker_unavailable");
+            };
+            let Some(input) = session.input.clone() else {
+                return Err("worker_unavailable");
+            };
+            (input, session.pending.clone())
+        };
+        let Ok(mut input) = input.try_lock() else {
+            return Err("sample_deferred");
+        };
+        if self.inflight.load(Ordering::SeqCst) > 0
+            || !pending.lock().unwrap().is_empty()
+            || !self.state.lock().unwrap().uncertain.is_empty()
+        {
+            return Err("sample_deferred");
+        }
+        if self.health_blocked.swap(true, Ordering::SeqCst) {
+            return Err("worker_timeout");
+        }
+        let (send, recv) = mpsc::channel();
+        pending.lock().unwrap().insert(id, send);
+        let frame =
+            format!("{{\"v\":1,\"id\":{id},\"command\":\"health_status\",\"args\":{{}}}}\n");
+        let written = input
+            .write_all(frame.as_bytes())
+            .and_then(|_| input.flush());
+        drop(input);
+        let result = if written.is_err() {
+            Err("worker_disconnected")
+        } else {
+            match recv.recv_timeout(Duration::from_secs(2)) {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(_)) => Err("worker_unavailable"),
+                Err(_) => Err("worker_timeout"),
+            }
+        };
+        pending.lock().unwrap().remove(&id);
+        result
     }
     fn request(&self, command: &str, args: Value, timeout: Duration) -> CoreResult<Value> {
         self.request_with_transfer(command, args, timeout, None)
@@ -513,6 +618,7 @@ fn read_worker(
         }
         if let Some(id) = value["id"].as_u64() {
             if let Some(owner) = owner.upgrade() {
+                owner.health_blocked.store(false, Ordering::SeqCst);
                 owner.state.lock().unwrap().uncertain.remove(&id);
                 if let Some(transfer) = owner.finishing_transfers.lock().unwrap().remove(&id) {
                     let _ = owner.transfers.lock().unwrap().complete(&transfer, true);
@@ -583,4 +689,73 @@ fn read_worker(
     }
     alive.store(false, Ordering::SeqCst);
     fail_pending(&pending);
+}
+
+#[cfg(all(test, windows))]
+mod health_tests {
+    use super::*;
+    #[test]
+    fn health_timeout_does_not_leave_mutation_or_quit_busy() {
+        use std::os::windows::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        // A hidden stdin drain deliberately supplies no RPC response. This is
+        // a helper process only: no app, USB, shell file actions or desktop UI.
+        let mut child = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::In.ReadToEnd() | Out-Null",
+            ])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let input = Arc::new(Mutex::new(child.stdin.take().unwrap()));
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.enabled = true;
+            state.ready = true;
+            state.phase = "running";
+            state.session = Some(Session {
+                child,
+                input: Some(input),
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                alive: Arc::new(AtomicBool::new(true)),
+            });
+        }
+        let started = Instant::now();
+        assert_eq!(manager.health_request(), Err("worker_timeout"));
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(manager.health_blocked.load(Ordering::SeqCst));
+        let deferred = Instant::now();
+        assert_eq!(manager.health_request(), Err("worker_timeout"));
+        assert!(
+            deferred.elapsed() < Duration::from_millis(100),
+            "a timed-out health probe must suppress further pipe writes"
+        );
+        assert!(!manager.busy());
+        assert_eq!(manager.inflight.load(Ordering::SeqCst), 0);
+        assert!(manager.state.lock().unwrap().uncertain.is_empty());
+        manager.stopped.store(true, Ordering::SeqCst);
+        let mut session = manager.state.lock().unwrap().session.take().unwrap();
+        assert!(session.pending.lock().unwrap().is_empty());
+        session.input.take();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            session.child.try_wait().unwrap().is_some(),
+            "stdin-drain helper must exit after EOF"
+        );
+    }
 }
