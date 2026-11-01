@@ -7,8 +7,9 @@ use super::{
     key_render::{render_face, RenderInputs, RenderedFace, KEY_SIZE, WIDE_SIZE},
     profiles::{Face, ProfileState},
     sensors::{Needs, Sampler},
-    usage::{ActiveProvider, Provider, UsageService},
+    usage::{ActiveProvider, Provider, UsageError, UsageService, UsageStatus},
 };
+use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -20,6 +21,43 @@ use std::{
 struct ReaderHealth {
     next: Instant,
     delay: Duration,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct UsageDiagnostic {
+    provider: Provider,
+    selected: bool,
+    status: UsageStatus,
+    code: &'static str,
+    message: &'static str,
+}
+impl UsageDiagnostic {
+    fn inactive(provider: Provider) -> Self {
+        Self {
+            provider,
+            selected: false,
+            status: UsageStatus::Inactive,
+            code: "inactive",
+            message: UsageStatus::Inactive.message(),
+        }
+    }
+}
+struct UsageDiagnostics {
+    reader_code: &'static str,
+    reader_message: &'static str,
+    providers: [UsageDiagnostic; 2],
+}
+impl Default for UsageDiagnostics {
+    fn default() -> Self {
+        Self {
+            reader_code: "inactive",
+            reader_message: "AI usage reader is inactive.",
+            providers: [
+                UsageDiagnostic::inactive(Provider::Claude),
+                UsageDiagnostic::inactive(Provider::Codex),
+            ],
+        }
+    }
 }
 
 pub struct RuntimeResources {
@@ -34,6 +72,7 @@ pub struct RuntimeResources {
     actions: Mutex<NativeActions>,
     activation: Mutex<()>,
     health: Mutex<ReaderHealth>,
+    usage_diagnostics: Mutex<UsageDiagnostics>,
     started: Instant,
 }
 impl RuntimeResources {
@@ -72,6 +111,7 @@ impl RuntimeResources {
                 next: Instant::now(),
                 delay: Duration::from_secs(1),
             }),
+            usage_diagnostics: Mutex::new(UsageDiagnostics::default()),
             started: Instant::now(),
         })
     }
@@ -80,10 +120,39 @@ impl RuntimeResources {
         self.enabled.store(false, Ordering::SeqCst);
         self.providers.lock().unwrap().clear();
         self.usage.shutdown();
+        *self.usage_diagnostics.lock().unwrap() = UsageDiagnostics::default();
         self.sampler
             .lock()
             .unwrap()
             .sample(Needs::default(), self.started.elapsed());
+    }
+    /// Sanitized diagnostics only; inspecting this never activates a source or
+    /// returns quota numbers, account identifiers, filesystem paths or raw errors.
+    pub fn usage_status(&self) -> Value {
+        let diagnostics = self.usage_diagnostics.lock().unwrap();
+        json!({"reader":{"code":diagnostics.reader_code,"message":diagnostics.reader_message},"providers":diagnostics.providers})
+    }
+    fn reader_result(&self, result: Result<(), UsageError>) {
+        let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+        let (code,message)=match result {
+            Ok(())=>("ready","AI usage reader is running; each provider still needs a current verified observation."),
+            Err(error)=>(error.code(),error.message()),
+        };
+        if diagnostics.reader_code != code {
+            // Only finite codes are logged, never helper/OS text or user data.
+            crate::device::log(&format!("usage reader status: {code}"));
+        }
+        diagnostics.reader_code = code;
+        diagnostics.reader_message = message;
+        if let Err(error) = result {
+            for provider in &mut diagnostics.providers {
+                if provider.selected {
+                    provider.status = UsageStatus::Error;
+                    provider.code = error.code();
+                    provider.message = error.message();
+                }
+            }
+        }
     }
     fn ensure_reader(&self) {
         if self.fake || !self.enabled.load(Ordering::SeqCst) {
@@ -103,11 +172,14 @@ impl RuntimeResources {
             return;
         }
         if self.usage.is_running() && self.usage.check_health() {
+            self.reader_result(Ok(()));
             health.next = now + Duration::from_secs(30);
             health.delay = Duration::from_secs(1);
             return;
         }
-        if self.usage.set_active_providers(&desired).is_ok() {
+        let activation = self.usage.set_active_providers(&desired);
+        self.reader_result(activation);
+        if activation.is_ok() {
             health.next = now + Duration::from_secs(30);
             health.delay = Duration::from_secs(1)
         } else {
@@ -134,7 +206,35 @@ impl RuntimeResources {
                     "trend" => "trend",
                     _ => face.usage_view.as_deref().unwrap_or("rings"),
                 };
-                if let Ok(result) = self.usage.render(provider, view, width, height) {
+                let result = self.usage.render(provider, view, width, height);
+                {
+                    let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+                    let diagnostic = diagnostics
+                        .providers
+                        .iter_mut()
+                        .find(|item| item.provider == provider)
+                        .unwrap();
+                    match &result {
+                        Ok(rendered) => {
+                            diagnostic.status = rendered.snapshot.status;
+                            diagnostic.code = match diagnostic.status {
+                                UsageStatus::Ok => "verified",
+                                UsageStatus::Stale => "stale",
+                                UsageStatus::Loading => "loading",
+                                UsageStatus::Inactive => "inactive",
+                                UsageStatus::Error => "source-error",
+                                UsageStatus::Unavailable => "unverified-or-unavailable",
+                            };
+                            diagnostic.message = diagnostic.status.message();
+                        }
+                        Err(error) => {
+                            diagnostic.status = UsageStatus::Error;
+                            diagnostic.code = error.code();
+                            diagnostic.message = error.message();
+                        }
+                    }
+                }
+                if let Ok(result) = result {
                     let snapshot = &result.snapshot;
                     let unknown = snapshot.status != super::usage::UsageStatus::Ok;
                     let mut valid_until_ms = if unknown {
@@ -237,6 +337,30 @@ impl DockHooks for RuntimeResources {
             }
         }
         *self.needs.lock().unwrap() = needs;
+        {
+            let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+            for (provider, selected) in [(Provider::Claude, claude), (Provider::Codex, codex)] {
+                let diagnostic = diagnostics
+                    .providers
+                    .iter_mut()
+                    .find(|item| item.provider == provider)
+                    .unwrap();
+                let selected = selected && enabled && !self.fake;
+                if diagnostic.selected != selected {
+                    *diagnostic = UsageDiagnostic::inactive(provider);
+                    diagnostic.selected = selected;
+                    if selected {
+                        diagnostic.status = UsageStatus::Loading;
+                        diagnostic.code = "loading";
+                        diagnostic.message = UsageStatus::Loading.message();
+                    }
+                }
+            }
+            if !enabled || (!claude && !codex) || self.fake {
+                diagnostics.reader_code = "inactive";
+                diagnostics.reader_message = "AI usage reader is inactive.";
+            }
+        }
         let mut providers = Vec::new();
         if enabled && !self.fake {
             if claude {
@@ -255,7 +379,11 @@ impl DockHooks for RuntimeResources {
         let mut previous = self.providers.lock().unwrap();
         if *previous != providers || !providers.is_empty() && !self.usage.is_running() {
             *previous = providers.clone();
-            let ok = self.usage.set_active_providers(&providers).is_ok();
+            let activation = self.usage.set_active_providers(&providers);
+            if !providers.is_empty() {
+                self.reader_result(activation);
+            }
+            let ok = activation.is_ok();
             let mut health = self.health.lock().unwrap();
             health.delay = Duration::from_secs(1);
             health.next = Instant::now()
@@ -304,5 +432,41 @@ pub fn local_time() -> RenderInputs {
     #[cfg(not(windows))]
     {
         RenderInputs::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn usage_diagnostics_are_inert_finite_and_contain_no_numbers_or_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeResources::new(home.path(), home.path().join("resources"), true);
+        let diagnostic = runtime.usage_status();
+        assert_eq!(diagnostic["reader"]["code"], "inactive");
+        assert_eq!(diagnostic["providers"][0]["status"], "inactive");
+        assert!(!runtime.usage.is_running());
+        let frame = runtime
+            .render_one(
+                &Face {
+                    kind: "codex".into(),
+                    ..Default::default()
+                },
+                0,
+                &RenderInputs::default(),
+            )
+            .unwrap();
+        assert!(frame.unknown);
+        assert!(!runtime.usage.is_running());
+        let text = diagnostic.to_string();
+        for forbidden in [
+            "usedPercent",
+            "observedAt",
+            "accountId",
+            &home.path().display().to_string(),
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+        runtime.shutdown();
     }
 }

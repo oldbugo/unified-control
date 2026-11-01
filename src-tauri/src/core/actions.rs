@@ -88,9 +88,14 @@ fn parse_monitor_list(result: &serde_json::Value) -> Result<Vec<MonitorInfo>, St
     if result["status"].as_str() != Some("listed") {
         return Err("Monitor discovery returned an invalid result".into());
     }
-    let displays = result["displays"]
-        .as_array()
-        .ok_or("Monitor discovery returned no display list")?;
+    // PowerShell unwraps a one-item pipeline and emits null for no items.
+    // Normalize only those documented shapes before validating each display.
+    let displays: Vec<&serde_json::Value> = match result.get("displays") {
+        Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Object(_)) => vec![&result["displays"]],
+        Some(serde_json::Value::Array(items)) => items.iter().collect(),
+        _ => return Err("Monitor discovery returned no display list".into()),
+    };
     if displays.len() > 128 {
         return Err("Monitor discovery exceeded its display limit".into());
     }
@@ -1035,5 +1040,34 @@ mod tests {
             &serde_json::json!({"status":"listed","displays":[{"key":"bad,key"}]})
         )
         .is_err());
+    }
+
+    #[test]
+    fn monitor_list_accepts_powershell_zero_one_and_many_shapes() {
+        assert!(
+            parse_monitor_list(&serde_json::json!({"status":"listed","displays":null}))
+                .unwrap()
+                .is_empty()
+        );
+        let display = serde_json::json!({"key":"display:one","friendlyName":"Main"});
+        let one =
+            parse_monitor_list(&serde_json::json!({"status":"listed","displays":display})).unwrap();
+        assert_eq!(
+            one,
+            parse_monitor_list(&serde_json::json!({"status":"listed","displays":[display]}))
+                .unwrap()
+        );
+        assert_eq!(one[0].label, "Main");
+        for displays in [
+            serde_json::json!(false),
+            serde_json::json!("invalid"),
+            serde_json::json!({"friendlyName":"No stable key"}),
+        ] {
+            assert!(parse_monitor_list(
+                &serde_json::json!({"status":"listed","displays":displays})
+            )
+            .is_err());
+        }
+        assert!(parse_monitor_list(&serde_json::json!({"status":"listed"})).is_err());
     }
 }

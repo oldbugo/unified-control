@@ -55,6 +55,19 @@ pub enum UsageStatus {
     Error,
     Inactive,
 }
+impl UsageStatus {
+    /// Fixed messages only: never forward a helper's account/path/error text.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Loading => "Waiting for a verified account observation.",
+            Self::Ok => "Verified account observation.",
+            Self::Stale => "No verified account observation within five minutes.",
+            Self::Unavailable => "No current verified account usage is available.",
+            Self::Error => "The account source could not provide a current observation.",
+            Self::Inactive => "This provider is not active in the enabled dock profile.",
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageWindow {
@@ -93,12 +106,12 @@ impl UsageSnapshot {
             token_history_status: "unavailable".into(),
             token_history_observed_at: None,
             token_history: Vec::new(),
-            message: "Current account usage is unavailable.".into(),
+            message: status.message().into(),
         }
     }
     /// Re-evaluated at receipt, never after writing an old PNG to a display.
     pub fn guarded(mut self, now: u64) -> Self {
-        self.message = "Current account usage is unavailable.".into();
+        self.message = self.status.message().into();
         let fresh = |at: Option<u64>, age| {
             at.is_some_and(|t| {
                 t > 0 && t <= now.saturating_add(1000) && now.saturating_sub(t) <= age
@@ -120,6 +133,7 @@ impl UsageSnapshot {
             } else {
                 self.status
             };
+            self.message = self.status.message().into();
             self.provenance_verified = false;
             self.five_hour = None;
             self.weekly = None;
@@ -201,8 +215,30 @@ pub struct UsageRender {
     pub png: Vec<u8>,
     pub snapshot: UsageSnapshot,
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct UsageError(&'static str);
+impl UsageError {
+    /// Stable, finite diagnostics. OS messages and helper reply text never escape.
+    pub fn code(&self) -> &'static str {
+        match self.0 {
+            "The bundled usage runtime is missing." => "runtime-missing",
+            "The bundled usage reader is missing." => "reader-missing",
+            "The usage reader could not start." => "reader-start-failed",
+            "The usage reader is inactive." => "reader-inactive",
+            "Usage process containment unavailable." => "containment-unavailable",
+            "The usage reader returned an invalid snapshot." => "invalid-snapshot",
+            "The usage reader returned an invalid image." => "invalid-image",
+            "The usage image expired before delivery." => "expired-before-delivery",
+            "Usage reader rejected the request." => "request-rejected",
+            "Usage reader response timed out." => "reader-timeout",
+            "Invalid usage presentation." | "Invalid active providers." => "invalid-configuration",
+            _ => "reader-unavailable",
+        }
+    }
+    pub fn message(&self) -> &'static str {
+        self.0
+    }
+}
 impl std::fmt::Display for UsageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0)
@@ -452,6 +488,12 @@ struct Process {
 }
 impl Process {
     fn start(node: &Path, script: &Path, home: &Path) -> Result<Self> {
+        if node.is_absolute() && !node.is_file() {
+            return Err(UsageError("The bundled usage runtime is missing."));
+        }
+        if !script.is_file() {
+            return Err(UsageError("The bundled usage reader is missing."));
+        }
         let mut command = Command::new(node);
         command
             .arg(script)
@@ -466,7 +508,9 @@ impl Process {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let mut child = command.spawn().map_err(error)?;
+        let mut child = command
+            .spawn()
+            .map_err(|_| UsageError("The usage reader could not start."))?;
         #[cfg(windows)]
         let job = match OwnedJob::adopt(&child) {
             Ok(job) => job,
@@ -550,7 +594,12 @@ impl Process {
         let reply = self
             .replies
             .recv_timeout(timeout)
-            .map_err(error)?
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => UsageError("Usage reader response timed out."),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    UsageError("The usage reader is unavailable.")
+                }
+            })?
             .map_err(error)?;
         if reply.get("id").and_then(Value::as_u64) != Some(id) || reply.get("error").is_some() {
             return Err(UsageError("Usage reader rejected the request."));
@@ -802,11 +851,14 @@ mod tests {
         let clean = unverified.guarded(now);
         assert!(clean.five_hour.is_none());
         assert!(clean.token_history.is_empty());
+        assert_eq!(clean.message, UsageStatus::Unavailable.message());
         let mut stale = raw.clone();
         stale.observed_at = Some(now - FRESH_MS - 1);
         let stale = stale.guarded(now);
         assert_eq!(stale.status, UsageStatus::Stale);
         assert!(stale.token_history.is_empty());
+        assert_eq!(stale.message, UsageStatus::Stale.message());
+        assert!(!stale.message.contains("discard untrusted"));
         let mut future = raw.clone();
         future.observed_at = Some(now + 1001);
         assert!(future.guarded(now).five_hour.is_none());
@@ -816,6 +868,33 @@ mod tests {
         let mut expired = raw;
         expired.five_hour.as_mut().unwrap().resets_at = Some(now / 1000);
         assert!(expired.guarded(now).five_hour.is_none());
+    }
+    #[test]
+    fn missing_reader_resources_have_specific_private_diagnostics_without_spawning() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_node = dir.path().join("missing-node.exe");
+        let missing_script = dir.path().join("missing-reader.mjs");
+        let service = UsageService::new(&missing_node, &missing_script, dir.path());
+        let error = service
+            .set_active_providers(&[ActiveProvider {
+                provider: Provider::Codex,
+                token_history: false,
+            }])
+            .unwrap_err();
+        assert_eq!(error.code(), "runtime-missing");
+        assert!(!error
+            .to_string()
+            .contains(&dir.path().display().to_string()));
+        assert!(!service.is_running());
+        std::fs::write(&missing_node, b"not executed").unwrap();
+        let error = service
+            .set_active_providers(&[ActiveProvider {
+                provider: Provider::Codex,
+                token_history: false,
+            }])
+            .unwrap_err();
+        assert_eq!(error.code(), "reader-missing");
+        assert!(!service.is_running());
     }
     #[test]
     fn invalid_views_dimensions_and_extra_identity_fields_are_rejected() {

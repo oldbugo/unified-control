@@ -1,0 +1,103 @@
+/* On screen: the theme editor (plan "Editor refinement round", E1). Left: Add above Layers, with a divider between them.
+   Centre: the preview as large as the free space allows. Right: Properties. Both side panels resize by dragging their
+   inner edge (js/edshell.js keeps the widths in --ed-left-w / --ed-right-w and the Layers height in --ed-layers-h). */
+.ed {
+  flex: 1; min-height: 0; position: relative; display: grid;
+  grid-template-columns: minmax(200px, var(--ed-left-w, 300px)) minmax(360px, 1fr) minmax(200px, var(--ed-right-w, 280px));
+}
+.ed-left, .ed-right { position: relative; background: var(--surface-1); min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: visible; }
+.ed-left { border-right: 1px solid var(--border); }
+.ed-right { border-left: 1px solid var(--border); }
+.ed-add { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--s4) var(--s4) var(--s3); scrollbar-gutter: stable; }
+.ed-props { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--s4); display: flex; flex-direction: column; scrollbar-gutter: stable; }
+.ed-props > * { flex: none; }
+
+/* the Layers part of the left panel */
+.ed-layers { flex: none; height: var(--ed-layers-h, 40%); min-height: 0; display: flex; flex-direction: column; padding: var(--s2) var(--s4) var(--s3); }
+.ed-layers .layers { flex: 1 1 auto; min-height: 0; overflow-y: auto; align-content: start; scrollbar-gutter: stable; }
+
+/* drag handles: the panel edges and the Add / Layers divider */
+.ed-resizer { position: absolute; top: 0; bottom: 0; width: 9px; z-index: var(--z-sticky); cursor: col-resize; touch-action: none; }
+.ed-resizer.at-right { right: -5px; }
+.ed-resizer.at-left { left: -5px; }
+.ed-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: transparent; transition: background var(--t-fast), box-shadow var(--t-fast); }
+.ed-split { flex: none; position: relative; height: 9px; margin: -4px 0; z-index: var(--z-sticky); cursor: row-resize; touch-action: none; }
+.ed-split::after { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--border); transition: background var(--t-fast), box-shadow var(--t-fast); }
+.ed-resizer:hover::after, .ed-resizer.dragging::after, .ed-resizer:focus-visible::after { background: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ed-split:hover::after, .ed-split.dragging::after, .ed-split:focus-visible::after { background: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ed-resizer:focus-visible, .ed-split:focus-visible { outline: none; }
+html.resizing-x, html.resizing-x * { cursor: col-resize !important; user-select: none; }
+html.resizing-y, html.resizing-y * { cursor: row-resize !important; user-select: none; }
+
+/* centre: the preview fills the free width and height */
+.ed-center { min-width: 0; min-height: 0; overflow: hidden; padding: var(--s4) var(--s5); display: flex; flex-direction: column; gap: var(--s3); }
+.stage-wrap { flex: 1 1 auto; min-height: 120px; container-type: size; display: flex; justify-content: center; align-items: flex-start; }
+.stage-wrap > .stage { flex: none; width: min(100cqw, 100cqh * 20 / 9); }
+
+/* the palette: groups open and close (several at once); items two to a row, icon then name, all aligned the same way */
+.palette { display: block; }
+.pal-head { margin: var(--s2) 0 var(--s1); }
+.palette > .pal-head:first-child { margin-top: 0; }
+.pal-toggle {
+  display: flex; align-items: center; gap: var(--s1); width: 100%; height: var(--h-xs); padding: 0 var(--s1) 0 0; border: 0; border-radius: var(--r-xs);
+  background: transparent; color: var(--text-faint); cursor: pointer; text-align: left;
+  font-size: var(--fs-tiny); line-height: var(--lh-tiny); font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+}
+.pal-toggle:hover { color: var(--text); }
+.pal-toggle .chev { transition: transform var(--t-fast); }
+.pal-head.closed .chev { transform: rotate(-90deg); }
+.pal-grid { list-style: none; margin: 0 0 var(--s2); padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; gap: var(--s1); }
+.pal-grid[hidden] { display: none; }
+.pal-grid li { min-width: 0; }
+.pal-grid .pal-wide { grid-column: 1 / -1; }
+.pal-grid .pal-wide:has(> [hidden]) { display: none; }
+.pal {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 36px; height: 100%;
+  padding: var(--s1) 6px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); cursor: grab; text-align: left; font-size: var(--fs-small); line-height: 15px;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.pal:hover:not(:disabled) { background: var(--surface-3); border-color: var(--accent); }
+.pal:disabled { opacity: .5; cursor: not-allowed; }
+.pal .pi { width: 16px; height: 16px; display: grid; place-items: center; color: var(--accent); flex: none; font-weight: 600; }
+.pal .pn { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: normal; overflow: hidden; }
+.pal .soon { font-size: var(--fs-tiny); color: var(--text-faint); white-space: nowrap; }
+
+/* Properties: "Delete this item" pinned to the bottom right of the panel, whatever the content's length */
+.props-foot {
+  position: sticky; bottom: calc(-1 * var(--s4)); z-index: 2; margin: auto calc(-1 * var(--s4)) calc(-1 * var(--s4)); padding: var(--s3) var(--s4);
+  display: flex; justify-content: flex-end; gap: var(--s2); background: var(--surface-1); border-top: 1px solid var(--border);
+}
+
+/* Properties (and Theme settings): one field pattern. Label above, control full width; two short numbers side by side
+   in .props-grid; a value with its reset in .inline-ctl; sections divided by hr.sep + h3 (ui-style-guide.md 4). */
+.ed-right h3 { margin-bottom: var(--s3); }
+.ed-right .field input[type="number"], .ed-right .field input[type="text"], .ed-right .field select, .ed-right .field textarea { width: 100%; }
+.ed-right .inline-ctl input[type="number"], .ed-right .inline-ctl input[type="text"] { flex: 1; width: auto; min-width: 0; }
+.ed-right .row.between { margin: 0 0 var(--s2); }
+.ed-right .row.between h3 { margin: 0; }
+.ed-right .off-row { grid-template-columns: minmax(0, 1fr) 96px; }
+.ed-right .sw-row label { color: var(--text); }
+.ed-right .sep { margin: var(--s4) 0; }
+.ed-right .seg { margin-bottom: var(--s3); }
+.ed-right .hint { margin: calc(-1 * var(--s2)) 0 var(--s3); }
+
+/* a label for a group of buttons (segmented control) inside a field */
+.field-label { display: block; font-size: var(--fs-small); color: var(--text-muted); margin-bottom: var(--s1); }
+.ed-right .field .seg { margin-bottom: 0; display: flex; }
+.ed-right .field .seg button { flex: 1; }
+
+/* editable lists inside Properties (Meters rows, World clocks cities): one card per row, its tools top right */
+.meter-rows { display: grid; gap: var(--s2); margin-bottom: var(--s2); }
+.meter-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center;
+  padding: var(--s2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2);
+}
+.meter-row > :not(.inline-ctl) { grid-column: 1 / -1; width: 100%; min-width: 0; }
+.meter-row > :first-child { grid-column: 1; }
+.meter-row > .inline-ctl { grid-column: 2; grid-row: 1; gap: 0; }
+.meter-row .iconbtn { width: var(--h-sm); height: var(--h-sm); }
+.meter-row select, .meter-row input[type="text"], .meter-row input[type="number"] { background: var(--surface-1); }
+/* a short note under a switch or a field belongs to it: small gap above, normal gap below */
+.ed-right .sw-row + p.muted, .ed-right .field + p.muted { margin: calc(-1 * var(--s1)) 0 var(--s3); }
+.ed-right .field:has(+ p.muted) { margin-bottom: var(--s2); }

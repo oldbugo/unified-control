@@ -86,7 +86,7 @@ const server = http.createServer((req,res) => {
     await page.locator('[data-page="home"]').click();
     await page.screenshot({path:path.join(output,'uc-home.png'),fullPage:true});
     await page.locator('[data-page="cooler"]').click();
-    assert.match(await page.locator('#pane').textContent(),/integration is planned/);
+    assert.match(await page.locator('#pane').textContent(),/integrated controls are available in the Windows app/);
     await page.screenshot({path:path.join(output,'uc-cooler.png'),fullPage:true});
     await page.locator('[data-page="dial"]').click();
     await page.locator('[data-page="general"]').click();
@@ -229,7 +229,7 @@ const server = http.createServer((req,res) => {
       const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);
       const png=Array.from(Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0)));
       window.__TAURI_INTERNALS__={transformCallback:callback=>window.__callbacks.push(callback)-1,invoke:async(command,args)=>{
-        if(command==='plugin:event|listen'){window.__quitHandler=window.__callbacks[args.handler];return 0;}
+        if(command==='plugin:event|listen'){if(args.event==='uc:prepare-quit')window.__quitHandler=window.__callbacks[args.handler];return 0;}
         if(command==='editor_quit_ready'){window.__quitReadyCalls++;return 0;}
         if(command==='app_state')return appState();
         if(command==='settings_update'){

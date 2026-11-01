@@ -13,6 +13,7 @@ use std::time::Duration;
 
 /// What the UI is told (Tauri events in the app, a recorder in tests).
 pub trait Events: Send + Sync + 'static {
+    fn cooler(&self, _event: &str, _payload: Value) {}
     fn job(&self, _job: &Job) {}
     /// Settings changed: the UI reloads `app_state` (debounced).
     fn app_changed(&self) {}
@@ -65,6 +66,9 @@ pub struct App {
     pub profiles: Arc<super::profiles::ProfileStore>,
     pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
     pub dock: OnceLock<Arc<super::dock_service::Controller>>,
+    pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
+    cooler_config_lock: Mutex<()>,
+    closing: AtomicBool,
     dock_config_lock: Mutex<()>,
     pub sched: Scheduler,
     pub events: Arc<dyn Events>,
@@ -90,6 +94,9 @@ impl App {
             profiles,
             runtime: OnceLock::new(),
             dock: OnceLock::new(),
+            cooler: OnceLock::new(),
+            cooler_config_lock: Mutex::new(()),
+            closing: AtomicBool::new(false),
             dock_config_lock: Mutex::new(()),
             sched,
             events: events.clone(),
@@ -114,6 +121,14 @@ impl App {
             return Ok(());
         }
         let fake = super::buildinfo::fake_device().is_some();
+        let cooler_events = self.events.clone();
+        let cooler = super::cooler::Cooler::new(
+            self.base.join("devices/cooler"),
+            resource_dir.clone(),
+            fake,
+            Arc::new(move |event, payload| cooler_events.cooler(event, payload)),
+        );
+        let _ = self.cooler.set(cooler.clone());
         let resources =
             super::runtime_resources::RuntimeResources::new(&self.base, resource_dir, fake);
         let controller = Arc::new(super::dock_service::Controller::new(
@@ -134,7 +149,87 @@ impl App {
         controller
             .set_enabled(settings.0["dock"]["enabled"].as_bool().unwrap_or(false))
             .map_err(CoreError::new)?;
+        if settings.0["cooler"]["enabled"] == true
+            && self.base.join("devices/cooler/migration.json").is_file()
+        {
+            let _ = cooler.configure(true);
+        }
         Ok(())
+    }
+    pub fn cooler_state(&self) -> Value {
+        self.cooler.get().map(|cooler|cooler.status()).unwrap_or_else(||json!({"enabled":false,"state":"disabled","message":"Cooler screen is disabled","busy":false}))
+    }
+    pub fn cooler_configure(&self, enabled: bool) -> CoreResult<Value> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let _guard = self.cooler_config_lock.lock().unwrap();
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let cooler = self
+            .cooler
+            .get()
+            .ok_or_else(|| CoreError::new("Cooler engine is unavailable"))?
+            .clone();
+        if enabled && !self.base.join("devices/cooler/migration.json").is_file() {
+            if !super::buildinfo::fake_device().is_some() && super::cooler::other_app_running() {
+                return Err(CoreError::coded("cooler_owned","Close CoolerScreen from its tray before enabling its engine in Unified Control."));
+            }
+            let source = if super::buildinfo::fake_device().is_some() {
+                self.base.join("test-empty-cooler-source")
+            } else {
+                self.base
+                    .parent()
+                    .unwrap_or(&self.base)
+                    .join("CoolerScreen")
+            };
+            let target = self.base.join("devices/cooler");
+            let gallery = if super::buildinfo::fake_device().is_some() {
+                self.base.join("test-empty-gallery")
+            } else {
+                dirs::document_dir()
+                    .unwrap_or_else(|| self.base.clone())
+                    .join("CoolerScreen/Gallery")
+            };
+            self.run_task(
+                TaskSpec::new(
+                    "cooler-import",
+                    "Preparing cooler settings and library",
+                    super::scheduler::Resources::one(super::scheduler::Res::Io),
+                )
+                .visible(),
+                move |_| {
+                    super::cooler_migration::prepare(&source, &target, &gallery)?;
+                    Ok(json!({"ok":true}))
+                },
+            )?;
+        }
+        let old = self.settings.load().0["cooler"]["enabled"]
+            .as_bool()
+            .unwrap_or(false);
+        self.settings
+            .update(|s| s["cooler"]["enabled"] = json!(enabled))
+            .map_err(CoreError::from)?;
+        let state = match cooler.configure(enabled) {
+            Ok(state) => state,
+            Err(error) => {
+                self.settings
+                    .update(|s| s["cooler"]["enabled"] = json!(old))
+                    .map_err(CoreError::from)?;
+                return Err(error);
+            }
+        };
+        Ok(state)
+    }
+    pub fn cooler_call(&self, command: &str, args: Value) -> CoreResult<Value> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        self.cooler
+            .get()
+            .ok_or_else(|| CoreError::new("Cooler engine is unavailable"))?
+            .call(command, args)
     }
     pub fn dock_state(&self) -> Value {
         let mut value=self.dock.get().map(|dock|serde_json::to_value(dock.status()).unwrap_or_default()).unwrap_or_else(||json!({"state":"disabled","message":"Dock is disabled","enabled":false,"fake":super::buildinfo::fake_device().is_some()}));
@@ -143,6 +238,9 @@ impl App {
             .runtime
             .get()
             .is_some_and(|runtime| runtime.usage.is_running()));
+        if let Some(runtime) = self.runtime.get() {
+            value["usageStatus"] = runtime.usage_status();
+        }
         if let Some(id) = value["currentProfile"].as_str().map(String::from) {
             if let Ok(profiles) = self.profiles.state() {
                 if let Some(profile) = profiles.profiles.iter().find(|p| p.id == id) {
@@ -221,6 +319,7 @@ impl App {
             "followPhysicalPage": s.0["ui"]["followPhysicalPage"].as_bool().unwrap_or(true),
             "autostart": super::autostart::is_on(),
             "dock": self.dock_state(),
+            "cooler": self.cooler_state(),
         })
     }
 
@@ -299,8 +398,35 @@ impl App {
         // longer than this.
         self.sched.wait_idle(Duration::from_secs(1), true);
     }
+    /// Stop cooler admission before preparing a relaunch helper. Refusal leaves
+    /// the host and dock usable; a failed helper can restore the cooler engine.
+    pub fn prepare_cooler_exit(&self) -> CoreResult<()> {
+        let _guard = self.cooler_config_lock.lock().unwrap();
+        self.closing.store(true, Ordering::SeqCst);
+        if let Some(cooler) = self.cooler.get() {
+            if let Err(error) = cooler.configure(false) {
+                self.closing.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+    pub fn cancel_cooler_exit(&self) {
+        let _guard = self.cooler_config_lock.lock().unwrap();
+        self.closing.store(false, Ordering::SeqCst);
+        if self.settings.load().0["cooler"]["enabled"] == true {
+            if let Some(cooler) = self.cooler.get() {
+                let _ = cooler.configure(true);
+            }
+        }
+    }
     /// Must run off the UI thread; active monitor recovery is allowed to finish.
     pub fn stop_runtime(&self) {
+        if let Some(cooler) = self.cooler.get() {
+            if cooler.shutdown().is_err() {
+                return;
+            }
+        }
         let _guard = self.dock_config_lock.lock().unwrap();
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
@@ -312,7 +438,9 @@ impl App {
 
     /// `UnifiedControl.exe --quit` refuses while a job is running.
     pub fn busy_for_quit(&self) -> bool {
-        self.sched.any_visible_job() || self.dock.get().is_some_and(|dock| dock.busy())
+        self.sched.any_visible_job()
+            || self.dock.get().is_some_and(|dock| dock.busy())
+            || self.cooler.get().is_some_and(|cooler| cooler.busy())
     }
 
     /// True while something is being written to a device (close guard).

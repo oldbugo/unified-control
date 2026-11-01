@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 — 2026-11-01
+
+Integrate CoolerScreen themes, library, Live, Embedded and settings into the cooler page using the existing interface and a separate supervised engine from the private CoolerScreen repository. Devices remain separately enabled; cooler starts off. First enable imports a separate copy of the old settings/library/gallery and preserves the fallback. Existing CoolerScreen must be closed by the user before UC takes ownership.
+
+Use private inherited pipes with validated commands/events, bounded chunked file imports, retained busy-work guards, explicit saved-Live activation and independent worker restart. Autosaved cooler edits/imports flush before leaving or quitting. Bundle the pinned engine, reviewed ffmpeg and existing setup/reconnect scripts; apply a UI content security policy.
+
+Fix Monitor Toggle discovery for PowerShell zero/one/many display output. Add safe AI Usage reader/provider status messages without weakening freshness/account gates. Both user-reported function failures remain open for verification. UI polish and physical cooler/migration acceptance are pending; sleep testing remains deferred.
+
+Correct native async test waits to explicitly poll resolved IPC conditions. Native tests cover real host/worker IPC and iframe routing, imports, crash isolation, busy refusal and clean shutdown using fake devices only.
+
 ## 0.1.5 — 2026-11-01
 
 The virtual dock follows completed physical profile/page navigation, including Folder and Back. Follow physical page is enabled by default for the user's requested behavior and can be turned off. Observational page following never sends navigation back to the dock and waits for pending edits/imports/saves; manual inspection and disconnected states do not cause polling to pull the editor back. The preference persists in app settings. Physical page status is published after full-page transfer succeeds.

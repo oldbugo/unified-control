@@ -342,23 +342,29 @@ fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
             "Work is still running; the app has stayed open.",
         ));
     }
+    app.state::<Core>().0.prepare_cooler_exit()?;
     let Some((request, background)) = PENDING_EXIT.lock().unwrap().take() else {
+        app.state::<Core>().0.cancel_cooler_exit();
         return Ok(());
     };
     // Prepare any fallible relaunch first. Its helper waits for this process to
     // exit; a spawn failure must leave the current device runtime usable.
-    match request {
-        crate::quit_cmd::Request::Quit => {}
+    let helper = match request {
+        crate::quit_cmd::Request::Quit => Ok(()),
         crate::quit_cmd::Request::Restart => {
             crate::relaunch::spawn_helper(std::process::id(), background, None)
-                .map_err(|e| CoreError::new(e.to_string()))?
+                .map_err(|e| CoreError::new(e.to_string()))
         }
         crate::quit_cmd::Request::Update(path) => crate::relaunch::spawn_helper(
             std::process::id(),
             true,
             Some(std::path::Path::new(&path)),
         )
-        .map_err(|e| CoreError::new(e.to_string()))?,
+        .map_err(|e| CoreError::new(e.to_string())),
+    };
+    if let Err(error) = helper {
+        app.state::<Core>().0.cancel_cooler_exit();
+        return Err(error);
     }
     // Stop admission and wait for in-flight action recovery before arming the
     // exit watchdog. This function is always called off the window event thread.

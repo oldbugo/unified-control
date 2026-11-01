@@ -7,6 +7,21 @@ const os=require('node:os');
 const net=require('node:net');
 const assert=require('node:assert/strict');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+// Await the predicate's resolved value in Node. Some WebView/Playwright builds
+// treat its Promise as truthy inside waitForFunction and do not poll false results.
+async function waitForAsync(page,predicate,arg,timeoutMs=30000){
+  const deadline=Date.now()+timeoutMs;
+  const timeout=()=>new Error(`Async native condition did not become true within ${timeoutMs}ms: ${predicate.toString().slice(0,180)}`);
+  while(Date.now()<deadline){
+    let timer;
+    try{
+      const matched=await Promise.race([page.evaluate(predicate,arg),new Promise((_,reject)=>{timer=setTimeout(()=>reject(timeout()),Math.max(1,deadline-Date.now()));})]);
+      if(matched)return;
+    }finally{clearTimeout(timer);}
+    await delay(Math.min(50,Math.max(0,deadline-Date.now())));
+  }
+  throw timeout();
+}
 async function run() {
   const exe=path.resolve(process.env.UC_TEST_EXE || '');
   if (!exe.toLowerCase().includes(`${path.sep}debug${path.sep}`) || path.basename(exe).toLowerCase()!=='unified-control.exe' || !fs.existsSync(exe)) {
@@ -47,7 +62,7 @@ async function run() {
     await page.locator('#face-text').fill('Native A');
     await page.locator('[data-edit-face="b"]').click();
     await page.locator('#face-text').fill('Native B');
-    await page.waitForFunction(async()=>{
+    await waitForAsync(page,async()=>{
       const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');
       return data.state.profiles[0].pages[0].keys[0].b.text==='Native B';
     });
@@ -58,25 +73,25 @@ async function run() {
     const picture=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=4;canvas.height=4;const context=canvas.getContext('2d');context.fillStyle='#5aa9ff';context.fillRect(0,0,4,4);return canvas.toDataURL('image/png').split(',')[1];});
     await page.locator('#face-kind').selectOption('picture');
     await page.locator('#face-picture').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(picture,'base64')});
-    await page.waitForFunction(async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return !!data.state.profiles[0].pages[0].keys[0].b.asset;});
+    await waitForAsync(page,async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return !!data.state.profiles[0].pages[0].keys[0].b.asset;});
     await page.locator('#action-kind').selectOption('hotkey');
     await page.locator('#action-value').fill('Ctrl + Shift + M');
     await page.locator('[data-key="1"]').click();
     await page.locator('#face-kind').selectOption('codex');
     await page.locator('#usage-view').selectOption('weekly-number');
-    await page.waitForFunction(async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return data.state.profiles[0].pages[0].keys[1].b.usageView==='weekly-number';});
+    await waitForAsync(page,async()=>{const data=await window.__TAURI_INTERNALS__.invoke('profiles_state');return data.state.profiles[0].pages[0].keys[1].b.usageView==='weekly-number';});
     await page.evaluate(async()=>{
       const invoke=window.__TAURI_INTERNALS__.invoke;
       await invoke('dock_test_studio',{running:true});
       await invoke('dock_configure',{patch:{enabled:true,brightness:42}});
     });
-    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='blocked';});
+    await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='blocked';});
     await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_test_studio',{running:false}));
-    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='connected'&&state.framesSent>=14;});
+    await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='connected'&&state.framesSent>=14;});
     const readerRunning=await page.evaluate(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.usageReaderRunning;});
     assert.equal(readerRunning,false,'fake app must never activate real account readers');
     await page.evaluate(async()=>{const invoke=window.__TAURI_INTERNALS__.invoke;for(const pressed of [true,true,false,true,false])await invoke('dock_test_button',{index:0,pressed});});
-    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.actions===2;});
+    await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.actions===2;});
     // Physical folder/Back updates the editor after the fake full-page transfer.
     // Observing the device must not save the navigation back into profile files.
     await page.locator('[data-do="add-page"]').click();
@@ -86,23 +101,23 @@ async function run() {
     await page.locator('[data-key="12"]').click();
     await page.locator('#action-kind').selectOption('folder');
     await page.locator('#action-value').selectOption('1');
-    await page.waitForFunction(async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.profiles[0].pages.length===2&&state.profiles[0].pages[0].keys[12].value===state.profiles[0].pages[1].id&&state.profiles[0].pages[1].keys[0].action==='back';});
+    await waitForAsync(page,async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.profiles[0].pages.length===2&&state.profiles[0].pages[0].keys[12].value===state.profiles[0].pages[1].id&&state.profiles[0].pages[1].keys[0].action==='back';});
     assert.equal(await page.locator('#follow-physical-page').isChecked(),true);
     const mainPage=await page.evaluate(async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.currentPage;});
-    await page.waitForFunction(async id=>(await window.__TAURI_INTERNALS__.invoke('dock_state')).currentPage===id,mainPage);
+    await waitForAsync(page,async id=>(await window.__TAURI_INTERNALS__.invoke('dock_state')).currentPage===id,mainPage);
     await page.evaluate(async()=>{for(const pressed of [true,false])await window.__TAURI_INTERNALS__.invoke('dock_test_button',{index:12,pressed});});
     await page.waitForFunction(()=>document.querySelector('[data-dock-page="1"]')?.getAttribute('aria-pressed')==='true');
     assert.equal(await page.evaluate(async()=>(await window.__TAURI_INTERNALS__.invoke('profiles_state')).state.currentPage),mainPage,'following physical navigation must not save it back');
     await page.evaluate(async()=>{for(const pressed of [true,false])await window.__TAURI_INTERNALS__.invoke('dock_test_button',{index:0,pressed});});
     await page.waitForFunction(()=>document.querySelector('[data-dock-page="0"]')?.getAttribute('aria-pressed')==='true');
     await page.locator('#follow-physical-page').uncheck();
-    await page.waitForFunction(async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===false);
+    await waitForAsync(page,async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===false);
     await page.reload();
     await page.waitForFunction(()=>document.getElementById('follow-physical-page')?.checked===false);
     await page.locator('#follow-physical-page').check();
-    await page.waitForFunction(async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===true);
+    await waitForAsync(page,async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===true);
     await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}}));
-    await page.waitForFunction(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
+    await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
     await page.locator('[data-key="0"]').click();
     const index=JSON.parse(fs.readFileSync(path.join(home,'profiles','index.json'),'utf8'));
     const profile=JSON.parse(fs.readFileSync(path.join(home,'profiles',`profile-${index.currentProfile}.json`),'utf8'));

@@ -27,3 +27,5 @@ if (-not (Test-Path -LiteralPath $nodeLicense)) { throw 'Node license notices ar
 Copy-Item -LiteralPath $nodeSource -Destination (Join-Path $runtimeRoot 'node/node.exe') -Force
 Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $runtimeRoot 'node/LICENSE') -Force
 Write-Output 'Staged Node, usage reader and third-party notices. No app started.'
+& (Join-Path $PSScriptRoot 'prepare-cooler.ps1')
+if ($LASTEXITCODE -ne 0) {throw 'Cooler engine staging failed'}

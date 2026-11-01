@@ -1,0 +1,39 @@
+// The parent is the only native IPC caller. The embedded UI receives only this
+// explicit CoolerScreen command set and event set, never a generic host invoke.
+export const COOLER_COMMANDS=new Set(`app_state settings_update activity job_get job_cancel set_focus originals_list import_begin import_append import_finish import_abort import_bytes import_path missing_delete original_get original_patch original_delete original_reveal estimate loop_search loop_point version_create version_patch version_delete version_send version_remake version_retry sources_list browse_set link_add source_set source_items source_add theme_get theme_set theme_standard theme_preview theme_asset_add theme_set_base calibration_set fit_cal theme_use theme_apply gallery_set_dir gallery_open gallery_sync device_state device_check device_presence device_restart device_setup device_restore device_reconnect ext_sensor_status lyrics_status game_fps_status lyrics_offset_set weather_search weather_set_place screen_preview screen_preview_end twin_watch live_set live_state autostart_set`.split(' '));
+const EVENTS=new Set(['cs:job','cs:library','cs:device','cs:app']);
+const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export class CoolerPanel{
+  constructor(invoke,native){
+    this.invoke=invoke;this.native=native;this.state={enabled:false,state:'disabled',message:'Cooler screen is disabled.'};this.frame=null;this.container=null;this.polling=false;this.configuring=false;this.epoch=0;this.pendingLeave=new Map();this.nextLeave=0;
+    window.addEventListener('message',e=>this.receive(e));
+    this.timer=setInterval(()=>this.refresh(),1500);
+  }
+  markup(){return `<div class="page-heading"><div><span class="eyebrow">Lovingcool SC70</span><h1>Cooler screen</h1><p>Your CoolerScreen themes and live controls.</p></div></div><section class="device-header"><div><strong>Cooler screen</strong><p id="cooler-message">${escape(this.state.message)}</p></div><label class="dock-switch">Enabled <input id="cooler-enabled" type="checkbox" role="switch" ${this.state.enabled?'checked':''} ${this.native?'':'disabled'}></label><span id="cooler-state" class="chip">${escape(this.state.state)}</span></section><p class="hint" id="cooler-help">Close the separate CoolerScreen app before enabling this device. Your dock stays independent.</p><div id="cooler-content"></div>`;}
+  mount(container){this.container=container;container.querySelector('#cooler-enabled').addEventListener('change',e=>this.configure(e.target.checked));this.paint();this.refresh();}
+  active(container){return this.container===container&&!!container.querySelector('#cooler-content');}
+  async refresh(){if(!this.native||this.polling||this.configuring)return;this.polling=true;const epoch=this.epoch;try{const state=await this.invoke('cooler_state');if(epoch===this.epoch){this.state=state;this.paint();}}catch{}finally{this.polling=false;}}
+  async configure(enabled){if(this.configuring)return;this.configuring=true;this.epoch++;const control=this.container?.querySelector('#cooler-enabled');if(control)control.disabled=true;try{if(!enabled)await this.prepareLeave();this.state=await this.invoke('cooler_configure',{enabled});this.paint();}catch(error){const message=this.container?.querySelector('#cooler-message');if(message)message.textContent=typeof error==='string'?error:error?.message||error?.error||'The cooler setting could not be changed.';}finally{this.configuring=false;if(control){control.disabled=!this.native;control.checked=!!this.state.enabled;}}}
+  paint(){
+    if(!this.container?.isConnected||!this.container.querySelector('#cooler-content'))return;
+    const message=this.container.querySelector('#cooler-message'),status=this.container.querySelector('#cooler-state'),control=this.container.querySelector('#cooler-enabled'),content=this.container.querySelector('#cooler-content');
+    message.textContent=this.state.message||'';status.textContent=this.state.state||'disabled';control.checked=!!this.state.enabled;
+    const ready=this.state.enabled&&['running','ready','connected'].includes(this.state.state);
+    if(ready&&!this.frame){this.frame=document.createElement('iframe');this.frame.id='cooler-frame';this.frame.title='CoolerScreen controls';this.frame.src='cooler/index.html';this.frame.style.cssText='width:100%;height:max(640px,calc(100vh - 270px));border:1px solid var(--border);border-radius:8px;background:var(--bg)';content.replaceChildren(this.frame);}
+    else if(!ready&&(!this.frame||!this.state.enabled)){this.frame=null;content.innerHTML=`<section class="empty-state"><h2>${this.native?'CoolerScreen controls':'CoolerScreen integration'}</h2><p>${this.native?'Enable the cooler to open its themes, library and live controls here.':'The integrated controls are available in the Windows app.'}</p></section>`;}
+  }
+  send(message){this.frame?.contentWindow?.postMessage({channel:'uc-cooler-v1',...message},location.origin);}
+  event(data){if(data&&EVENTS.has(data.event))this.send({type:'event',event:data.event,payload:data.payload});}
+  async receive(e){
+    if(e.origin!==location.origin||e.source!==this.frame?.contentWindow||e.data?.channel!=='uc-cooler-v1')return;
+    const m=e.data;
+    if(m.type==='leave-ready'){const p=this.pendingLeave.get(m.id);if(p){this.pendingLeave.delete(m.id);clearTimeout(p.timer);m.error?p.reject(new Error(m.error)):p.resolve();}return;}
+    if(m.type!=='call'||!Number.isSafeInteger(m.id)||m.id<1)return;
+    if(!COOLER_COMMANDS.has(m.command)||!m.args||Array.isArray(m.args)||typeof m.args!=='object'){this.send({type:'result',id:m.id,error:'Unsupported cooler command.'});return;}
+    const source=e.source;
+    try{const result=await this.invoke('cooler_call',{command:m.command,args:m.args});if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,result});}
+    catch(error){if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,error:typeof error==='string'?{error}:error&&typeof error==='object'?{error:error.error||error.message||'CoolerScreen request failed.',code:error.code,status:error.status,failedUsb:!!error.failedUsb}:{error:'CoolerScreen request failed.'}});}
+  }
+  prepareLeave(){if(!this.frame)return Promise.resolve();return new Promise((resolve,reject)=>{const id=++this.nextLeave;const timer=setTimeout(()=>{this.pendingLeave.delete(id);reject(new Error('Cooler edits have not finished saving. Keep this page open and retry.'));},120000);this.pendingLeave.set(id,{resolve,reject,timer});this.send({type:'prepare-leave',id});});}
+  unmount(){this.frame=null;this.container=null;}
+}

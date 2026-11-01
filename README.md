@@ -1,8 +1,8 @@
 # Unified Control
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
-the Ulanzi Dial. Private. Dock MVP preview with native profiles, rendering, actions and explicitly enabled dock control.
-Hardware acceptance is pending. Rules for working on it: `CLAUDE.md`.
+the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
+Physical cooler/migration acceptance and remaining dock checks are pending. Rules for working on it: `CLAUDE.md`.
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
@@ -12,6 +12,19 @@ Build the combined interface from the start, with Home, Cooler screen, Stream do
 Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,
 then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
 until its integration is built and tested.
+
+User direction on 2026-11-01: integrate CoolerScreen now, then refine the UI. Preview 0.2.0 reuses the existing cooler
+interface and engine in a supervised worker. First enable copies settings/library/gallery into UC, preserving the original
+fallback; close the separate CoolerScreen app yourself before enabling. No uninstall or automatic device enablement.
+[Architecture, migration and limits](docs/device-app/architecture.md). AI Usage and Monitor Toggle are implemented but
+reported nonworking; [functional follow-ups](docs/function-failures.md) distinguish the parser fix from unverified source
+and physical behavior. Sleep/resume stays deferred.
+
+Software checked for 0.2.0: 103 core tests (one helper ignored), five host tests, three cooler-worker tests, full headless
+interface and cooler bridge checks, plus quiet native fake IPC. The native integration verifies the embedded themes UI,
+chunked imports, busy-safe Quit, saved Live settings, cooler worker crash/restart while the dock stays connected and clean
+disable/Quit. Corrected native-profile polling replaces earlier async state waits that could return before their condition
+was true. Physical behavior and real user-data migration still require confirmation. UI polish follows integration.
 
 ## GitHub layout
 

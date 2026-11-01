@@ -14,6 +14,11 @@ pub struct Core(pub Arc<App>);
 pub struct TauriEvents(pub tauri::AppHandle);
 
 impl Events for TauriEvents {
+    fn cooler(&self, event: &str, payload: Value) {
+        let _ = self
+            .0
+            .emit("uc:cooler-event", json!({"event":event,"payload":payload}));
+    }
     fn job(&self, job: &Job) {
         let _ = self.0.emit("uc:job", job);
     }
@@ -30,6 +35,11 @@ impl Events for TauriEvents {
 pub struct EventRelay(pub std::sync::OnceLock<Arc<dyn Events>>);
 
 impl Events for EventRelay {
+    fn cooler(&self, event: &str, payload: Value) {
+        if let Some(e) = self.0.get() {
+            e.cooler(event, payload);
+        }
+    }
     fn job(&self, j: &Job) {
         if let Some(e) = self.0.get() {
             e.job(j)
@@ -145,6 +155,22 @@ pub async fn key_previews(
 #[tauri::command]
 pub async fn dock_state(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |app| Ok(app.dock_state())).await
+}
+#[tauri::command]
+pub async fn cooler_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| Ok(app.cooler_state())).await
+}
+#[tauri::command]
+pub async fn cooler_configure(core: State<'_, Core>, enabled: bool) -> Result<Value, CoreError> {
+    run(&core, move |app| app.cooler_configure(enabled)).await
+}
+#[tauri::command]
+pub async fn cooler_call(
+    core: State<'_, Core>,
+    command: String,
+    args: Value,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| app.cooler_call(&command, args)).await
 }
 #[tauri::command]
 pub async fn dock_configure(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {

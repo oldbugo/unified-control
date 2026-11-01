@@ -4,8 +4,10 @@ import {EditorHistory} from './js/editor-history.js';
 import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
 import {KeyPreviewRenderer} from './js/key-preview.js';
 import {DevicePageFollower} from './js/device-page-follow.js';
+import {CoolerPanel} from './js/cooler-panel.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
+const coolerPanel=new CoolerPanel(invoke,!!T);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
 const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
@@ -154,10 +156,13 @@ function render() {
   document.querySelectorAll('.nav-item').forEach(b => {
     if (b.dataset.page===draft.current) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current');
   });
+  if(draft.current==='cooler'&&coolerPanel.active(pane)){coolerPanel.refresh();showStorage();return;}
+  coolerPanel.unmount();
   let html = '';
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
-  else if (['cooler','dial'].includes(draft.current)) html = plannedPage(draft.current);
-  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. CoolerScreen joins this frame after dock acceptance, followed by the dial.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Ulanzi D200H · disabled until enabled'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Disabled'):'Preview')}${deviceCard('cooler','Cooler screen','Lovingcool SC70 · engine integration next','Planned')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
+  else if (draft.current==='cooler') html=coolerPanel.markup();
+  else if (draft.current==='dial') html = plannedPage(draft.current);
+  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. Control the dock and cooler from their own pages. Dial support follows later.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Ulanzi D200H · disabled until enabled'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Disabled'):'Preview')}${deviceCard('cooler','Cooler screen',coolerPanel.state.message||'Lovingcool SC70 · enable from its page',coolerPanel.state.state||'Disabled')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
   else if (draft.current === 'general') html = `
     <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
     <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
@@ -165,12 +170,21 @@ function render() {
     <div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div>
     <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages are saved in the app data folder, with a startup backup.':'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div>
     <div class="setting-row"><div><strong>Background behavior</strong><p>The visible tray keeps enabled controls running. Quit waits for active work and stops them.</p></div></div></section>`;
-  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Dock preview release</h2><p>Configure key faces and actions, view usage allowances and manage your dock. Enable the dock separately. CoolerScreen and dial integration follow dock acceptance.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
-  pane.innerHTML = html; showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
+  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Combined device preview</h2><p>Configure key faces and actions, view usage allowances and manage your dock. Enable the dock separately. CoolerScreen controls are integrated on their own page; dial support follows later.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
+  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
 }
 async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
 async function updateMonitors(){const container=document.getElementById('monitor-targets');if(!container)return;if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}const edited=activeKey();try{const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';}catch{container.textContent='Monitor information is unavailable.';}}
-function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));}
+function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();}
+function updateUsageStatus(){
+  const selected=deviceStatus?.usageStatus?.providers?.filter(item=>item.selected)||[];
+  let note=document.getElementById('dock-usage-status');
+  if(!note&&document.getElementById('dock-message')){note=document.createElement('p');note.id='dock-usage-status';note.className='hint';note.setAttribute('role','status');document.querySelector('.dock-controls').after(note);}
+  if(!note)return;note.hidden=!selected.length;
+  const lines=selected.map(item=>`${item.provider==='claude'?'Claude':'Codex'}: ${item.message||item.status}`);
+  if(selected.length&&deviceStatus.usageStatus.reader?.code!=='ready')lines.unshift(deviceStatus.usageStatus.reader?.message||'AI usage reader is unavailable.');
+  const text=lines.join(' ');if(note.textContent!==text)note.textContent=text;
+}
 function followDeliveredPage(){
   const target=pageFollower.take(draft,{enabled:followPhysicalPage,ready:profilesReady&&exitGuardReady&&followPreferenceReady,
     busy:writer.running||!!writer.pending||writer.failed||nativeSaving||pendingMutations.size>0||!!(editGesture?.isConnected&&document.activeElement===editGesture),visible:draft.current==='dock'});
@@ -234,8 +248,9 @@ async function loadNativeProfiles() {
   loadRunning=false;
   render();followDeliveredPage();
 }
-function navigate(id) {
+async function navigate(id) {
   if (!Object.hasOwn(NAV,id)) return;
+  if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave();}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
   hasLocalPage = true; draft.current = id;editGesture=null;
   // Sidebar navigation changes only the app section. Saving profiles here could
   // send an editor-inspected page back to a physically navigated dock.
@@ -337,6 +352,7 @@ if (T) {
   loadNativeProfiles();
   invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
     document.querySelector('.app').inert=true;
+    try{await coolerPanel.prepareLeave();}catch(error){document.querySelector('.app').inert=false;previewNote=error.message;showStorage();await invoke('editor_quit_ready',{saved:false}).catch(()=>{});return;}
     await Promise.all([...pendingMutations]);
     await followPreferenceWrite;
     const saved=await writer.flush();
@@ -349,6 +365,7 @@ if (T) {
   })}).then(()=>invoke('editor_session_ready',{ready:true})).then(()=>{exitGuardReady=true;guardError='';render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
   window.addEventListener('beforeunload',()=>invoke('editor_session_ready',{ready:false}).catch(()=>{}));
 }
+if(T)invoke('plugin:event|listen',{event:'uc:cooler-event',target:{kind:'Any'},handler:T.transformCallback(e=>coolerPanel.event(e.payload))}).catch(()=>{});
 const initialPreferenceEpoch=followPreferenceEpoch,initialDockTicket=++dockRequestTicket,initialIntent=editorIntentEpoch;
 invoke('app_state').then(s => {
   state=s;
