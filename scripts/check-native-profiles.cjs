@@ -56,6 +56,8 @@ async function run() {
     if(!page) throw new Error('Quiet UC WebView was not found.');
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
+    assert.deepEqual(await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('monitor_list')),
+      [{key:'fake:display-1',label:'Simulated display'}], 'monitor discovery must be admitted through native IPC');
     await page.locator('[data-page="dock"]').click();
     await page.locator('[data-key="0"]').click();
     await page.locator('#face-kind').selectOption('text');
