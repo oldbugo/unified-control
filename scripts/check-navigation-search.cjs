@@ -61,6 +61,17 @@ async function main(){
     await compact.keyboard.press('Escape');await compact.keyboard.press('Escape');
     assert.equal(await search.isVisible(),false);assert.equal(await toggle.getAttribute('aria-expanded'),'false');
     assert.equal(await toggle.evaluate(el=>el===document.activeElement),true);
+    await toggle.click();await search.fill('about');await toggle.click();
+    assert.equal(await search.isVisible(),false);
+    assert.equal(await compact.locator('.nav-item:not([hidden])').count(),6,'closing compact search must restore every page');
+    assert.equal(await compact.locator('#page-search').inputValue(),'');
+    await compact.setViewportSize({width:1440,height:900});
+    await search.fill('mcp');await compact.setViewportSize({width:600,height:700});
+    await compact.waitForFunction(()=>document.querySelector('.nav').classList.contains('search-open'));
+    assert.equal(await search.isVisible(),true,'an active filter remains visible on a compact transition');
+    assert.equal(await search.inputValue(),'mcp');
+    assert.equal(await compact.locator('.nav-item:not([hidden])').getAttribute('data-page'),'general');
+    await toggle.click();assert.equal(await compact.locator('.nav-item:not([hidden])').count(),6);
     assert.ok(await compact.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.deepEqual(compactErrors,[]);
     console.log('PASS: page/alias/token search, no-save/no-navigation filtering, keyboard activation/tab/Escape, empty and escaped queries, editor isolation, three widths and compact search access. Browser fixtures only.');

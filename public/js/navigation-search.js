@@ -32,7 +32,13 @@ export function installNavigationSearch(nav){
   });
   toggle.addEventListener('click',()=>{
     const open=nav.classList.toggle('search-open');toggle.setAttribute('aria-expanded',String(open));
-    if(open)input.focus();else toggle.focus();
+    if(open)input.focus();else{input.value='';apply();toggle.focus();}
+  });
+  const compact=matchMedia('(max-width: 650px)');
+  compact.addEventListener('change',()=>{
+    if(compact.matches&&input.value.trim()){
+      nav.classList.add('search-open');toggle.setAttribute('aria-expanded','true');
+    }
   });
   apply();
 }
