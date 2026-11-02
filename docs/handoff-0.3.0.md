@@ -2,6 +2,11 @@
 
 Checkpoint: 2026-11-02 (Australia/Sydney). Feature development is stood down at 0.3.0. The installed app stays running.
 
+**Superseded checkpoint:** Work resumed later on 2026-11-02. Actual Codex model-client MCP read/preview/apply/undo checks
+passed with the temporary inactive-profile edit restored. The user approved installation of0.3.1/sourcee23be94;
+startup/version/new PID, proxy hash and dock reconnection were verified, and both usage providers reached verified status.
+Use current README/acceptance/function-failures/backlog and live MCP state. The0.3.0 details below remain historical evidence.
+
 ## Start here
 
 Open a new local Codex session in `C:/Users/pc/Documents/UnifiedControl`, rather than the separate Ulanzi plugins folder.

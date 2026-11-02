@@ -30,9 +30,14 @@ bundled reader passes its account-inactive health/render/shutdown smoke check fr
 fixture reproduces the failure when the script path has the canonical Windows `\\?\` prefix: Node exits before replying.
 The prepared 0.3.1 change normalizes trusted disk/UNC paths at the Node process boundary, preserving UTF-16 and other
 device namespaces. The same canonical-path regression fails before the fix and passes afterward without account access.
-This fixes a reproducible launch defect; installation, autonomous account refresh and physical usage acceptance are still pending.
+This fixes a reproducible launch defect; sustained account refresh and physical usage acceptance are checked separately.
 
-0.3.1 is built and staged as `dist/UnifiedControl_0.3.1_x64-setup.exe` (not installed). Executable version0.3.1 and embedded
+0.3.1 was installed after explicit approval using `tools/install-when-idle.ps1`. Startup/new PID, MCP appVersion0.3.1,
+dock reconnection and the dedicated request proxy SHA-256 matching the built executable were verified. Codex immediately
+reported verified usage; Claude changed from stale to verified within the first minute, without an agent-issued refresh
+or ordinary model request. The inactive profile still matched all fourteen baseline keys after the update.
+
+Installer: `dist/UnifiedControl_0.3.1_x64-setup.exe`. Executable version0.3.1 and embedded
 sourcee23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.
 All120 core/11 host tests, touched-file rustfmt, official-SDK MCP fixtures and the staged resource inactive-reader
 health/render/shutdown check pass. The resource smoke check uses the combined packaging layout: runtime Node/reader plus
