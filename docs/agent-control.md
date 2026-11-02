@@ -97,8 +97,9 @@ installed bundled Node/production adapter connected through the official SDK, li
 correctly rejected layout access with `agent-disabled` while the opt-in was off. No GUI automation was used for this check.
 
 The `unified-control` connection is registered for Codex, Claude Code (including the Desktop Code tab) and Claude Desktop
-chat. Existing configuration is preserved; the Claude Code file has a local backup. Clients still need their configuration
-reloaded/fresh sessions, and the user was asked to enable General > Local agent access. Actual client-model tool use is not
+chat. Existing configuration is preserved; the Claude Code file has a local backup. The user enabled Local agent access;
+the installed production MCP connection then returned access enabled, seven tools, a readable 14-key layout and dock Connected.
+This was read-only. Clients still need their configuration reloaded/fresh sessions; actual client-model tool use is not
 claimed verified. No installed-user layout was modified through MCP during acceptance.
 
 Installer SHA-256: `278B4392AF581077D2EFCE4F9404730F71F39B9F247F9DB818E0C6F42928297F`.
