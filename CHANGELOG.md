@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — prepared 2026-11-02
+
+Fix AI Usage reader startup when Windows supplies canonical extended resource paths. Normalize trusted disk/UNC executable,
+script and usage-home paths before starting Node, preserving Unicode and other device namespaces. The canonical-path
+fixture reproduces `reader-unavailable` before the fix and passes afterward without account access. Live account refresh
+and physical usage acceptance remain pending; this build is not yet installed.
+
+Codex desktop MCP acceptance now covers actual model-driven status/layout/monitor reads, preview, inactive-profile
+apply/readback, stale revision refusal and undo. The temporary face was restored and active dock selection preserved.
+Claude model-client acceptance remains open.
+
 ## 0.2.1 — 2026-11-01
 
 Add the requested background Connection diagnostics in UC, on with a saved opt-out. Read-only worker health runs every ten seconds; passive Windows USB status every thirty seconds. State transitions and minute snapshots go to bounded local rotating logs. Worker timeouts, USB write failures, matched descriptor failures and intentional holds remain distinct; raw messages, device/account IDs and media paths are excluded. Logging continues with the editor closed and stops when UC exits. No automatic USB resets or elevation.

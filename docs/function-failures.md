@@ -25,6 +25,13 @@ The action also needs an explicit selected target. An empty target list is rejec
 
 ## AI Usage
 
+2026-11-02 diagnosis: live MCP reports `reader-unavailable` with both selected providers `reader-inactive`. The installed
+bundled reader passes its account-inactive health/render/shutdown smoke check from an ordinary filesystem path. A Rust
+fixture reproduces the failure when the script path has the canonical Windows `\\?\` prefix: Node exits before replying.
+The prepared 0.3.1 change normalizes trusted disk/UNC paths at the Node process boundary, preserving UTF-16 and other
+device namespaces. The same canonical-path regression fails before the fix and passes afterward without account access.
+This fixes a reproducible launch defect; installation, autonomous account refresh and physical usage acceptance are still pending.
+
 The managed reader and all presentations exist. Runtime activation/render errors were previously swallowed while unknown faces were correctly rendered. `RuntimeResources::usage_status()` now exposes only fixed reader/provider codes and messages, including missing bundled runtime/reader, start failure, timeout, stale observations and unavailable/unverified data. No account IDs, quota values, filesystem paths or raw helper/OS messages are returned. Reader code transitions are logged without payloads. The host can add this value to diagnostics state.
 
 Unknown/stale/error/inactive snapshots now retain distinct fixed messages instead of every reason becoming generic unavailable. Untrusted helper text is still discarded. Freshness, account provenance, reset expiry, receipt/render/delivery gates and unknown physical fallback remain unchanged. Missing-resource and stale/unverified regressions verify useful reasons without starting a reader or allowing numerical gauges. These diagnostics do not fix an absent fresh Claude Desktop source or establish the user's source/helper failure; physical/account acceptance remains pending.

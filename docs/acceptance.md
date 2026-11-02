@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-02. Installed/running version: 0.3.0 (`0909429`), new startup/PID verified after cooperative update. User confirms Monitor Toggle works after 0.2.3. The user enabled MCP access; a read-only production MCP check returns seven tools, a readable 14-key layout and dock Connected. Codex and both Claude configurations are registered; client reload/actual client-model use remain pending. Remaining dock tests stay open. Cooler engine/interface are integrated in preview; current cooler cannot enumerate, so physical acceptance has not passed. Real-data import/content continuity remains unverified. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
+Updated 2026-11-02. Installed/running version: 0.3.0 (`0909429`), new startup/PID verified after cooperative update. User confirms Monitor Toggle works after 0.2.3. The user enabled MCP access; Codex model-client read/preview/apply/undo acceptance now passes (details below). Claude model-client acceptance remains open. Remaining dock tests stay open. Cooler engine/interface are integrated in preview; physical acceptance and real-data import/content continuity remain unverified. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -14,7 +14,7 @@ Updated 2026-11-02. Installed/running version: 0.3.0 (`0909429`), new startup/PI
 | Profiles, autosave and restart persistence | User confirmed on 0.1.4: profile, Test page and assignments remained after tray Quit/Start-menu reopen, and UC reconnected. Automated IPC/storage/quit tests also pass. |
 | Usage and account states | Codex idle source refresh verified; source freshness/unknown/account gates tested. Claude fresh-source/account-panel comparison and account-switch/logout acceptance remain pending. |
 | Reported AI Usage and Monitor Toggle failures | Monitor Toggle's installed-path failure is fixed in 0.2.3 and user-confirmed working. AI Usage remains unresolved; installed reader status is `reader-unavailable`. [Functional follow-ups](function-failures.md). |
-| MCP status and layout configuration | 0.3.0 software/native fake apply/undo/concurrency/import/quit checks pass. Installed production MCP denied layout access while off; after user opt-in, it reads the actual 14-key layout and dock Connected. Client configurations registered; client-session acceptance pending. No user configuration changed during the read-only check. [Contract and evidence](agent-control.md). |
+| MCP status and layout configuration | Codex desktop model-client acceptance passed on 2026-11-02: status, scoped read, monitor discovery, preview, temporary inactive-profile apply/readback, stale-revision refusal and undo. All fourteen inactive-profile keys matched the baseline afterward; active Everyday selection and dock connection were preserved. Earlier opt-out and quiet native concurrency/import/Quit tests also pass. Claude client acceptance remains open. [Contract and evidence](agent-control.md). |
 | Sleep/resume | Deferred at the user's request; cannot do this now. Remains pending and will be revisited later. |
 | Editor usability/scaling | Browser checks at three widths pass; full user review pending. Minor preview flicker tracked below. |
 

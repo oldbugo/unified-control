@@ -486,6 +486,32 @@ struct Process {
     #[cfg(windows)]
     job: OwnedJob,
 }
+fn node_filesystem_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        // Tauri resource paths can carry an extended Win32 prefix. Node's
+        // entrypoint resolution rejects that spelling before the reader starts.
+        // Convert only trusted disk/UNC filesystem paths at the process boundary;
+        // preserve UTF-16 and leave other device namespaces unchanged.
+        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if wide.starts_with(&[92, 92, 63, 92]) {
+            let disk = wide.len() >= 7
+                && ((65..=90).contains(&wide[4]) || (97..=122).contains(&wide[4]))
+                && wide[5] == 58
+                && wide[6] == 92;
+            let unc = matches!(wide.get(4..8), Some([85 | 117, 78 | 110, 67 | 99, 92]));
+            if disk {
+                return PathBuf::from(OsString::from_wide(&wide[4..]));
+            }
+            if unc {
+                return PathBuf::from(OsString::from_wide(&[&[92, 92][..], &wide[8..]].concat()));
+            }
+        }
+    }
+    path.to_path_buf()
+}
 impl Process {
     fn start(node: &Path, script: &Path, home: &Path) -> Result<Self> {
         if node.is_absolute() && !node.is_file() {
@@ -494,10 +520,10 @@ impl Process {
         if !script.is_file() {
             return Err(UsageError("The bundled usage reader is missing."));
         }
-        let mut command = Command::new(node);
+        let mut command = Command::new(node_filesystem_path(node));
         command
-            .arg(script)
-            .env("UC_USAGE_HOME", home.join("usage"))
+            .arg(node_filesystem_path(script))
+            .env("UC_USAGE_HOME", node_filesystem_path(&home.join("usage")))
             .env_remove("NODE_OPTIONS")
             .env_remove("NODE_PATH")
             .stdin(Stdio::piped())
@@ -770,6 +796,84 @@ mod tests {
         assert_eq!(
             s.snapshot(Provider::Codex).unwrap().status,
             UsageStatus::Inactive
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn canonical_resource_paths_start_fixture_without_account_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::env::var_os("UC_TEST_NODE")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("PATH").and_then(|value| {
+                    std::env::split_paths(&value)
+                        .map(|folder| folder.join("node.exe"))
+                        .find(|path| path.is_file())
+                })
+            })
+            .expect("Node test runtime is required")
+            .canonicalize()
+            .unwrap();
+        let service = UsageService::new(
+            node,
+            fixture("fixture.mjs").canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap(),
+        );
+        service
+            .set_active_providers(&[ActiveProvider {
+                provider: Provider::Codex,
+                token_history: false,
+            }])
+            .expect("Canonical bundled resource paths must start the account-free fixture");
+        assert!(service.check_health());
+        let result = service.render(Provider::Codex, "rings", 196, 196).unwrap();
+        assert!(valid_png(&result.png, 196, 196));
+        assert_eq!(result.snapshot.status, UsageStatus::Unavailable);
+        assert!(!result.snapshot.provenance_verified);
+        service.shutdown();
+        assert!(!service.is_running());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn node_paths_preserve_unicode_unc_and_non_filesystem_namespaces() {
+        for (input, expected) in [
+            (
+                r"\\?\C:\应用 folder\reader.mjs",
+                r"C:\应用 folder\reader.mjs",
+            ),
+            (
+                r"\\?\UNC\server\共享\reader.mjs",
+                r"\\server\共享\reader.mjs",
+            ),
+            (
+                r"\\?\unc\server\share\reader.mjs",
+                r"\\server\share\reader.mjs",
+            ),
+            (
+                r"C:\normal folder\reader.mjs",
+                r"C:\normal folder\reader.mjs",
+            ),
+            (
+                r"\\?\GLOBALROOT\Device\example",
+                r"\\?\GLOBALROOT\Device\example",
+            ),
+            (r"\\.\pipe\example", r"\\.\pipe\example"),
+        ] {
+            assert_eq!(
+                node_filesystem_path(Path::new(input)),
+                PathBuf::from(expected)
+            );
+        }
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let raw = [92, 92, 63, 92, 67, 58, 92, 0xd800];
+        let path = PathBuf::from(OsString::from_wide(&raw));
+        assert_eq!(
+            node_filesystem_path(&path)
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            raw[4..]
         );
     }
     #[test]
