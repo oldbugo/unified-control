@@ -15,7 +15,7 @@ async function deadline(promise,ms=4000){let timer;try{return await Promise.race
 (async()=>{
   const {Client}=await import(pathToFileURL(path.join(sdk,'index.mjs')).href);
   const {StdioClientTransport}=await import(pathToFileURL(path.join(sdk,'stdio.mjs')).href);
-  const {createProcessRequester,MAX_REQUEST_BYTES}=await import(pathToFileURL(adapter).href);
+  const {createProcessRequester,installedRequestExecutable,MAX_REQUEST_BYTES}=await import(pathToFileURL(adapter).href);
   const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'uc-agent-mcp-fixture-'));
   const fixture=path.join(scratch,'request-fixture.mjs');
   const entry=path.join(scratch,'entry.mjs');
@@ -88,6 +88,25 @@ async function deadline(promise,ms=4000){let timer;try{return await Promise.race
     const missing=createProcessRequester(path.join(scratch,'not-installed.exe'));
     response=await missing('get_status',{});assert.equal(response.error.code,'app_unavailable');assert.equal(JSON.stringify(response).includes(scratch),false);
     const oversized=await missing('get_status',{padding:'x'.repeat(MAX_REQUEST_BYTES)});assert.equal(oversized.error.code,'request_too_large');
+    // Exercise the actual production entry with a legacy-named executable
+    // present and the dedicated request-only proxy absent. The legacy fixture
+    // is a copy of Node: a regression would safely reject --agent-request and
+    // produce invalid_response, rather than ever opening a real UC GUI.
+    const installed=path.join(scratch,'installed'),installedAdapter=path.join(installed,'agent-mcp');
+    fs.mkdirSync(installedAdapter,{recursive:true});
+    fs.copyFileSync(process.execPath,path.join(installed,'UnifiedControl.exe'));
+    fs.copyFileSync(adapter,path.join(installedAdapter,'server.mjs'));
+    fs.symlinkSync(path.join(root,'companions/agent-mcp/node_modules'),path.join(installedAdapter,'node_modules'),'junction');
+    const installedEntry=path.join(installedAdapter,'server.mjs');
+    assert.equal(installedRequestExecutable(pathToFileURL(installedEntry).href),path.join(installed,'UC-AgentRequest-v1.exe'));
+    assert.equal(fs.existsSync(path.join(installed,'UnifiedControl.exe')),true);
+    assert.equal(fs.existsSync(path.join(installed,'UC-AgentRequest-v1.exe')),false);
+    const productionClient=new Client({name:'uc-production-missing-proxy-fixture',version:'1'});clients.push(productionClient);
+    const productionTransport=new StdioClientTransport({command:process.execPath,args:[installedEntry],stderr:'pipe'});productionTransport.stderr.resume();
+    await deadline(productionClient.connect(productionTransport));
+    const missingDedicated=await productionClient.callTool({name:'uc_get_status',arguments:{}});
+    assert.equal(missingDedicated.structuredContent.error.code,'app_unavailable','missing dedicated proxy must not fall back to the legacy main executable');
+    await deadline(productionClient.close());
     // An older MCP opening still discovers and calls the same tools. Raw wire
     // here intentionally verifies compatibility independently of SDK Client.
     const raw=spawn(process.execPath,[entry],{windowsHide:true,env:{...process.env,UC_MCP_FIXTURE_CALLS:calls},stdio:['pipe','pipe','pipe']});
@@ -108,6 +127,6 @@ async function deadline(promise,ms=4000){let timer;try{return await Promise.race
     assert.equal(await deadline(new Promise(resolve=>override.once('exit',resolve))),2);
     assert.equal(overrideOut,'','invalid production flags must not corrupt stdout or launch a proxy');
     await deadline(client.close());
-    console.log('PASS: official SDK stdio discovery/calls; legacy MCP initialize; seven allowlisted tools; typed validation; bounded native request/response; disabled/missing/error/timeout states; private stderr suppression; clean client exit. Fixtures only, no real UC or device access.');
+    console.log('PASS: official SDK stdio discovery/calls; legacy MCP initialize; seven allowlisted tools; typed validation; bounded native request/response; disabled/missing/error/timeout states; dedicated missing proxy never falls back to legacy main; private stderr suppression; clean client exit. Fixtures only, no real UC or device access.');
   }finally{for(const client of clients){try{await client.close();}catch{}}}
 })().catch(error=>{console.error(error);process.exitCode=1;});

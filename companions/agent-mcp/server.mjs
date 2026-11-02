@@ -9,6 +9,12 @@ import path from 'node:path';
 export const MAX_REQUEST_BYTES=1024*1024;
 export const MAX_RESPONSE_BYTES=12*1024*1024;
 const REQUEST_TIMEOUT_MS=15000;
+// This dedicated protocol-v1 filename is installed only by UC versions that
+// implement --agent-request. A packaged client may see an old virtualized main
+// executable: never fall back to UnifiedControl.exe, which could open its GUI.
+export function installedRequestExecutable(moduleUrl=import.meta.url){
+  return fileURLToPath(new URL('../UC-AgentRequest-v1.exe',moduleUrl));
+}
 const id=z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/);
 const revision=z.string().min(1).max(160);
 const face=z.strictObject({
@@ -109,7 +115,7 @@ export function startStdio({request}){
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   if(process.argv.length!==2){process.stderr.write('Unified Control MCP accepts no command-line overrides.\n');process.exitCode=2;}
   else{
-    const executable=fileURLToPath(new URL('../UnifiedControl.exe',import.meta.url));
+    const executable=installedRequestExecutable();
     const request=createProcessRequester(executable);
     const connection=startStdio({request});
     const close=()=>{void connection.close();};

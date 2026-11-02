@@ -18,7 +18,12 @@ command: <UC install folder>/node/node.exe
 args:    ["<UC install folder>/agent-mcp/server.mjs"]
 ```
 
-The installed adapter resolves `../UnifiedControl.exe` relative to `server.mjs`.
+The installed adapter resolves `../UC-AgentRequest-v1.exe` relative to
+`server.mjs`. UC's installer creates that dedicated proxy from the current
+reviewed binary. This filename exists only for versions that implement the
+request-only protocol. A packaged client can see an older virtualized
+`UnifiedControl.exe`; the adapter never launches or falls back to that main
+executable. A missing dedicated proxy returns a fixed unavailable error.
 There is no command, executable, environment or path override in the production
 entry. All requests go through the running app, which owns validation, durable
 saves, editor coordination, revisions, device queues and diagnostics.
