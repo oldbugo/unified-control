@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2 — prepared 2026-11-02
+
+Keep keyboard focus on the matching dock editor control after display/face/presentation/action changes. Tab continues
+through the editor. Undo keeps the selected display on the same stable profile/page, with a safe fallback if that page
+is removed. Explicit navigation and agent/editor coordination retain their existing behavior.
+
+Add bounded numerical navigation timings to dock state and enabled MCP status. Separate input preparation, face rendering
+(including usage-helper waits), delivery preparation and combined ZIP/transport work. Retain one latest completed
+host-receipt-to-delivery sample and navigation completion/abort counts. No scheduling change or physical speedup is claimed.
+
+Preserve guarded Codex error/stale states while continuing to hide all unverified numbers. Missing account identity still
+suppresses otherwise valid readings. Simulated regressions cover throttling, recovery and history/token clearing.
+
 ## 0.3.1 — 2026-11-02
 
 Fix AI Usage reader startup when Windows supplies canonical extended resource paths. Normalize trusted disk/UNC executable,

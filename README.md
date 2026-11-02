@@ -19,6 +19,9 @@ Next source checkpoint (not installed): bounded numerical navigation timing in d
 ACK-burst regressions, and preservation of guarded Codex error/stale reasons.123 core/11 host and62 reader tests pass.
 Scheduling is unchanged; physical latency and any speedup remain unmeasured.
 
+Prepared 0.3.2 also fixes keyboard focus loss during dock editing and keeps the selected display on Undo when its page
+survives. Headless keyboard/Tab/context checks cover three widths. [Navigation measurement guide](docs/navigation-timing.md).
+
 ## Current direction (2026-10-30)
 
 User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 checkpoint provides seven tools for status,
