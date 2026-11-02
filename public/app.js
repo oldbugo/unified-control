@@ -6,6 +6,7 @@ import {KeyPreviewRenderer} from './js/key-preview.js';
 import {DevicePageFollower} from './js/device-page-follow.js';
 import {CoolerPanel} from './js/cooler-panel.js';
 import {AgentEditorLease} from './js/agent-editor.js';
+import {installNavigationSearch} from './js/navigation-search.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const coolerPanel=new CoolerPanel(invoke,!!T,()=>updateHomeDeviceStatus());
@@ -484,3 +485,4 @@ setInterval(() => {
   pollDockState();
   if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>['clock','date','cpu','gpu','ram','claude','codex','reset','trend'].includes(k[previewFace].kind))) updateNativePreviews();
 },1000);
+installNavigationSearch(document.querySelector('.nav'));

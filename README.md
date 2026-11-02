@@ -7,6 +7,9 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Prepared0.3.4 adds the planned sidebar page search, including related terms, keyboard activation, Escape to clear and
+compact-sidebar access. Filtering does not change settings or layouts. This build is not yet installed.
+
 Installed0.3.3/source da70551 fixes stale Home device cards and separates the cooler engine from its last connection report. Enabled MCP
 status gains a strict cached-health summary with separate worker/USB timestamps. 129 core/11 host tests, headless status
 and interface suites, editor leases and quiet native dock/MCP/cooler checks pass. Startup/new PID, MCP version, packaged

@@ -51,7 +51,8 @@ async function run(){
     async function call(name,args={},target=client){return (await target.callTool({name:`uc_${name}`,arguments:args})).structuredContent;}
     const off=await call('get_status');assert.equal(off.ok,true);assert.equal(off.result.agentAccess,false);assert.equal(off.result.profiles,undefined);assert.equal(off.result.dock,undefined);assert.equal(off.result.cooler,undefined);
     assert.equal((await call('get_layout')).error.code,'agent-disabled');
-    await page.locator('[data-page="general"]').click();await page.locator('#agent-access').check();
+    await page.locator('#page-search').fill('MCP');await page.locator('#page-search').press('Enter');await page.locator('#agent-access').check();
+    await page.locator('#page-search').press('Escape');
     await wait(async()=>(await invoke('app_state')).agentAccess===true,'General access opt-in persisted');
     const status=await call('get_status');assert.equal(status.result.agentAccess,true);assert.equal(status.result.capabilities.physicalActions,false);
     const numerical=value=>value===null||typeof value==='number'||(value&&typeof value==='object'&&!Array.isArray(value)&&Object.values(value).every(numerical));

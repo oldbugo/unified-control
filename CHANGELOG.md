@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4 — prepared 2026-11-02
+
+Add the planned sidebar page search. Match page names and related terms such as usage, themes and MCP. Filtering does not
+save or navigate; Enter opens the first result through the existing guarded navigation path. Escape clears the query.
+Keyboard focus skips hidden results. Compact sidebars expose a search button and can expand/collapse without losing access.
+
 ## 0.3.3 — 2026-11-02
 
 Refresh Home device cards in place when accepted status polls arrive, preserving keyboard focus. Distinguish the cooler
