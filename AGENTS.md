@@ -13,7 +13,7 @@ Start with its advertised `uc_get_status` and `uc_get_layout` tools. Use MCP for
 computer use for visual review or a capability gap. Do not claim a tool connection that is not exposed in the current session.
 If the tools are absent, check the registered connection and reload MCP/start a fresh client session as needed.
 
-UC must remain running in its visible tray. Installed0.3.2/source29414fb includes navigation timing and editor focus fixes.
+UC must remain running in its visible tray. Installed0.3.3/source da70551 includes live Home status and cached cooler health.
 Local agent access was enabled by the user and actual Codex model-client read/configuration/undo access was
 verified. Read current state rather than asking the user to enable it again without evidence. Do not start the installed GUI
 from a packaged shell: it can see a stale main executable. The bundled MCP adapter uses the dedicated request-only proxy.

@@ -12,6 +12,19 @@ User says the screen USB cable is not accessible now. Physical recovery is defer
 
 ## Local diagnostics
 
+Installed0.3.3 distinguishes the engine process from cached connection checks on Home and the cooler page. Accepted polls
+update Home text in place. Read failures show unavailable; missing/disabled checks show unknown/off. Worker samples older
+than60seconds and Windows USB evidence older than90seconds are labelled out of date. The text identifies a last report,
+not a guarantee of current pixels. Windows USB samples have their own `pnpSampledAt` timestamp.
+
+Enabled MCP status exposes the finite cached summary as `cooler.lastHealthSample`; reads do not run a worker RPC, enumerate
+USB, write diagnostic samples or request recovery. Current worker state and the older health sample remain separate.
+
+Live MCP verification after installation: worker running/ready, Live disconnected with descriptor_failure; Windows USB
+available, simulatedfalse, normalNodes0, problemCodes[43], exactMatchedDescriptorCount1. Worker/USB timestamps were distinct
+and recent. This confirms the existing enumeration incident remains; it does not identify the initiating cause or establish
+physical recovery. No reset, reboot or sleep was part of this check.
+
 Connection diagnostics is visible on the cooler page, enabled for the user's explicit request and saved as cooler.diagnostics. Turning it off stops sampling and disk writes, including discarding in-flight samples. UC closing to the tray keeps the watcher; Quit stops it.
 
 - Worker health every10seconds: current process generation/restart count, Live's typed connection state, retries, coarse connect/stream/hold/off stage, FPS and RX/status counters. This RPC opens no USB handle and sends no device command.

@@ -7,10 +7,18 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Installed0.3.3/source da70551 fixes stale Home device cards and separates the cooler engine from its last connection report. Enabled MCP
+status gains a strict cached-health summary with separate worker/USB timestamps. 129 core/11 host tests, headless status
+and interface suites, editor leases and quiet native dock/MCP/cooler checks pass. Startup/new PID, MCP version, packaged
+proxy identity, dock/provider recovery and unchanged active-page keys were verified. Cached health confirms the current
+cooler USB descriptor failure43 while its engine runs; no recovery is claimed.
+
 Installed 0.3.2/source29414fb keeps keyboard focus during dock editing and retains the selected display on Undo when its
 page survives. It includes bounded numerical navigation timings in MCP/dock status and guarded Codex error/stale reasons.
 The idle-safe update verified startup/new PID, MCP version, dock reconnection, both providers verified and an unchanged
-fourteen-key active page. [Navigation measurement guide](docs/navigation-timing.md). Physical timing/feel checks are pending.
+fourteen-key active page. The user reports three physical Test/Back cycles feel responsive; UC recorded six completed
+navigations and a latest host-receipt-to-transfer time of72.44ms. No speedup or physical pixel latency is claimed.
+[Navigation measurement guide](docs/navigation-timing.md).
 
 Version 0.3.1/sourcee23be94 fixed a reproduced AI Usage startup fault: Node rejects canonical Windows script paths.
 Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now passes, along with 120 core

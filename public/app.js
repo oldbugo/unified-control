@@ -8,7 +8,7 @@ import {CoolerPanel} from './js/cooler-panel.js';
 import {AgentEditorLease} from './js/agent-editor.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
-const coolerPanel=new CoolerPanel(invoke,!!T);
+const coolerPanel=new CoolerPanel(invoke,!!T,()=>updateHomeDeviceStatus());
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
 const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
@@ -56,7 +56,7 @@ const pendingMutations=new Set();
 const pictureEpoch=new WeakMap();
 let actionSearch='',deviceStatus=null;
 let followPhysicalPage=true,followPreferenceReady=!T,followPreferenceEpoch=0,savedFollowPhysicalPage=true,followPreferenceWrite=Promise.resolve();
-let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0;
+let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0,dockStatusUnavailable=false;
 let editGesture=null;
 let agentLayoutLocked=false,quitPreparing=false;
 const pageFollower=new DevicePageFollower();
@@ -98,7 +98,26 @@ function showStorage() {
 const options = (items, value) => Object.entries(items).map(([v,label]) => `<option value="${esc(v)}"${v===String(value)?' selected':''}>${esc(label)}</option>`).join('');
 const field = (label, id, control) => `<div class="field"><label for="${id}">${label}</label>${control}</div>`;
 function deviceCard(id, title, description, status) {
-  return `<button class="device-card" data-go="${id}"><span class="device-icon">${icon(id)}</span><span class="device-info"><strong>${title}</strong><span>${description}</span></span><span class="chip">${status}</span><span aria-hidden="true">›</span></button>`;
+  return `<button class="device-card" data-go="${esc(id)}"><span class="device-icon">${icon(id)}</span><span class="device-info"><strong>${esc(title)}</strong><span data-device-description>${esc(description)}</span></span><span class="chip" data-device-status>${esc(status)}</span><span aria-hidden="true">›</span></button>`;
+}
+function coolerHomeCard(){const summary=coolerPanel.summary();return deviceCard('cooler','Cooler screen',summary.description,summary.status);}
+function homeDockSummary(){
+  if(!T)return {description:'Ulanzi D200H · editable layout preview',status:'Preview'};
+  if(dockStatusUnavailable)return {description:'Dock status could not be refreshed.',status:'Status unavailable'};
+  return {description:deviceStatus?.message||'Waiting for dock status.',status:deviceStatus?.enabled===false?'Disabled':deviceStatus?.state||'Status unknown'};
+}
+function updateHomeDeviceStatus(){
+  if(draft.current!=='home')return;
+  const cooler=coolerPanel.summary(),dock=homeDockSummary();
+  for(const [id,description,status] of [
+    ['dock',dock.description,dock.status],
+    ['cooler',cooler.description,cooler.status],
+  ]){
+    const card=pane.querySelector(`.device-card[data-go="${id}"]`);
+    const text=card?.querySelector('[data-device-description]'),chip=card?.querySelector('[data-device-status]');
+    if(text&&text.textContent!==description)text.textContent=description;
+    if(chip&&chip.textContent!==status)chip.textContent=status;
+  }
 }
 function faceMarkup(f, k) {
   const label = f.text || (f.kind === 'icon' ? ACTIONS[k.action] : '');
@@ -181,7 +200,7 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
   else if (draft.current==='cooler') html=coolerPanel.markup();
   else if (draft.current==='dial') html = plannedPage(draft.current);
-  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. Control the dock and cooler from their own pages. Dial support follows later.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Ulanzi D200H · disabled until enabled'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Disabled'):'Preview')}${deviceCard('cooler','Cooler screen',coolerPanel.state.message||'Lovingcool SC70 · enable from its page',coolerPanel.state.state||'Disabled')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
+  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. Control the dock and cooler from their own pages. Dial support follows later.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Waiting for dock status.'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Status unknown'):'Preview')}${coolerHomeCard()}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
   else if (draft.current === 'general') html = `
     <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
     <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
@@ -221,7 +240,7 @@ async function updateMonitors(){
     container.innerHTML=`<p class="hint" role="status">${esc(message)}</p><button class="btn" data-do="retry-monitors">Retry monitor detection</button>`;
   }
 }
-function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();}
+function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();updateHomeDeviceStatus();}
 function updateUsageStatus(){
   const selected=deviceStatus?.usageStatus?.providers?.filter(item=>item.selected)||[];
   let note=document.getElementById('dock-usage-status');
@@ -240,14 +259,14 @@ function followDeliveredPage(){
 }
 function applyDockStatus(result,ticket,intent){
   if(intent!==editorIntentEpoch||ticket<lastDockStatusTicket)return;
-  lastDockStatusTicket=ticket;deviceStatus=result;pageFollower.observe(result);
+  lastDockStatusTicket=ticket;deviceStatus=result;dockStatusUnavailable=false;pageFollower.observe(result);
   if(!followDeliveredPage())updateDeviceStatus();
 }
 async function pollDockState(){
   if(!T||dockPollRunning)return;
   dockPollRunning=true;
   const ticket=++dockRequestTicket,intent=editorIntentEpoch;
-  try{applyDockStatus(await invoke('dock_state'),ticket,intent);}catch{}
+  try{applyDockStatus(await invoke('dock_state'),ticket,intent);}catch{if(intent===editorIntentEpoch&&ticket>=lastDockStatusTicket){dockStatusUnavailable=true;updateHomeDeviceStatus();}}
   finally{dockPollRunning=false;}
 }
 function setFollowPhysicalPage(enabled){
@@ -454,6 +473,7 @@ if(T)invoke('plugin:event|listen',{event:'uc:cooler-event',target:{kind:'Any'},h
 const initialPreferenceEpoch=followPreferenceEpoch,initialDockTicket=++dockRequestTicket,initialIntent=editorIntentEpoch;
 invoke('app_state').then(s => {
   state=s;
+  if(s.cooler&&!coolerPanel.hasState)coolerPanel.acceptState(s.cooler);
   if(followPreferenceEpoch===initialPreferenceEpoch){followPhysicalPage=s.followPhysicalPage!==false;savedFollowPhysicalPage=followPhysicalPage;followPreferenceReady=true;}
   if(s.dock)applyDockStatus(s.dock,initialDockTicket,initialIntent);
   if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page;

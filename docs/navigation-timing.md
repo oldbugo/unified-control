@@ -31,6 +31,16 @@ files or saves account readings. Keep captures local; they are diagnostics, not 
 Fake tests cover held rendering, FIFO ACK/heartbeat events, aborted navigation, access gating and numerical-only timing.
 Physical Folder/Back measurements remain separate from these software checks.
 
+## Physical check on 0.3.2
+
+The user completed three Test-folder/Back cycles and reported responsive behavior. Live MCP then reported six started,
+six completed and zero aborted navigations. The latest host-receipt-to-completed-transfer sample was 72.44 ms: handling
+7.733 ms, wait before render 20.050 ms, input preparation 0.005 ms, face rendering 18.207 ms, delivery preparation
+0.007 ms and combined ZIP/transport 12.491 ms. These instrumented stages do not include every overhead and need not sum
+to the total. Earlier navigation durations were not retained: the bounded capture file contained no navigation samples.
+This is one latest timing plus the user's three-cycle feel report, not an average, before/after speedup or physical pixel
+latency measurement. No scheduling optimization was made in0.3.2.
+
 ## 0.3.2 package identity
 
 Installed source: `29414fb8db44db15ae2b3f90bf64be8af7080b77`. Installer SHA-256:
