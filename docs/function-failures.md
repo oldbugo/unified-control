@@ -32,6 +32,13 @@ The prepared 0.3.1 change normalizes trusted disk/UNC paths at the Node process 
 device namespaces. The same canonical-path regression fails before the fix and passes afterward without account access.
 This fixes a reproducible launch defect; installation, autonomous account refresh and physical usage acceptance are still pending.
 
+0.3.1 is built and staged as `dist/UnifiedControl_0.3.1_x64-setup.exe` (not installed). Executable version0.3.1 and embedded
+sourcee23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.
+All120 core/11 host tests, touched-file rustfmt, official-SDK MCP fixtures and the staged resource inactive-reader
+health/render/shutdown check pass. The resource smoke check uses the combined packaging layout: runtime Node/reader plus
+`resources/monitor`, rather than treating `runtime` alone as a complete install root. Whole-repository formatting reports
+unrelated existing differences. No account source or physical action was activated by these checks.
+
 The managed reader and all presentations exist. Runtime activation/render errors were previously swallowed while unknown faces were correctly rendered. `RuntimeResources::usage_status()` now exposes only fixed reader/provider codes and messages, including missing bundled runtime/reader, start failure, timeout, stale observations and unavailable/unverified data. No account IDs, quota values, filesystem paths or raw helper/OS messages are returned. Reader code transitions are logged without payloads. The host can add this value to diagnostics state.
 
 Unknown/stale/error/inactive snapshots now retain distinct fixed messages instead of every reason becoming generic unavailable. Untrusted helper text is still discarded. Freshness, account provenance, reset expiry, receipt/render/delivery gates and unknown physical fallback remain unchanged. Missing-resource and stale/unverified regressions verify useful reasons without starting a reader or allowing numerical gauges. These diagnostics do not fix an absent fresh Claude Desktop source or establish the user's source/helper failure; physical/account acceptance remains pending.
