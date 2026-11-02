@@ -2,7 +2,8 @@
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
 the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
-Physical cooler/migration acceptance and remaining dock checks are pending. Rules for working on it: `CLAUDE.md`.
+Physical cooler/migration acceptance and remaining dock checks are pending. Rules: `AGENTS.md` and `CLAUDE.md`.
+Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0.3.0.md).
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
@@ -13,9 +14,10 @@ scoped layouts, monitor discovery, preview, revision-checked apply, last-agent-w
 tray app through same-user Windows IPC; it never edits app-data files from a client or starts a second device engine.
 Local agent access is visible in General and off by default. [Setup, tools and evidence](docs/agent-control.md).
 Installed 0.3.0/source `0909429` is verified through startup and a direct installed-MCP connection. Codex and both Claude
-client configurations are registered. Enable Local agent access and reload the client's MCP configuration to use layout tools.
-The dedicated request proxy avoids a packaged client's stale main executable. Reviewed source is in private draft PR11;
-the installed preview does not imply the PR has merged.
+client configurations are registered. The user enabled Local agent access; direct production MCP reads the 14-key layout and
+connected dock without changes. Reload the client's MCP configuration/start a fresh session to discover its tools.
+The dedicated request proxy avoids a packaged client's stale main executable. The completed stack is consolidated onto
+private `main`; `v0.3.0` preserves the installed build source. See the handoff before new development.
 
 Build the combined interface from the start, with Home, Cooler screen, Stream dock, Dial, General and About pages.
 Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,
