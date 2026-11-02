@@ -55,6 +55,12 @@ before retrying. Application writes return saved state; physical delivery/recove
 Configuring a monitor/media/launch action never executes it. This checkpoint exposes no physical action, reset, firmware,
 shell execution, account-authentication or application-start tool.
 
+The next source checkpoint includes bounded numerical dock timing in enabled `get_status`: stage durations/counters and
+one latest successful navigation sample. Face time includes provider/helper waits; ZIP and transport time are combined.
+Host receipt-to-delivery excludes the earlier physical press-to-host interval. No layout names/action values/account
+readings are added to timing. Disabled access still exposes only version/capabilities. These diagnostics are not in the
+installed0.3.1 build and do not establish a measured physical bottleneck or speedup.
+
 ## Client setup
 
 Use absolute installed paths, for example:

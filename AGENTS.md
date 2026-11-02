@@ -13,7 +13,8 @@ Start with its advertised `uc_get_status` and `uc_get_layout` tools. Use MCP for
 computer use for visual review or a capability gap. Do not claim a tool connection that is not exposed in the current session.
 If the tools are absent, check the registered connection and reload MCP/start a fresh client session as needed.
 
-UC 0.3.0 must remain running in its visible tray. Local agent access was enabled by the user and read-only layout access was
+UC must remain running in its visible tray. Installed0.3.1/sourcee23be94 supersedes0.3.0 after the approved idle-safe update.
+Local agent access was enabled by the user and actual Codex model-client read/configuration/undo access was
 verified. Read current state rather than asking the user to enable it again without evidence. Do not start the installed GUI
 from a packaged shell: it can see a stale main executable. The bundled MCP adapter uses the dedicated request-only proxy.
 
@@ -23,7 +24,7 @@ AppData profile files directly. No physical action, USB reset or firmware comman
 
 ## Resume safely
 
-The completed 0.3.0 work is consolidated on `main`; the immutable `v0.3.0` tag identifies the installed build source.
+The completed 0.3.0 work is consolidated on `main`; immutable release tags identify their original build sources.
 Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall 0.3.0
 for documentation changes. Keep the repositories private and user profiles/authentication/local diagnostics out of Git.
 Follow `CLAUDE.md` for quiet simulated testing, idle-safe installation and hardware limits.

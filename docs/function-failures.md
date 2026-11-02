@@ -30,9 +30,26 @@ bundled reader passes its account-inactive health/render/shutdown smoke check fr
 fixture reproduces the failure when the script path has the canonical Windows `\\?\` prefix: Node exits before replying.
 The prepared 0.3.1 change normalizes trusted disk/UNC paths at the Node process boundary, preserving UTF-16 and other
 device namespaces. The same canonical-path regression fails before the fix and passes afterward without account access.
-This fixes a reproducible launch defect; installation, autonomous account refresh and physical usage acceptance are still pending.
+This fixes a reproducible launch defect; sustained account refresh and physical usage acceptance are checked separately.
 
-0.3.1 is built and staged as `dist/UnifiedControl_0.3.1_x64-setup.exe` (not installed). Executable version0.3.1 and embedded
+0.3.1 was installed after explicit approval using `tools/install-when-idle.ps1`. Startup/new PID, MCP appVersion0.3.1,
+dock reconnection and the dedicated request proxy SHA-256 matching the built executable were verified. Codex immediately
+reported verified usage; Claude changed from stale to verified within the first minute, without an agent-issued refresh
+or ordinary model request. The inactive profile still matched all fourteen baseline keys after the update.
+
+Bounded live watch, 2026-11-02: both providers were verified at02:24:11UTC and again at02:29:26UTC (five minutes fifteen
+seconds later), with reader ready/dock connected throughout the sampled checks. Codex briefly reported unavailable at
+02:26:53UTC, then recovered without intervention by02:27:42UTC. Claude remained verified in those samples. MCP status
+inspection does not request account refresh. This establishes fresh readings beyond the cutoff and observed automatic
+recovery, not uninterrupted reliability, exact account-panel agreement, physical pixels or account-switch acceptance.
+The transient's cause remains unknown. Claude still depends on a supporting authenticated Desktop Code companion session.
+
+Next-source diagnostic correction preserves guarded Codex `error` and `stale` statuses instead of collapsing every non-ok
+result without identity into unavailable. Otherwise-ok readings without verified identity still become unavailable.
+Fixture tests verify number/history/token suppression, minute throttling and scheduled recovery; this is not installed
+in0.3.1 and does not identify or fix the transient source failure.
+
+Installer: `dist/UnifiedControl_0.3.1_x64-setup.exe`. Executable version0.3.1 and embedded
 sourcee23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.
 All120 core/11 host tests, touched-file rustfmt, official-SDK MCP fixtures and the staged resource inactive-reader
 health/render/shutdown check pass. The resource smoke check uses the combined packaging layout: runtime Node/reader plus

@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.3.1 — prepared 2026-11-02
+## 0.3.1 — 2026-11-02
 
 Fix AI Usage reader startup when Windows supplies canonical extended resource paths. Normalize trusted disk/UNC executable,
 script and usage-home paths before starting Node, preserving Unicode and other device namespaces. The canonical-path
 fixture reproduces `reader-unavailable` before the fix and passes afterward without account access. Live account refresh
-and physical usage acceptance remain pending; this build is not yet installed.
+and physical usage acceptance are checked separately. Installed through the user-approved idle-safe updater;
+new process/startup version, dedicated proxy hash and dock reconnection verified. Both providers reached verified status.
 
 Codex desktop MCP acceptance now covers actual model-driven status/layout/monitor reads, preview, inactive-profile
 apply/readback, stale revision refusal and undo. The temporary face was restored and active dock selection preserved.

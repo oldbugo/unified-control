@@ -81,6 +81,49 @@ test('failed refresh never renews timestamp; stale history cannot act as current
   assert.equal(result.status, 'error'); assert.equal(result.fiveHour, null); assert.ok(!JSON.stringify(result).includes('secret'));
   await s.reader.stop();
 });
+
+test('Codex non-ok refresh preserves guarded error/stale status and recovers on the next scheduled read', async () => {
+  for (const [expected, failure] of [
+    ['error', { status: 'error' }],
+    ['stale', { status: 'stale' }],
+    ['stale', { observedAt: NOW - 300001 }],
+  ]) {
+    let clock = NOW, failed = false, calls = 0, tokens = 0, history = [];
+    const s = setup({ now: () => clock,
+      readers: { codex: async () => {
+        calls++;
+        return reading('codex', { observedAt: clock, ...(failed ? failure : {}),
+          message: 'secret-source-detail', accountId: 'secret-account',
+          tokenHistoryStatus: 'ok', tokenHistoryObservedAt: clock,
+          tokenHistory: [{ date: '2030-11-03', tokens: 999 }] });
+      } },
+      tokenReader: async () => { tokens++; return { status: 'ok', observedAt: clock,
+        daily: [{ date: '2030-11-03', tokens }], _testIdentity: 'fixture-principal-a' }; },
+      historyStore: { record: value => history.push(value), clear() { history = []; }, get: () => history } });
+    try {
+      await s.reader.setActive([{ provider: 'codex', tokenHistory: true }]); await s.reader.tick();
+      assert.equal(s.reader.snapshot('codex').status, 'ok'); assert.equal(tokens, 1); assert.equal(history.length, 1);
+      failed = true; clock += 60000; await s.reader.tick();
+      const snapshot = s.reader.snapshot('codex');
+      assert.equal(snapshot.status, expected);
+      assert.equal(snapshot.provenanceVerified, false);
+      assert.equal(snapshot.fiveHour, null); assert.equal(snapshot.weekly, null);
+      assert.deepEqual(snapshot.tokenHistory, []); assert.equal(snapshot.tokenHistoryObservedAt, null);
+      assert.equal(history.length, 0); assert.equal(tokens, 1);
+      assert.ok(!JSON.stringify(snapshot).includes('secret'));
+      const rendered = await s.reader.render('codex', 'rings', 196, 196);
+      assert.equal(rendered.snapshot.status, expected);
+      assert.ok(!renderUsageSvg(rendered.snapshot, { now: clock }).includes('data-gauge='));
+      clock += 1000; await s.reader.tick(); assert.equal(calls, 2, 'failure does not bypass minute throttling');
+      failed = false; clock += 59000; await s.reader.tick();
+      const recovered = s.reader.snapshot('codex');
+      assert.equal(recovered.status, 'ok'); assert.equal(recovered.observedAt, clock);
+      assert.equal(recovered.provenanceVerified, true); assert.equal(calls, 3);
+      assert.equal(tokens, 2); assert.equal(recovered.tokenHistory[0].tokens, 2);
+      assert.equal(history.length, 1); assert.equal(history[0].observedAt, clock);
+    } finally { await s.reader.stop(); }
+  }
+});
 test('deactivation aborts a pending account read; late success cannot restore gauges', async () => {
   let release, signal;
   const s = setup({ readers: { codex: options => { signal = options.signal; return new Promise(resolve => { release = resolve; }); } } });
@@ -124,7 +167,11 @@ test('late token completion from a previous quota revision or identity cannot re
 test('unverified Codex account identity suppresses quotas and token reads, while continuing config preserves minute throttling', async () => {
   const s = setup({ identityOf: () => null });
   await s.reader.setActive([{ provider: 'codex', tokenHistory: true }]); await s.reader.tick();
-  assert.notEqual(s.reader.snapshot('codex').status, 'ok'); assert.equal(s.counts().tokenCalls, 0); await s.reader.stop();
+  const unverified = s.reader.snapshot('codex');
+  assert.equal(unverified.status, 'unavailable'); assert.equal(unverified.provenanceVerified, false);
+  assert.equal(unverified.fiveHour, null); assert.equal(unverified.weekly, null);
+  assert.deepEqual(unverified.tokenHistory, []);
+  assert.equal(s.counts().tokenCalls, 0); await s.reader.stop();
   const stable = setup(); await stable.reader.setActive([{ provider: 'codex', tokenHistory: false }]); await stable.reader.tick();
   await stable.reader.setActive([{ provider: 'codex', tokenHistory: true }]); await stable.reader.tick();
   assert.equal(stable.counts().quotaCalls, 1); assert.equal(stable.counts().tokenCalls, 1); await stable.reader.stop();

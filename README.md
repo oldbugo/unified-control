@@ -7,10 +7,17 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Prepared 0.3.1 fixes a reproduced AI Usage startup fault: Node rejects the canonical Windows script-path spelling
-supplied by the packaged app. Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now
-passes, along with 120 core and 11 host tests. The installed account-inactive reader smoke check also passes.
-0.3.1 is not installed; 0.3.0 remains running, and live provider refresh/physical usage acceptance remain open.
+Installed 0.3.1/sourcee23be94 fixes a reproduced AI Usage startup fault: Node rejects canonical Windows script paths.
+Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now passes, along with 120 core
+and 11 host tests. The user approved the idle-safe update on 2026-11-02; startup/new PID, MCP version0.3.1, dedicated proxy
+hash and dock reconnection were verified. Both Codex and Claude subsequently reported verified observations through MCP.
+Both providers remained fresh beyond the five-minute cutoff in a bounded MCP watch. Codex briefly became unavailable
+and recovered automatically; its cause remains unknown. This is not an uninterrupted reliability pass. Physical usage,
+exact account-panel comparison and account-switch acceptance remain open. Claude needs a supporting Desktop Code companion.
+
+Next source checkpoint (not installed): bounded numerical navigation timing in dock/MCP status, fake held-render and
+ACK-burst regressions, and preservation of guarded Codex error/stale reasons.123 core/11 host and62 reader tests pass.
+Scheduling is unchanged; physical latency and any speedup remain unmeasured.
 
 ## Current direction (2026-10-30)
 
