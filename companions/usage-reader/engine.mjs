@@ -100,7 +100,10 @@ export function createUsageReader({ now = Date.now,
         accountIdentity = identity; quotaRevision++;
         token = null; tokenAttempted = -Infinity;
         tokenController?.abort(); tokenController = null; tokenPending = null;
-        if (!identity) clean = unknown('codex', 'unavailable');
+        // Missing identity invalidates an otherwise verified quota. A guarded
+        // non-ok result already hides every number; retain its finite status so
+        // stale observations and source errors remain distinguishable.
+        if (clean.status === 'ok' && !identity) clean = unknown('codex', 'unavailable');
       }
       snapshots.set(provider, clean);
       if (clean.status === 'ok') historyStore.record(clean);
