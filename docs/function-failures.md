@@ -44,10 +44,10 @@ inspection does not request account refresh. This establishes fresh readings bey
 recovery, not uninterrupted reliability, exact account-panel agreement, physical pixels or account-switch acceptance.
 The transient's cause remains unknown. Claude still depends on a supporting authenticated Desktop Code companion session.
 
-Next-source diagnostic correction preserves guarded Codex `error` and `stale` statuses instead of collapsing every non-ok
+The 0.3.2 diagnostic correction preserves guarded Codex `error` and `stale` statuses instead of collapsing every non-ok
 result without identity into unavailable. Otherwise-ok readings without verified identity still become unavailable.
-Fixture tests verify number/history/token suppression, minute throttling and scheduled recovery; this is not installed
-in0.3.1 and does not identify or fix the transient source failure.
+Fixture tests verify number/history/token suppression, minute throttling and scheduled recovery. This is included in
+installed0.3.2 and does not identify or fix the transient source failure.
 
 Installer: `dist/UnifiedControl_0.3.1_x64-setup.exe`. Executable version0.3.1 and embedded
 sourcee23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.

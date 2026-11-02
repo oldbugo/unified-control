@@ -125,6 +125,68 @@ const server = http.createServer((req,res) => {
     await page.reload();
     assert.match(await page.locator('#storage-status').textContent(),/could not be loaded/);
     assert.deepEqual(errors,[]);
+    // Keyboard editing must retain the semantic control replaced by a pane
+    // redraw. These pages are isolated browser drafts, never native profiles.
+    for(const [width,height] of [[1440,1000],[1100,800],[800,650]]){
+      const keyboardPage=await browser.newPage({viewport:{width,height}});
+      const keyboardErrors=[];keyboardPage.on('pageerror',error=>keyboardErrors.push(error.message));
+      await keyboardPage.goto(base);
+      await keyboardPage.locator('[data-page="dock"]').click();
+      await keyboardPage.locator('[data-key="6"]').focus();
+      await keyboardPage.keyboard.press('Enter');
+      assert.equal(await keyboardPage.locator('[data-key="6"]').evaluate(el=>el===document.activeElement),true,`key activation focus at ${width}`);
+      await keyboardPage.locator('[data-edit-face="b"]').focus();
+      await keyboardPage.keyboard.press('Enter');
+      assert.equal(await keyboardPage.locator('[data-edit-face="b"]').evaluate(el=>el===document.activeElement),true,`face toggle focus at ${width}`);
+      await keyboardPage.locator('#face-kind').focus();
+      await keyboardPage.keyboard.press('Home');
+      await keyboardPage.keyboard.press('ArrowDown');
+      assert.equal(await keyboardPage.locator('#face-kind').inputValue(),'icon');
+      assert.equal(await keyboardPage.evaluate(()=>{const draft=JSON.parse(localStorage.getItem('uc.interface-prototype.v1'));return !!draft.profiles[0].id&&!!draft.profiles[0].pages[0].id;}),true,'initial browser drafts acquire stable identities before undo checkpoints');
+      assert.equal(await keyboardPage.locator('#face-kind').evaluate(el=>el===document.activeElement),true,`presentation focus at ${width}`);
+      await keyboardPage.keyboard.press('Tab');
+      assert.equal(await keyboardPage.locator('#face-text').evaluate(el=>el===document.activeElement),true,`next presentation field at ${width}`);
+      await keyboardPage.locator('#action-kind').focus();
+      await keyboardPage.keyboard.press('Home');
+      await keyboardPage.keyboard.press('ArrowDown');
+      assert.equal(await keyboardPage.locator('#action-kind').inputValue(),'hotkey');
+      assert.equal(await keyboardPage.locator('#action-kind').evaluate(el=>el===document.activeElement),true,`action focus at ${width}`);
+      await keyboardPage.keyboard.press('Tab');
+      assert.equal(await keyboardPage.locator('#action-value').evaluate(el=>el===document.activeElement),true,`next action field at ${width}`);
+      for(const index of [0,1]){
+        await keyboardPage.locator('[data-do="preview-flip"]').nth(index).focus();
+        await keyboardPage.keyboard.press('Enter');
+        assert.equal(await keyboardPage.locator('[data-do="preview-flip"]').nth(index).evaluate(el=>el===document.activeElement),true,`duplicate flip control ${index} at ${width}`);
+      }
+      // A redraw must neither steal outside focus nor restore a removed field.
+      await keyboardPage.locator('[data-page="dock"]').focus();
+      await keyboardPage.locator('#profile-picker').evaluate(el=>el.dispatchEvent(new Event('change',{bubbles:true})));
+      assert.equal(await keyboardPage.locator('[data-page="dock"]').evaluate(el=>el===document.activeElement),true);
+      await keyboardPage.locator('[data-key="6"]').click();
+      await keyboardPage.locator('#face-kind').selectOption('text');
+      await keyboardPage.locator('#face-text').focus();
+      await keyboardPage.locator('#face-kind').evaluate(el=>{el.value='clock';el.dispatchEvent(new Event('change',{bubbles:true}));});
+      assert.equal(await keyboardPage.locator('#face-text').count(),0);
+      assert.equal(await keyboardPage.evaluate(()=>document.activeElement===document.body),true);
+      await keyboardPage.locator('#face-kind').selectOption('text');
+      await keyboardPage.reload();
+      await keyboardPage.locator('[data-key="6"]').click();
+      await keyboardPage.locator('#face-text').fill(`Undo key seven ${width}`);
+      await keyboardPage.locator('[data-do="undo"]').focus();
+      await keyboardPage.keyboard.press('Enter');
+      assert.equal(await keyboardPage.locator('.editor-head h2').textContent(),'Key 7',`undo keeps display context at ${width}`);
+      assert.equal(await keyboardPage.locator('[data-key="6"]').evaluate(el=>el===document.activeElement),true,'last Undo becomes disabled; focus stays on the selected display');
+      await keyboardPage.locator('[data-do="add-page"]').click();
+      await keyboardPage.locator('[data-key="6"]').click();
+      await keyboardPage.locator('#face-text').fill('New page edit');
+      await keyboardPage.locator('[data-do="undo"]').click();
+      assert.equal(await keyboardPage.locator('.editor-head h2').textContent(),'Key 7');
+      await keyboardPage.locator('[data-do="undo"]').click();
+      assert.equal(await keyboardPage.locator('[data-dock-page]').count(),1);
+      assert.equal(await keyboardPage.locator('.editor-head h2').textContent(),'Key 1','removing the active page uses the existing selection fallback');
+      assert.deepEqual(keyboardErrors,[]);
+      await keyboardPage.close();
+    }
     const guardPage=await browser.newPage();
     await guardPage.addInitScript(()=>{
       window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
@@ -205,6 +267,14 @@ const server = http.createServer((req,res) => {
     await nativePreview.evaluate(()=>{window.__holdPreviewDecode=false;window.__pendingPreviewDecodes.splice(0).forEach(resolve=>resolve());});
     await nativePreview.waitForFunction(()=>document.querySelector('[data-key="1"] img')!==window.__typingImage);
     assert.equal(await nativePreview.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;const context=canvas.getContext('2d');context.drawImage(document.querySelector('[data-key="1"] img'),0,0);return context.getImageData(0,0,1,1).data[0];}),'Latest preview label'.length*37%256,'only the latest typed label frame may replace the old image');
+    await nativePreview.locator('[data-key="6"]').focus();
+    await nativePreview.keyboard.press('Enter');
+    assert.equal(await nativePreview.locator('[data-key="6"]').evaluate(el=>el===document.activeElement),true,'native fixture key activation retains focus');
+    await nativePreview.locator('#face-text').fill('Native undo display');
+    await nativePreview.locator('[data-do="undo"]').focus();
+    await nativePreview.keyboard.press('Enter');
+    assert.equal(await nativePreview.locator('.editor-head h2').textContent(),'Key 7','native stable IDs preserve the selected display on undo');
+    assert.equal(await nativePreview.evaluate(()=>window.__lastSavedSnapshot.currentProfile==='p'&&window.__lastSavedSnapshot.currentPage==='pg'&&window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].a.text===''),true);
     await nativePreview.evaluate(()=>{window.__oldPreviewKey=document.querySelector('[data-key="0"]');window.__oldPreviewImage=window.__oldPreviewKey.firstChild;window.__holdPreviewDecode=true;window.__previewRevision=2;});
     await nativePreview.waitForFunction(()=>window.__pendingPreviewDecodes.length>0);
     await nativePreview.locator('[data-page="home"]').click();
@@ -356,7 +426,7 @@ const server = http.createServer((req,res) => {
     assert.equal(await followPage.evaluate(()=>window.__followPreference),false);
     assert.deepEqual(followErrors,[]);
     await followPage.close();
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview retention/decoded swap/typing stability; physical page follow/back/optout/manual/pending-edit/import/stale-poll guards; no page errors.');
+    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo and display context; keyboard focus/tab order at 3 sizes; no outside-focus theft or removed-control restoration; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview retention/decoded swap/typing stability; physical page follow/back/optout/manual/pending-edit/import/stale-poll guards; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});
