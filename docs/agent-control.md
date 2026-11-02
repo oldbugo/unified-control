@@ -61,7 +61,7 @@ Host receipt-to-delivery excludes the earlier physical press-to-host interval. N
 readings are added to timing. Disabled access still exposes only version/capabilities. These diagnostics do not establish
 a measured physical bottleneck or speedup. [Capture guide](navigation-timing.md).
 
-Prepared0.3.3 adds `cooler.diagnosticsEnabled` and `cooler.lastHealthSample`. The existing `cooler.state` describes the
+Installed0.3.3 adds `cooler.diagnosticsEnabled` and `cooler.lastHealthSample`. The existing `cooler.state` describes the
 supervised worker, while the new object is a strict projection of already cached diagnostics. `lastSampleAt` timestamps
 the worker-health result; `pnpSampledAt` timestamps the separately cached Windows USB result. Neither is renewed by an
 MCP read. Finite state/error codes, booleans and bounded counts are included; PIDs, device/account identifiers, paths,

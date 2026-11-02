@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.3 — prepared 2026-11-02
+## 0.3.3 — 2026-11-02
 
 Refresh Home device cards in place when accepted status polls arrive, preserving keyboard focus. Distinguish the cooler
 engine's state from its last connection check on Home and the cooler page. Missing, disabled, failed or out-of-date
@@ -8,6 +8,9 @@ checks remain distinct; cached connection reports are not a guarantee of current
 
 Expose a strict cached cooler-health summary through enabled MCP status, without triggering collection or recovery.
 Worker and Windows USB sample timestamps are separate. Identifiers, paths, PIDs and arbitrary error messages are excluded.
+
+Installed with startup/new PID, actual MCP version, packaged proxy identity and unchanged active layout verified. Dock
+and both usage providers recovered. The last cooler sample still reports descriptor failure43; no hardware recovery.
 
 Physical0.3.2 retest: the user reported three Test/Back cycles responsive; six navigations completed without aborts.
 The latest host-receipt-to-transfer duration was72.44ms. No before/after speedup or physical pixel timing is claimed.

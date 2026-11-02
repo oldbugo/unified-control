@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-02. Installed/running version: 0.3.2 (`29414fb`), idle-safe update during the requested continuation. New startup/PID, MCP version, packaged proxy identity, dock reconnection and unchanged active-page keys verified. Both usage providers report verified status. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
+Updated 2026-11-02. Installed/running version: 0.3.3 (`da70551`), idle-safe update during the requested continuation. New startup/PID, MCP version, packaged proxy identity, dock reconnection and unchanged active-page keys verified. Both usage providers report verified status. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
