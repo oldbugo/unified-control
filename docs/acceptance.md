@@ -2,6 +2,13 @@
 
 Updated 2026-11-02. Installed/running version: 0.3.4 (`95a68ee`), idle-safe update during the requested continuation. New startup/PID, MCP version, packaged proxy identity, dock reconnection and unchanged active-page keys verified. Both usage providers report verified status. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
 
+Prepared0.3.5 addresses the user's cooler-page navigation freeze: ordinary section exit saves edits/imports but does not
+await transient hardware cleanup. Loading bridge exit, held startup/cleanup, idle cleanup suppression, queued/failed
+saves and active imports are covered in headless checks. Pending guide/fit timers are cancelled; the embedded iframe is
+removed on exit. Independent review found the guide timer race, fixed and regression-tested, then no further issues.
+129 core/11 host, full interface, status/search/editor/MCP and quiet native profile/agent checks pass. Final cooler-native
+navigation and release build checks are in progress; installation and user feel remain pending.
+
 | Check | Status and evidence |
 | --- | --- |
 | Immediate physical face edits | User confirmed on 0.1.4: edited content appears automatically without an A/B round trip. |

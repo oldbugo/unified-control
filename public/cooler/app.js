@@ -2883,7 +2883,19 @@ async function useTheme(oid, name) {
 }
 const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, storeTheme, openSettings: openDrawer });
 // UC waits for autosaved editor changes before removing the embedded page.
-window.__UC_COOLER_FLUSH__ = async () => { await backend.flushImports();await themes.flush();if(draftKeyT){clearTimeout(draftKeyT);draftKeyT=0;draftChanged();}clearTimeout(draftSaveT);draftSaveT=0;await draftSaving.catch(()=>{});await savePendingDraft();if(notchT){clearTimeout(notchT);await saveNotch(true);}if(guidesT){clearTimeout(guidesT);await saveGuides(true);}if(fitT){clearTimeout(fitT);await fitPersist(true);}await SP.end();await call('twin_watch',{on:false});await call('fit_cal',{action:'end'}); };
+window.__UC_COOLER_FLUSH__ = async ({navigation=false}={}) => {
+  await backend.flushImports();await themes.flush();
+  if(draftKeyT){clearTimeout(draftKeyT);draftKeyT=0;draftChanged();}
+  clearTimeout(draftSaveT);draftSaveT=0;await draftSaving.catch(()=>{});await savePendingDraft();
+  if(notchT){clearTimeout(notchT);await saveNotch(true);}
+  if(guidesT){clearTimeout(guidesT);await saveGuides(true);}
+  if(fitT){clearTimeout(fitT);await fitPersist(true);}
+  // Submit transient-view cleanup before acknowledging navigation. The UC
+  // parent owns these requests after the frame is removed; an unavailable USB
+  // screen must not hold the editor here. Disable/Quit still await cleanup.
+  if(navigation){clearTimeout(FC.t);clearTimeout(GC.t);SP.end().catch(()=>{});backend.endView().catch(()=>{});}
+  else{await SP.end();await call('twin_watch',{on:false});await call('fit_cal',{action:'end'});}
+};
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------

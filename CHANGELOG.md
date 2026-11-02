@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5 — 2026-11-02
+
+Fix cooler section navigation waiting for unavailable-device preview cleanup. Real edits and imports still flush before
+the frame is removed; transient preview/watch cleanup continues through the parent without blocking other sections.
+Loading frames can be left before their bridge is ready. Idle visits do not enqueue redundant cleanup requests.
+The embedded view is removed on exit, stopping its visual loops; enabled worker Live/diagnostics remain independent.
+Disable, reset and Quit retain their full cleanup checks. No USB recovery or hardware fix is claimed.
+
+Prepared for installation; installed build remains0.3.4 until an approved idle-safe update.
+
 ## 0.3.4 — 2026-11-02
 
 Add the planned sidebar page search. Match page names and related terms such as usage, themes and MCP. Filtering does not

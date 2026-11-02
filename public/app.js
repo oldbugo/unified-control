@@ -342,7 +342,7 @@ const agentEditor=new AgentEditorLease({
 });
 async function navigate(id) {
   if (!Object.hasOwn(NAV,id)) return;
-  if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave();}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
+  if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave({navigation:true});}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
   hasLocalPage = true; draft.current = id;editGesture=null;
   // Sidebar navigation changes only the app section. Saving profiles here could
   // send an editor-inspected page back to a physically navigated dock.

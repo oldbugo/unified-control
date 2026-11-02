@@ -31,8 +31,11 @@
     }else if(m.type==='event'&&['cs:job','cs:library','cs:device','cs:app'].includes(m.event)){
       for(const item of listeners.values())if(item.event===m.event)callbacks.get(item.handler)?.({payload:m.payload});
     }else if(m.type==='prepare-leave'&&Number.isSafeInteger(m.id)){
-      try{await window.__UC_COOLER_FLUSH__?.();send({type:'leave-ready',id:m.id});}
+      try{await window.__UC_COOLER_FLUSH__?.({navigation:m.navigation===true});send({type:'leave-ready',id:m.id});}
       catch{send({type:'leave-ready',id:m.id,error:'Cooler edits could not be saved. Keep this page open and retry.'});}
     }
   });
+  // Before this point no embedded controls can submit edits. The parent may
+  // leave a still-loading frame without waiting for a message it cannot hear.
+  send({type:'bridge-ready'});
 })();

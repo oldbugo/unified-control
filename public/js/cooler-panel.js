@@ -78,7 +78,7 @@ export class CoolerPanel{
     if(health&&!this.configuring)health.textContent=this.resetNote||summary.description;
     if(reset)reset.disabled=!this.native||!this.state.enabled||this.state.state!=='running'||!!this.state.busy||this.configuring;
     const ready=this.state.enabled&&['running','ready','connected'].includes(this.state.state);
-    if(ready&&!this.frame){this.frame=document.createElement('iframe');this.frame.id='cooler-frame';this.frame.title='CoolerScreen controls';this.frame.src='cooler/index.html';this.frame.style.cssText='width:100%;height:max(640px,calc(100vh - 270px));border:1px solid var(--border);border-radius:8px;background:var(--bg)';content.replaceChildren(this.frame);}
+    if(ready&&!this.frame){this.frameReady=false;this.frame=document.createElement('iframe');this.frame.id='cooler-frame';this.frame.title='CoolerScreen controls';this.frame.src='cooler/index.html';this.frame.style.cssText='width:100%;height:max(640px,calc(100vh - 270px));border:1px solid var(--border);border-radius:8px;background:var(--bg)';content.replaceChildren(this.frame);}
     else if(!ready&&(!this.frame||!this.state.enabled)){this.frame=null;content.innerHTML=`<section class="empty-state"><h2>${this.native?'CoolerScreen controls':'CoolerScreen integration'}</h2><p>${this.native?'Enable the cooler to open its themes, library and live controls here.':'The integrated controls are available in the Windows app.'}</p></section>`;}
   }
   send(message){this.frame?.contentWindow?.postMessage({channel:'uc-cooler-v1',...message},location.origin);}
@@ -86,6 +86,7 @@ export class CoolerPanel{
   async receive(e){
     if(e.origin!==location.origin||e.source!==this.frame?.contentWindow||e.data?.channel!=='uc-cooler-v1')return;
     const m=e.data;
+    if(m.type==='bridge-ready'){this.frameReady=true;return;}
     if(m.type==='leave-ready'){const p=this.pendingLeave.get(m.id);if(p){this.pendingLeave.delete(m.id);clearTimeout(p.timer);m.error?p.reject(new Error(m.error)):p.resolve();}return;}
     if(m.type!=='call'||!Number.isSafeInteger(m.id)||m.id<1)return;
     if(!COOLER_COMMANDS.has(m.command)||!m.args||Array.isArray(m.args)||typeof m.args!=='object'){this.send({type:'result',id:m.id,error:'Unsupported cooler command.'});return;}
@@ -93,6 +94,6 @@ export class CoolerPanel{
     try{const result=await this.invoke('cooler_call',{command:m.command,args:m.args});if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,result});}
     catch(error){if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,error:typeof error==='string'?{error}:error&&typeof error==='object'?{error:error.error||error.message||'CoolerScreen request failed.',code:error.code,status:error.status,failedUsb:!!error.failedUsb}:{error:'CoolerScreen request failed.'}});}
   }
-  async prepareLeave(){await this.diagnosticsWrite;if(!this.frame)return;return new Promise((resolve,reject)=>{const id=++this.nextLeave;const timer=setTimeout(()=>{this.pendingLeave.delete(id);reject(new Error('Cooler edits have not finished saving. Keep this page open and retry.'));},120000);this.pendingLeave.set(id,{resolve,reject,timer});this.send({type:'prepare-leave',id});});}
-  unmount(){this.frame=null;this.container=null;}
+  async prepareLeave({navigation=false}={}){await this.diagnosticsWrite;if(!this.frame||!this.frameReady)return;return new Promise((resolve,reject)=>{const id=++this.nextLeave;const timer=setTimeout(()=>{this.pendingLeave.delete(id);reject(new Error('Cooler edits have not finished saving. Keep this page open and retry.'));},120000);this.pendingLeave.set(id,{resolve,reject,timer});this.send({type:'prepare-leave',id,navigation});});}
+  unmount(){this.frame=null;this.frameReady=false;this.container=null;}
 }

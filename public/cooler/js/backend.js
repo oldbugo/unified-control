@@ -24,8 +24,14 @@ let mediaBase = '';
 const jobs = new Map();
 const jobWaiters = new Set();
 let rev = -1, deviceBusy = false, pushT = null;
+// Track requested transient views, including requests still waiting on USB.
+// Merely visiting an unavailable screen must not queue redundant cleanup RPCs.
+const transientView={twin:false,fit:false,guides:false};
 
 const call = async (command, args = {}) => {
+  if(command==='twin_watch')transientView.twin=args.on===true;
+  if(command==='fit_cal')transientView.fit=args.action==='start';
+  if(command==='calibration_set')transientView.guides=!!args.guides;
   try { return await T.invoke(command, args); } catch (x) { throw tauriError(x); }
 };
 const listen = (event, fn) =>
@@ -78,6 +84,13 @@ async function refresh() {
 
 export const backend = {
   call,
+  endView(){
+    const tasks=[];
+    if(transientView.twin)tasks.push(call('twin_watch',{on:false}));
+    if(transientView.fit)tasks.push(call('fit_cal',{action:'end'}));
+    if(transientView.guides)tasks.push(call('calibration_set',{guides:null}));
+    return Promise.all(tasks);
+  },
   on(event, handler) { handlers[event].add(handler); return () => handlers[event].delete(handler); },
   refresh,
   start() {
