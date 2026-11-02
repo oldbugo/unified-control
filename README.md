@@ -7,10 +7,11 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Prepared0.3.5 fixes leaving Cooler screen while its device is unavailable or its embedded page is loading. Saved edits
+Installed0.3.5/source89fbe5d fixes leaving Cooler screen while its device is unavailable or its embedded page is loading. Saved edits
 and imports remain guarded; transient screen-preview cleanup no longer blocks section navigation, and the iframe is
-removed rather than retained in the background. Disable/reset/Quit retain full cleanup. Installed version remains0.3.4
-pending an approved idle-safe update. [Background cost and evidence](docs/cooler-connection-health.md).
+removed rather than retained in the background. Disable/reset/Quit retain full cleanup. User-approved idle-safe update,
+startup/newPID, actual MCP0.3.5, packaged proxy identity, dock/provider reconnection and unchanged14-key layout verified.
+User feel remains open. [Background cost and evidence](docs/cooler-connection-health.md).
 
 Installed0.3.4/source95a68ee adds the planned sidebar page search, including related terms, keyboard activation, Escape
 to clear and compact-sidebar access. Type usage, themes or MCP in Find a page; Enter opens a result through normal guarded

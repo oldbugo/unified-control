@@ -1,9 +1,9 @@
 # Dock follow-up backlog
 
 Cooler navigation regression reported2026-11-02 on0.3.4: entering an unavailable cooler could delay switching sections.
-Fix prepared for0.3.5: do not await transient USB preview cleanup on section navigation; retain saves/imports and full
+Fix installed in0.3.5: do not await transient USB preview cleanup on section navigation; retain saves/imports and full
 shutdown guards, leave still-loading frames, remove the iframe on exit and avoid idle cleanup request flooding.
-Installation and user feel remain pending. [Evidence/background cost](cooler-connection-health.md).
+Startup/version, dock/provider reconnection and preserved layout verified; user feel remains pending. [Evidence/background cost](cooler-connection-health.md).
 
 Planned phase2.5 sidebar search is installed in0.3.4. It filters page names and fixed related terms without saving or
 navigating; Enter uses the existing guarded page activation. Three-width/compact keyboard, focus and filtering checks,

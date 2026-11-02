@@ -8,7 +8,8 @@ Loading frames can be left before their bridge is ready. Idle visits do not enqu
 The embedded view is removed on exit, stopping its visual loops; enabled worker Live/diagnostics remain independent.
 Disable, reset and Quit retain their full cleanup checks. No USB recovery or hardware fix is claimed.
 
-Prepared for installation; installed build remains0.3.4 until an approved idle-safe update.
+Installed with user approval through the idle-safe updater. NewPID/startup version, actual MCP0.3.5, packaged proxy,
+dock/provider reconnection and unchanged active14-key layout verified. Hardware recovery and user navigation feel remain open.
 
 ## 0.3.4 — 2026-11-02
 

@@ -38,10 +38,13 @@ Logged values use a strict whitelist: no raw helper/error text, IPC payloads, ac
 
 User-reported on installed0.3.4: entering Cooler screen could hold section navigation until failed-device work returned.
 Source inspection found the leave handshake awaited transient twin/calibration cleanup even without edits; a frame
-whose bridge had not loaded could also wait for the120second handshake deadline. The navigation fix is in development:
+whose bridge had not loaded could also wait for the120second handshake deadline. The navigation fix is installed in0.3.5:
 real edits/imports remain save-guarded, while transient cleanup is submitted to the parent without awaiting USB-dependent
 replies. The embedded view is removed on navigation; no hidden iframe/polling loop is retained. Disable/reset/Quit keep
-their full cleanup guard. Connection failure does not itself prohibit moving to another section.
+their full cleanup guard. Connection failure does not itself prohibit moving to another section. Headless checks hold
+frame load, startup reads and cleanup while preserving import/failed-save guards. Fresh0.3.5 quiet native checks activate
+Home/dock within1500ms while cleanup remains held, keep the dock connected, remove the iframe and cleanly stop the fake
+worker/host. This is simulated fault evidence; installed user feel remains open.
 
 Read-only process sampling of installed0.3.4 with the current descriptor43 failure: cooler worker CPU increased by
 0.109375seconds over55.02seconds (about0.2% of one logical processor,0.012% of this16-logical-processor machine),
