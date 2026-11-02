@@ -21,6 +21,7 @@ struct Inner {
     signature: String,
     status: Value,
     pnp: Value,
+    pnp_sampled_at: Option<String>,
     last_success: Option<String>,
     failures: u64,
 }
@@ -40,8 +41,9 @@ impl Diagnostics {
                 next_pnp: Instant::now(),
                 last_log: None,
                 signature: String::new(),
-                status: json!({"state":"disabled","code":"diagnostics_off","message":"Connection diagnostics are off","lastSampleAt":null,"lastSuccessAt":null,"consecutiveFailures":0}),
+                status: json!({"state":"disabled","code":"diagnostics_off","message":"Connection diagnostics are off","lastSampleAt":null,"pnpSampledAt":null,"lastSuccessAt":null,"consecutiveFailures":0}),
                 pnp: json!({"available":false}),
+                pnp_sampled_at: None,
                 last_success: None,
                 failures: 0,
             }),
@@ -58,7 +60,9 @@ impl Diagnostics {
         inner.next_sample = Instant::now();
         inner.next_pnp = Instant::now();
         inner.signature.clear();
-        inner.status = json!({"state":if enabled{"waiting"}else{"disabled"},"code":if enabled{"waiting_sample"}else{"diagnostics_off"},"message":if enabled{"Waiting for a connection sample"}else{"Connection diagnostics are off"},"lastSampleAt":null,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures});
+        inner.pnp = json!({"available":false});
+        inner.pnp_sampled_at = None;
+        inner.status = json!({"state":if enabled{"waiting"}else{"disabled"},"code":if enabled{"waiting_sample"}else{"diagnostics_off"},"message":if enabled{"Waiting for a connection sample"}else{"Connection diagnostics are off"},"lastSampleAt":null,"pnpSampledAt":null,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures});
     }
     pub fn status(&self) -> Value {
         self.inner.lock().unwrap().status.clone()
@@ -93,8 +97,10 @@ impl Diagnostics {
         if !self.enabled() || ticket.epoch != self.epoch.load(Ordering::SeqCst) {
             return;
         }
+        let timestamp = super::super::device::log::iso_now();
         if let Some(pnp) = pnp {
             inner.pnp = sanitize_pnp(&pnp);
+            inner.pnp_sampled_at = Some(timestamp.clone());
         }
         let worker = sanitize_worker(worker);
         let probe = match reply {
@@ -102,7 +108,6 @@ impl Diagnostics {
             Err(code) => json!({"sampleError":known_sample_error(code)}),
         };
         let (state, code, message, failure, success) = classify(&worker, &probe, &inner.pnp);
-        let timestamp = super::super::device::log::iso_now();
         if success {
             inner.last_success = Some(timestamp.clone());
         }
@@ -111,7 +116,7 @@ impl Diagnostics {
         } else {
             0
         };
-        inner.status = json!({"state":state,"code":code,"message":message,"lastSampleAt":timestamp,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures,
+        inner.status = json!({"state":state,"code":code,"message":message,"lastSampleAt":timestamp,"pnpSampledAt":inner.pnp_sampled_at,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures,
             "worker":worker,"live":probe,"pnp":inner.pnp});
         // Attempt/retry counters are useful in samples, but are not transitions.
         let signature = format!(
@@ -143,6 +148,77 @@ impl Diagnostics {
             }
         }
     }
+}
+/// A second explicit boundary for agent-visible cached diagnostics. This reads
+/// no source and exposes no payload, identifier, path, PID or arbitrary text.
+pub fn agent_health(value: &Value) -> Value {
+    let worker = sanitize_worker(&value["worker"]);
+    let probe = sanitize_probe(&value["live"]);
+    json!({
+        "state":allowed(value["state"].as_str(), &["disabled","waiting","blocked","unresponsive","unavailable","off","paused","connected","failed","connecting"], "unavailable"),
+        "code":allowed(value["code"].as_str(), &["diagnostics_off","waiting_sample","engine_disabled","ownership","worker_unavailable","sample_deferred","worker_timeout","live_off","intentional_hold","connected","descriptor_failure","connecting","not_found","busy","no_reply","write_timeout","short_write","transport_error"], "worker_unavailable"),
+        "lastSampleAt":agent_timestamp(&value["lastSampleAt"]),
+        "pnpSampledAt":agent_timestamp(&value["pnpSampledAt"]),
+        "consecutiveFailures":value["consecutiveFailures"].as_u64().unwrap_or(0).min(9_007_199_254_740_991),
+        "worker":{"enabled":worker["enabled"],"ready":worker["ready"],"state":worker["state"],
+            "generation":worker["generation"].as_u64().unwrap_or(0).min(9_007_199_254_740_991),
+            "restarts":worker["restarts"].as_u64().unwrap_or(0).min(9_007_199_254_740_991)},
+        "live":{"running":probe["running"],"connected":probe["connected"],"paused":probe["paused"],
+            "deviceHold":probe["deviceHold"],"systemHold":probe["systemHold"],"idle":probe["idle"],
+            "connectionState":probe["connectionState"],"code":probe["code"],
+            "sampleError":value["live"]["sampleError"].as_str().map(known_sample_error)
+                .or_else(||value.get("live").filter(|v|v.is_object()).and_then(|_|probe["sampleError"].as_str().map(known_sample_error)))},
+        "pnp":sanitize_pnp(&value["pnp"])
+    })
+}
+fn agent_timestamp(value: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return Value::Null;
+    };
+    let bytes = text.as_bytes();
+    if bytes.len() != 24
+        || !bytes.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            10 => *b == b'T',
+            13 | 16 => *b == b':',
+            19 => *b == b'.',
+            23 => *b == b'Z',
+            _ => b.is_ascii_digit(),
+        })
+    {
+        return Value::Null;
+    }
+    let number = |range: std::ops::Range<usize>| text[range].parse::<u32>().unwrap_or(0);
+    let year = number(0..4);
+    let month = number(5..7);
+    let day = number(8..10);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = [
+        0,
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if year == 0
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > days[month as usize]
+        || number(11..13) > 23
+        || number(14..16) > 59
+        || number(17..19) > 59
+    {
+        return Value::Null;
+    }
+    json!(text)
 }
 fn append(path: &std::path::Path, value: &Value, limit: u64) -> std::io::Result<()> {
     let mut bytes = serde_json::to_vec(value)?;
@@ -540,6 +616,144 @@ mod tests {
     }
     fn probe() -> Value {
         json!({"running":true,"connected":false,"connectionState":"error","code":"write_timeout","stage":"connecting","attempts":20})
+    }
+    #[test]
+    fn agent_projection_is_finite_bounded_and_redacts_every_nested_payload() {
+        let secret = "seed-secret USB\\identifier C:\\private\\file";
+        let value = json!({"state":secret,"code":secret,"message":secret,"pid":123,
+            "lastSampleAt":secret,"pnpSampledAt":"2026-02-30T00:00:00.000Z","consecutiveFailures":u64::MAX,
+            "worker":{"state":secret,"ready":true,"generation":u64::MAX,"restarts":u64::MAX,"pid":123,"message":secret},
+            "live":{"connectionState":secret,"code":secret,"sampleError":secret,"message":secret,"rxBytes":123,"payload":{"secret":secret}},
+            "pnp":{"available":true,"normalNodes":900,"problemCodes":[43,-1,4096,secret,0],"exactMatchedDescriptorCount":900,"identifiers":[secret]}});
+        let projected = agent_health(&value);
+        let text = projected.to_string();
+        for forbidden in [
+            "seed-secret",
+            "identifier",
+            "private",
+            "message",
+            "pid",
+            "payload",
+            "rxBytes",
+        ] {
+            assert!(!text.contains(forbidden), "redact {forbidden}");
+        }
+        assert_eq!(projected["state"], "unavailable");
+        assert_eq!(projected["code"], "worker_unavailable");
+        assert_eq!(projected["worker"]["state"], "error");
+        assert_eq!(projected["live"]["connectionState"], "error");
+        assert_eq!(projected["live"]["code"], "transport_error");
+        assert_eq!(projected["live"]["sampleError"], "worker_unavailable");
+        assert!(projected["lastSampleAt"].is_null());
+        assert!(projected["pnpSampledAt"].is_null());
+        assert_eq!(projected["consecutiveFailures"], 9_007_199_254_740_991u64);
+        assert_eq!(projected["worker"]["generation"], 9_007_199_254_740_991u64);
+        assert_eq!(projected["pnp"]["normalNodes"], 64);
+        assert_eq!(projected["pnp"]["exactMatchedDescriptorCount"], 64);
+        assert_eq!(projected["pnp"]["problemCodes"], json!([43, 0]));
+        let many = agent_health(&json!({"pnp":{"problemCodes":vec![43;100]}}));
+        assert_eq!(many["pnp"]["problemCodes"].as_array().unwrap().len(), 64);
+    }
+    #[test]
+    fn agent_probe_errors_preserve_source_failure_and_flag_missing_reply_shape() {
+        assert!(agent_health(&json!({"code":"diagnostics_off"}))["live"]["sampleError"].is_null());
+        assert_eq!(
+            agent_health(&json!({"live":{}}))["live"]["sampleError"],
+            "invalid_reply"
+        );
+        assert_eq!(
+            agent_health(&json!({"live":{"sampleError":"worker_timeout"}}))["live"]["sampleError"],
+            "worker_timeout"
+        );
+        assert!(
+            agent_health(&json!({"live":{"connectionState":"connected","code":"connected"}}))
+                ["live"]["sampleError"]
+                .is_null()
+        );
+    }
+    #[test]
+    fn agent_timestamp_accepts_only_calendar_valid_host_shape() {
+        for valid in ["2026-11-02T02:00:00.123Z", "2024-02-29T23:59:59.999Z"] {
+            assert_eq!(agent_timestamp(&json!(valid)), valid);
+        }
+        for invalid in [
+            "2026-02-29T00:00:00.000Z",
+            "2026-13-01T00:00:00.000Z",
+            "2026-11-00T00:00:00.000Z",
+            "2026-11-01T24:00:00.000Z",
+            "2026-11-01T00:60:00.000Z",
+            "2026-11-01T00:00:60.000Z",
+            "0000-01-01T00:00:00.000Z",
+            "2026-11-01T00:00:00.000Z secret",
+        ] {
+            assert!(agent_timestamp(&json!(invalid)).is_null());
+        }
+        for invalid in [Value::Null, json!(0), json!({"date":"secret"})] {
+            assert!(agent_timestamp(&invalid).is_null());
+        }
+    }
+    #[test]
+    fn pnp_timestamp_changes_only_on_arrived_samples_and_toggle_discards_inflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Diagnostics::new(dir.path().join("not-created/health.jsonl"));
+        assert!(d.status()["pnpSampledAt"].is_null());
+        assert_eq!(agent_health(&d.status())["code"], "diagnostics_off");
+        d.set_enabled(true);
+        assert_eq!(agent_health(&d.status())["code"], "waiting_sample");
+        assert!(d.status()["pnpSampledAt"].is_null());
+        let now = Instant::now();
+        let ticket = d.begin(now).unwrap();
+        d.finish(ticket, &worker(), Ok(probe()), None, now);
+        assert!(d.status()["pnpSampledAt"].is_null());
+        let ticket = d.begin(now + Duration::from_secs(10)).unwrap();
+        d.finish(
+            ticket,
+            &worker(),
+            Ok(probe()),
+            Some(pnp_snapshot(true)),
+            now,
+        );
+        let first = d.status()["pnpSampledAt"].clone();
+        assert!(!agent_timestamp(&first).is_null());
+        let ticket = d.begin(now + Duration::from_secs(20)).unwrap();
+        d.finish(ticket, &worker(), Err("sample_deferred"), None, now);
+        assert_eq!(d.status()["pnpSampledAt"], first);
+        let ticket = d.begin(now + Duration::from_secs(30)).unwrap();
+        d.set_enabled(false);
+        d.finish(
+            ticket,
+            &worker(),
+            Ok(probe()),
+            Some(pnp_snapshot(true)),
+            now,
+        );
+        assert!(d.status()["pnpSampledAt"].is_null());
+        assert_eq!(agent_health(&d.status())["code"], "diagnostics_off");
+        assert!(!dir.path().join("not-created").exists());
+    }
+    #[test]
+    fn cached_agent_codes_distinguish_worker_live_and_enumeration_failures() {
+        let w = worker();
+        let pnp = pnp_snapshot(true);
+        for (probe, expected) in [
+            (json!({"sampleError":"worker_timeout"}), "worker_timeout"),
+            (json!({"sampleError":"sample_deferred"}), "sample_deferred"),
+            (json!({"running":false}), "live_off"),
+            (
+                json!({"running":true,"systemHold":true}),
+                "intentional_hold",
+            ),
+            (json!({"running":true,"connected":true}), "connected"),
+            (
+                json!({"running":true,"code":"descriptor_failure"}),
+                "descriptor_failure",
+            ),
+        ] {
+            let (state, code, _, _, _) = classify(&w, &probe, &pnp);
+            let projected =
+                agent_health(&json!({"state":state,"code":code,"worker":w,"live":probe,"pnp":pnp}));
+            assert_eq!(projected["code"], expected);
+        }
     }
     #[test]
     fn distinguishes_timeout_enumeration_and_intentional_holds() {

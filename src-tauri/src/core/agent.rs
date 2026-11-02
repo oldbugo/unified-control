@@ -437,7 +437,7 @@ impl App {
                 status["revision"] = json!(revision);
                 status["profiles"] = metadata(&state);
                 status["dock"] = json!({"enabled":dock["enabled"],"state":dock["state"],"currentProfile":dock["currentProfile"],"currentPage":dock["currentPage"],"usageStatus":dock["usageStatus"],"timing":dock["timing"]});
-                status["cooler"] = json!({"enabled":cooler["enabled"],"state":cooler["state"],"busy":cooler["busy"],"engineVersion":cooler["engineVersion"]});
+                status["cooler"] = cooler_status(&cooler);
             }
             return Ok(status);
         }
@@ -600,6 +600,12 @@ impl App {
     }
 }
 
+fn cooler_status(cooler: &Value) -> Value {
+    json!({"enabled":cooler["enabled"],"state":cooler["state"],"busy":cooler["busy"],"engineVersion":cooler["engineVersion"],
+        "diagnosticsEnabled":cooler["diagnosticsEnabled"]==true,
+        "lastHealthSample":super::cooler_health::agent_health(&cooler["health"])})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +630,7 @@ mod tests {
         assert_eq!(status["agentAccess"], false);
         assert!(status.get("profiles").is_none());
         assert!(status.get("dock").is_none());
+        assert!(status.get("cooler").is_none());
         assert_eq!(
             app.agent_call("get_layout", json!({}))
                 .unwrap_err()
@@ -634,6 +641,44 @@ mod tests {
         assert!(app
             .agent_call("get_status", json!({"unknown":true}))
             .is_err());
+    }
+    #[test]
+    fn cooler_status_keeps_current_worker_separate_from_cached_health_and_read_is_inert() {
+        let source = json!({"enabled":true,"state":"starting","busy":false,"engineVersion":"4.18.1",
+            "pid":123,"message":"secret-worker-error","diagnosticsEnabled":true,
+            "health":{"state":"failed","code":"descriptor_failure","lastSampleAt":"2026-11-02T02:00:00.000Z",
+                "pnpSampledAt":"2026-11-02T01:59:40.000Z","worker":{"state":"running","ready":true,"generation":1},
+                "live":{"running":true,"connected":false,"connectionState":"failedUsb","code":"descriptor_failure"},
+                "pnp":{"available":true,"normalNodes":0,"problemCodes":[43],"exactMatchedDescriptorCount":1}}});
+        let projected = cooler_status(&source);
+        assert_eq!(projected["state"], "starting");
+        assert_eq!(projected["lastHealthSample"]["worker"]["state"], "running");
+        assert_eq!(projected["lastHealthSample"]["code"], "descriptor_failure");
+        assert!(!projected.to_string().contains("secret"));
+        assert!(projected.get("pid").is_none());
+        let (dir, app) = app();
+        let before = app.settings.load();
+        let before_bytes = std::fs::read(app.settings.file()).unwrap();
+        let first = app.agent_call("get_status", json!({})).unwrap();
+        let second = app.agent_call("get_status", json!({})).unwrap();
+        assert_eq!(first["cooler"], second["cooler"]);
+        assert!(
+            app.cooler.get().is_none(),
+            "status must not start a worker or diagnostics"
+        );
+        assert!(
+            app.runtime.get().is_none(),
+            "status must not start account readers"
+        );
+        assert!(!dir.path().join("devices/cooler").exists());
+        assert_eq!(app.settings.load(), before);
+        assert_eq!(std::fs::read(app.settings.file()).unwrap(), before_bytes);
+        app.settings_update(&json!({"agentAccess":false})).unwrap();
+        assert!(app
+            .agent_call("get_status", json!({}))
+            .unwrap()
+            .get("cooler")
+            .is_none());
     }
     #[test]
     fn timing_status_is_numerical_and_access_gated_without_activating_sources() {

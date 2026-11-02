@@ -10,6 +10,11 @@ User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. Up
 
 The renderer runs before input polling and builds all fourteen faces before transferring a navigated page; shared usage helper calls can block. These are identified code paths, not a measured cause of the physical delay. Reuse frames only with the existing freshness/account safeguards intact.
 
+Physical retest on0.3.2,2026-11-02: the user reports three Test/Back cycles feel responsive. Live MCP recorded six completed
+navigations, zero aborted and a latest host-receipt-to-transfer duration of72.44ms. Earlier durations are unavailable;
+the bounded capture missed the presses. No code scheduling change or measured speedup is attributed to this result.
+Keep the older delay report as a watch item; this sample does not call for a speculative performance change.
+
 Read-only follow-up on 2026-11-02: the worker consumes one inbound event per loop after rendering, so queued ACK/heartbeat
 messages are another plausible delay. A Folder/Back event schedules rendering immediately. The next measurement batch
 should record bounded durations/counts for polling, provider input, face rendering, ZIP creation and transfer, then compare

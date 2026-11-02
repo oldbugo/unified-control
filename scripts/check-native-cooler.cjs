@@ -51,7 +51,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await waitNative(async old=>{const s=await window.__TAURI_INTERNALS__.invoke('cooler_state');return s.state==='running'&&s.pid!==old&&!s.busy;},before.pid,{timeout:30000});
     assert.equal((await call('dock_state')).state,'connected','cooler worker crash must leave dock connected');
     await frame.locator('#navMine').click();
-    await page.waitForFunction(()=>document.getElementById('cooler-state')?.textContent==='running');
+    await page.waitForFunction(()=>document.getElementById('cooler-state')?.textContent==='Engine running');
     assert.deepEqual(errors,[]);
     await page.screenshot({path:path.join(home,'combined-cooler.png')});
     await page.locator('[data-page="dock"]').click();
