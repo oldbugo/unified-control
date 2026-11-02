@@ -1,15 +1,19 @@
 //! The one error type commands return to the UI: `{ error, code, status, failedUsb?, ... }` (copied from CoolerScreen's
 //! `core/error.rs`; `status` mirrors an HTTP status code).
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CoreError {
     #[serde(rename = "error")]
     pub message: String,
     pub code: Option<String>,
     pub status: u16,
-    #[serde(rename = "failedUsb", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "failedUsb",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub failed_usb: bool,
     /// Extra fields merged into the error body (versionId, maxFitLength, ...).
     #[serde(flatten)]
@@ -20,10 +24,20 @@ pub type CoreResult<T> = Result<T, CoreError>;
 
 impl CoreError {
     pub fn new(message: impl Into<String>) -> Self {
-        CoreError { message: message.into(), code: None, status: 400, failed_usb: false, extra: Default::default() }
+        CoreError {
+            message: message.into(),
+            code: None,
+            status: 400,
+            failed_usb: false,
+            extra: Default::default(),
+        }
     }
     pub fn coded(code: &str, message: impl Into<String>) -> Self {
-        CoreError { code: Some(code.into()), failed_usb: code == "failedUsb", ..Self::new(message) }
+        CoreError {
+            code: Some(code.into()),
+            failed_usb: code == "failedUsb",
+            ..Self::new(message)
+        }
     }
     pub fn status(mut self, status: u16) -> Self {
         self.status = status;

@@ -1,0 +1,31 @@
+# Device app integration contract
+
+User direction, 2026-11-01: integrate CoolerScreen now, then refine the UI. AI Usage and Monitor Toggle failures remain tracked. Sleep/resume is deferred. This is the implementation contract for the first cooler integration, not a full hardware acceptance claim.
+
+UC owns the window, visible tray, opt-in Windows startup, overall settings and busy-safe update/Quit. The cooler engine is a separate `uc-cooler-worker` process built from the immutable revision in `companions/cooler-engine.json`, in the separate private CoolerScreen repository. The existing dock controller remains in the host for this milestone; moving it to its own worker and shared providers remains later architecture work. A cooler process crash cannot panic the dock/host; a host crash closes the private pipe so the cooler finishes noncancellable work and exits. Do not adopt the cooler into a kill-on-close Job Object: that could interrupt Embedded writes. The engine retains its own ffmpeg child cleanup.
+
+## Commands and lifecycle
+
+The saved plan proposed current-user named pipes. This implementation uses private inherited anonymous stdin/stdout pipes: only the parent/child receive handles, with no discoverable command endpoint or network listener. Messages are versioned newline JSON, limited to32MiB before parse. Requests have v/id/command/args; replies have the matching id and result or a structured error; events contain reviewed cs event names. The worker validates an explicit command/argument allowlist and bounds concurrent requests. The UI cannot send USB packets or shell commands through this interface.
+
+Worker states are disabled, starting, running, blocked, reconnecting, stopping and unavailable/error. The user enables each device separately; cooler defaults off. First enable prepares a private data copy. A current CoolerScreen process blocks enable/ownership; UC never closes it. A per-session cooler engine mutex and the existing exclusive USB claim prevent double ownership. Supervision retries genuine process exits with bounded backoff; broken IPC while a process still lives retains busy state, closes stdin and waits for actual exit. Saved Live is explicitly reactivated after successful host enable/recovery, never merely by running the worker binary alone.
+
+All host RPCs hold a shared admission lock; disable/Quit take its exclusive side. Visible user jobs, uploads, imports and uncertain timed-out operations refuse shutdown. Cancellable background thumbnails/previews use existing CoolerScreen cancellation on exit. Completed replies leave worker admission before publication. The host blocks new commands during its Quit handshake, waits for iframe autosave/import flushing, then stops the cooler before preparing the relaunch helper. If helper preparation fails, the engine is restored. No force quit or guessed recovery command is used.
+
+## Storage and migration
+
+Host settings/profiles stay in UC's app folder. Cooler settings/library live in `devices/cooler`. First enable copies settings.json, companion.json, library, optional lyrics offsets and the gallery into a sibling staging folder, rebases known file fields and publishes only a complete import by rename. The original CoolerScreen app data/gallery remain unchanged as rollback; no uninstall or installer-lineage migration occurs in this preview. JSON rewriting is restricted to copied library records and companion settings, never source/gallery content. Linked/reparse data paths, unreadable records and originals outside known copied roots stop import rather than sharing mutable fallback files. User-selected external source folders remain configured references. Tests use synthetic copies only; real user migration requires hands-on confirmation.
+
+Files stream into host-owned transfer IDs in256KiB chunks, up to2GiB. The caller cannot supply staging paths. Byte count/offset/size and filenames are validated. Completion invokes the existing engine import method, then removes the staging file; failure permits abort/retry. Active transfers keep Quit busy. Runtime staging contents and media tokens are never committed/logged.
+
+## Interface, previews and services
+
+The reviewed CoolerScreen interface is vendored under public/cooler with a dedicated same-origin parent bridge; the engine remains in its own repo. Commands/events are explicitly routed to cooler_call. The bridge uses its own global so native Tauri iframe injection cannot replace it. This trusted bundled iframe is not a sandbox for arbitrary plugins. Theme editing, Live, Embedded, library, sources, settings and preview behaviors reuse existing engine methods. Window restart/Windows startup belong to UC. Screen setup/reconnect use the existing reviewed bundled scripts on explicit user action; fake mode refuses those effects.
+
+The worker's existing tokenized loopback media server retains Range/video/twin support. UC forwards its mediaBase privately, including after recovery. CSP restricts scripts/frames to bundled origin, blocks objects/forms and allows required local media plus configured HTTPS assets. Each engine keeps its own data sources for now; no global always-on AI/sensor reader is added. AI freshness/account provenance gates remain mandatory. Logs contain finite state/error codes, not IPC payloads, media tokens, account identity or user file contents.
+
+## Verification and limits
+
+Use debug-only quiet fake app instances with separate UC_HOME. Software gates cover actual IPC, embedded controls, chunked imports, busy refusal, worker crash/restart while dock stays connected, clean disable/Quit, synthetic migration and retained dock checks. Async native conditions must be explicitly awaited/polled in Node; the installed Playwright waitForFunction implementation does not repoll a resolved-false Promise predicate. Browser fixtures alone do not establish native iframe routing.
+
+Physical Live/Embedded, real migration, settings/theme continuity, both-device recovery and remaining dock function checks require user confirmation. Sleep remains deferred. UI polish, dock-worker extraction, shared readings, cross-device actions and replacing/uninstalling the old CoolerScreen are not claimed complete here.

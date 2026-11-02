@@ -1,7 +1,126 @@
 # Unified Control
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
-the Ulanzi Dial. Private. Phase 0: the app shell only (no device code yet). Rules for working on it: `CLAUDE.md`.
+the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
+Physical cooler/migration acceptance and remaining dock checks are pending. Rules: `AGENTS.md` and `CLAUDE.md`.
+Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0.3.0.md).
+Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
+UI and navigation follow-ups: [backlog](docs/backlog.md).
+
+## Current direction (2026-10-30)
+
+User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 checkpoint provides seven tools for status,
+scoped layouts, monitor discovery, preview, revision-checked apply, last-agent-write undo and job status. It uses the running
+tray app through same-user Windows IPC; it never edits app-data files from a client or starts a second device engine.
+Local agent access is visible in General and off by default. [Setup, tools and evidence](docs/agent-control.md).
+Installed 0.3.0/source `0909429` is verified through startup and a direct installed-MCP connection. Codex and both Claude
+client configurations are registered. The user enabled Local agent access; direct production MCP reads the 14-key layout and
+connected dock without changes. Reload the client's MCP configuration/start a fresh session to discover its tools.
+The dedicated request proxy avoids a packaged client's stale main executable. The completed stack is consolidated onto
+private `main`; `v0.3.0` preserves the installed build source. See the handoff before new development.
+
+Build the combined interface from the start, with Home, Cooler screen, Stream dock, Dial, General and About pages.
+Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,
+then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
+until its integration is built and tested.
+
+User direction on 2026-11-02: prioritize Monitor Toggle for immediate use. The live picker failure was traced to a canonical
+Windows resource path rejected by PowerShell 5.1's path provider. 0.2.3 normalizes filesystem paths at the adapter boundary;
+the original helper is unchanged. A temporary installed-helper correction restored discovery, and the user confirmed the
+physical Dell toggle worked on Key 10. The permanent adapter passes the canonical-path read-only regression; 0.2.3 was
+installed with startup and original helper hashes verified. The user subsequently confirmed Monitor Toggle works.
+[Evidence and limits](docs/function-failures.md).
+
+User direction on 2026-11-01: integrate CoolerScreen now, then refine the UI. Preview 0.2.0 reuses the existing cooler
+interface and engine in a supervised worker. First enable copies settings/library/gallery into UC, preserving the original
+fallback; close the separate CoolerScreen app yourself before enabling. No uninstall or automatic device enablement.
+[Architecture, migration and limits](docs/device-app/architecture.md). AI Usage remains unresolved; Monitor Toggle is now
+user-confirmed working. [Functional follow-ups](docs/function-failures.md). Sleep/resume stays deferred.
+
+Installed 0.2.1 adds the requested [background connection diagnostics](docs/cooler-connection-health.md), with a saved
+Connection diagnostics switch on the cooler page. It records bounded local evidence while UC stays in the tray; it never
+resets devices automatically. One approved targeted reset did not recover this incident. Physical screen USB access is
+unavailable now; Windows still reports matched descriptor failure43. The installed, non-simulated health log is recording it.
+
+Software checked for 0.2.0: 103 core tests (one helper ignored), five host tests, three cooler-worker tests, full headless
+interface and cooler bridge checks, plus quiet native fake IPC. The native integration verifies the embedded themes UI,
+chunked imports, busy-safe Quit, saved Live settings, cooler worker crash/restart while the dock stays connected and clean
+disable/Quit. Corrected native-profile polling replaces earlier async state waits that could return before their condition
+was true. Physical behavior and real user-data migration still require confirmation. UI polish follows integration.
+
+## GitHub layout
+
+Unified Control is one product maintained across separate private repositories. The agreed grouping is the shared
+`unified-control` GitHub topic and a `UC:` description prefix, under the existing `oldbugo` account.
+
+| Repository | Responsibility |
+| --- | --- |
+| [unified-control](https://github.com/oldbugo/unified-control) | Combined app, interface, profiles, actions, shared services and installer |
+| [uc-ulanzi](https://github.com/oldbugo/uc-ulanzi) | Ulanzi dock hardware engine and fake dock; later the dial |
+| [coolerscreen](https://github.com/oldbugo/coolerscreen) | CoolerScreen app and reusable cooler engine; keeps its own version history |
+| [ulanzi-toolkit](https://github.com/oldbugo/ulanzi-toolkit) | Existing Studio plugins, including usage readers and Monitor Toggle |
+
+The app now consumes `ulanzi_dock` through a Cargo Git dependency pinned to reviewed source commit `9ea93c0` in
+`uc-ulanzi`. This development pin is immutable; tagged dependencies follow when releases are made. The profile/render
+pipeline is tested through the simulated dock; native HID opens only after the user enables the dock and Studio is absent. CoolerScreen worker integration is built in the 0.2.0 preview. Reviewed work is committed and pushed
+to the relevant private repository as work proceeds. A feature branch on GitHub does not imply a merged or installed release.
+
+## Current implementation
+
+The native editor saves validated profiles and pages in the UC app-data folder, with stable IDs, a startup backup and
+journaled recovery. Changes save as made; errors remain visible and retryable. Browser-only previews keep a separate
+local draft. They are not silently imported into native profiles. [Storage contract](docs/profiles.md).
+
+Built in the 0.1.0 preview: six-page editor, native profile storage, strict A/B routing, navigation, undo, searchable actions,
+bounded PNG/JPEG imports, 13 fixed icons, text/clock/date and on-demand CPU/RAM/NVIDIA GPU faces. Hotkey, media, Unicode text,
+direct launch/URL and preserved Monitor Toggle adapters are wired to physical presses. Usage readers render all 16 views
+through a managed Node helper; account provenance/freshness gates run before publication, rendering, receipt and delivery.
+The dock remains disabled until explicitly enabled. Studio detection, ownership, reconnect, brightness and tray controls
+are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/dock-mvp.md).
+
+Checked: 97 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
+Toolkit tests pass. The separate driver has 30 passing fake-transport tests from the foundation checkpoint. Browser checks
+cover undo, picture persistence, all usage choices, literal launch arguments and three window widths. A quiet native WebView
+check covers real IPC/files, image import, A/B persistence, physical-size PNGs, fake Studio block/reconnect, duplicate press
+suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
+for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
+Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
+must show unknown. Earlier preview 0.2.1/source `f079a96` was installed through cooperative idle-safe update; new PID and
+startup version were verified at 10:50:10 UTC on 2026-11-01. Dock reconnected with a fresh full page and zero errors. Cooler
+is enabled but fails USB enumeration; background health records code43 with one exact-matched descriptor failure and no
+normal nodes. A USB port-cycle request did not recover it; physical reconnect is deferred because its cable is inaccessible.
+The request-only executable override avoids the packaged shell's stale installed-file view.
+Installed reader/resources pass an account-inactive PNG/clean-shutdown check. Physical acceptance is pending.
+Initial hands-on feedback: actions mostly work, but the physical dock falls back to its built-in startup/default screen.
+UC was observed still reporting Connected. The 0.1.1 update tolerates nonstandard acknowledgement lengths and adds
+sanitized connection/heartbeat/frame diagnostics. The physical failure cause and recovery remain unverified.
+The 0.1.1 idle retest failed within 10–15 seconds while heartbeats and minute clock partial updates continued with
+zero errors/reconnects. Version 0.1.2 adds a known Background-mode keepalive after the first full page and every five
+seconds. A deterministic fake test confirms the cadence, stop-on-disable, unchanged key/wide images and no page resends.
+User-reported: the layout stayed visible for about ten idle minutes on 0.1.2, and enabling restored it from the default
+screen. Diagnostics qualify that result: keepalives continued but passive heartbeats stopped, causing receive-timeout
+reconnects roughly every minute. This is visible idle stability, not a clean connection pass. Version 0.1.3 adds a bounded
+brightness-response probe before the receive timeout while retaining failure/reconnect when no response arrives.
+See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest). Broader physical acceptance remains pending.
+The first 100 seconds of 0.1.3 live diagnostics show three acknowledged response probes, one initial full page and no
+errors/reconnects, with Background keepalive continuing. This is bounded connection evidence, not full hardware acceptance.
+Version 0.1.4 fixes physical edit refresh: editing one face selects and redraws that edited face immediately, without an
+A/B round trip. Other keys, held-press suppression and folder history are preserved; edits never execute actions. Tests
+verify clock/date/icon PNG delivery through the simulated dock; the user confirmed this fix.
+Version 0.1.5 adds virtual page following after successful physical page delivery, with a saved opt-out and guards for
+active edits/imports/saves. It also bundles the tested polling/typing flicker fixes. Sleep/resume is deferred at the user's
+request; remaining hardware acceptance and the navigation-latency investigation remain open.
+Normal close keeps the WebView in the tray to preserve queued/failed edits. Tray Quit waits for the editor to flush;
+failed saves keep the app open with retry available. This currently retains WebView memory while the window is closed.
+
+Repeat the browser check with `node scripts/check-interface.cjs` where Playwright 1.58.2 and its Chromium are available.
+For an external installation, set `UC_PLAYWRIGHT_MODULE` to its module folder. Screenshots go to the temporary
+`uc-interface-preview` folder, or `UC_PREVIEW_OUTPUT` if set. The check runs headlessly and opens no native app.
+
+For the native check, first build debug, set `UC_TEST_EXE` to its `debug/unified-control.exe`, then run
+`node scripts/check-native-profiles.cjs`. It refuses release/installed binaries, creates its own temporary UC_HOME,
+and sets quiet/multi/fake flags. It also verifies normal window close and timed tray Quit preserve a newer queued edit.
+It does not open the real dock or alter the installed apps.
 
 ## Where the shell came from
 

@@ -1,38 +1,438 @@
-// Placeholder PowerToys-style frame (phase 0): left list of pages, right pane with placeholder text.
-// The chosen page is a setting (settings.json `ui.page`), saved as soon as it is picked (no Save button).
+// Combined editor: native profile files in UC, local drafts in browser previews.
+import {toNative, fromNative, ProfileWriter} from './js/profile-model.js';
+import {EditorHistory} from './js/editor-history.js';
+import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
+import {KeyPreviewRenderer} from './js/key-preview.js';
+import {DevicePageFollower} from './js/device-page-follow.js';
+import {CoolerPanel} from './js/cooler-panel.js';
+import {AgentEditorLease} from './js/agent-editor.js';
 const T = window.__TAURI_INTERNALS__;
-const invoke = (cmd, args) => (T ? T.invoke(cmd, args || {}) : Promise.reject(new Error('not in the app')));
-
-const PAGES = {
-  home: { title: 'Home', text: 'The status of every device will show here at a glance.' },
-  dock: { title: 'Stream dock', text: 'The Ulanzi D200H stream dock page comes in phase 1: keys, pages, actions and the live usage keys.' },
-  general: { title: 'General', text: 'Common settings will live here: start with Windows (off unless you turn it on), appearance, updates, privacy and diagnostics.' },
-  about: { title: 'About', text: 'Unified Control: one tray app for your devices.' },
+const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
+const coolerPanel=new CoolerPanel(invoke,!!T);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STORE = 'uc.interface-prototype.v1';
+const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
+const FACES = {text:'Large text', icon:'Icon and label', picture:'Picture and label', clock:'Clock', date:'Date', claude:'Claude usage', codex:'Codex usage', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'};
+const USAGE_VIEWS={rings:'Combined rings',bars:'Combined bars',trend:'Combined trends',tokens:'Daily tokens',resets:'Both reset countdowns','five-hour-ring':'Five-hour ring','weekly-ring':'Weekly ring','five-hour-number':'Five-hour number','weekly-number':'Weekly number','five-hour-reset':'Five-hour countdown','weekly-reset':'Weekly countdown','five-hour-time':'Five-hour reset time','weekly-time':'Weekly reset time','five-hour-trend':'Five-hour trend','weekly-trend':'Weekly trend','wide-dashboard':'Wide dashboard'};
+const FACE_ICONS={app:'App',folder:'Folder',back:'Back',play:'Play',pause:'Pause',next:'Next',previous:'Previous',volume:'Volume',mute:'Mute',monitor:'Monitor',globe:'Web',keyboard:'Keyboard',clock:'Clock'};
+const ACTIONS = {none:'No action', hotkey:'Hotkey', media:'Media key', launch:'Open app or file', url:'Open URL', text:'Type text', page:'Switch page', folder:'Open folder page', back:'Back', monitor:'Monitor Toggle'};
+const ICONS = {
+  home:'<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
+  cooler:'<rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8m-4-3v3"/>',
+  dock:'<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 3v18M3 9h18M3 15h18m10-12v18"/>',
+  dial:'<circle cx="12" cy="12" r="9"/><path d="m12 12 4-4"/>',
+  general:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/>',
+  about:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>',
+  launch:'<path d="M14 3h7v7m0-7-11 11"/><path d="M10 3H3v18h18v-7"/>',
+  media:'<path d="m9 5 10 7-10 7Z"/>',
+  monitor:'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
 };
-
-let state = null;
-const pane = document.getElementById('pane');
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-
-function render(page) {
-  const p = PAGES[page] || PAGES.home;
-  document.querySelectorAll('.nav-item').forEach(b => {
-    if (b.dataset.page === page) b.setAttribute('aria-current', 'page');
-    else b.removeAttribute('aria-current');
-  });
-  let html = `<h1>${esc(p.title)}</h1><p>${esc(p.text)}</p>`;
-  if (page === 'about' && state) {
-    const b = state.build || {};
-    html += `<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(b.hash)} (${esc(b.commitDate)})${esc(b.note || '')}</dd></dl>`;
-  }
-  pane.innerHTML = html;
+const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.launch}</svg>`;
+const face = (kind = 'text', text = '') => ({kind, text});
+const key = (a = face(), b = a, action = 'none', value = '') => ({a:{...a}, b:{...b}, action, value});
+const newPage = name => ({name, keys:Array.from({length:14}, () => key())});
+function initial() {
+  const page = newPage('Main');
+  page.keys[0] = key(face('claude'), face('trend'));
+  page.keys[1] = key(face('codex'), face('reset'));
+  page.keys[2] = key(face('clock'), face('clock'));
+  page.keys[3] = key(face('icon','Monitor'), face('text','Display'), 'monitor');
+  page.keys[4] = key(face('icon','Music'), face('text','Play'), 'media','Play / pause');
+  page.keys[5] = key(face('icon','Browser'), face('text','Web'), 'url','https://example.com');
+  page.keys[13] = key(face('text','Your workspace'), face('clock'));
+  return {version:1, current:'home', profile:0, page:0, profiles:[{name:'Everyday', pages:[page]}]};
 }
-
-document.querySelectorAll('.nav-item').forEach(b => {
-  b.addEventListener('click', () => {
-    render(b.dataset.page);
-    invoke('settings_update', { patch: { page: b.dataset.page } }).then(s => { state = s; }).catch(() => {});
-  });
+// Reject malformed drafts; stored action text is always inert data.
+function valid(d) {
+  return d?.version === 1 && Array.isArray(d.profiles) && d.profiles.length > 0 && d.profiles.length <= 50 &&
+    d.profiles.every(p => typeof p.name === 'string' && Array.isArray(p.pages) && p.pages.length > 0 && p.pages.length <= 50 &&
+      p.pages.every(pg => typeof pg.name === 'string' && Array.isArray(pg.keys) && pg.keys.length === 14 && pg.keys.every(k =>
+        k && Object.hasOwn(ACTIONS,k.action) && typeof k.value === 'string' && [k.a,k.b].every(f =>
+          f && Object.hasOwn(FACES,f.kind) && typeof f.text === 'string'))));
+}
+let draft = initial(), storageNote = '', state = null, selected = 0, selectedFace = 'a', previewFace = 'a', hasLocalPage = false;
+const history=new EditorHistory();
+const pendingMutations=new Set();
+const pictureEpoch=new WeakMap();
+let actionSearch='',deviceStatus=null;
+let followPhysicalPage=true,followPreferenceReady=!T,followPreferenceEpoch=0,savedFollowPhysicalPage=true,followPreferenceWrite=Promise.resolve();
+let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0;
+let editGesture=null;
+let agentLayoutLocked=false,quitPreparing=false;
+const pageFollower=new DevicePageFollower();
+function remember(group=''){history.checkpoint(draft,group);const undo=document.querySelector('[data-do="undo"]');if(undo)undo.disabled=!history.available;}
+let profilesReady = !T, exitGuardReady = !T, guardError = '', loadRunning = false, nativeSaving = false, recoveryNote = '', previewNote = '', previewGeneration = 0;
+const keyPreviews=new KeyPreviewRenderer();
+const writer = new ProfileWriter(invoke, (status) => {
+  nativeSaving=status==='saving';
+  storageNote=status==='failed' ? 'Changes could not be saved. Keep this window open and retry.' : '';
+  showStorage();
 });
-
-invoke('app_state').then(s => { state = s; render(s.page); }).catch(() => render('home'));
+try {
+  const raw = T ? null : localStorage.getItem(STORE);
+  if (raw) { const saved = JSON.parse(raw); if (!valid(saved)) throw new Error('Invalid draft'); draft = saved; hasLocalPage = true; }
+} catch { storageNote = 'The saved prototype could not be loaded. A fresh preview is open.'; }
+draft.profile = Number.isInteger(draft.profile) && draft.profiles[draft.profile] ? draft.profile : 0;
+draft.page = Number.isInteger(draft.page) && draft.profiles[draft.profile].pages[draft.page] ? draft.page : 0;
+draft.current = Object.hasOwn(NAV,draft.current) ? draft.current : 'home';
+const pane = document.getElementById('pane');
+const profile = () => draft.profiles[draft.profile];
+const page = () => profile().pages[draft.page];
+const activeKey = () => page().keys[selected];
+function persist() {
+  editorIntentEpoch++;
+  if (T) {
+    if (profilesReady && exitGuardReady) writer.enqueue(toNative(draft));
+    return;
+  }
+  try { localStorage.setItem(STORE,JSON.stringify(draft)); storageNote = ''; }
+  catch { storageNote = 'Local storage is unavailable. Changes last only while this preview is open.'; }
+  showStorage();
+}
+function showStorage() {
+  const el = document.getElementById('storage-status');
+  el.textContent = storageNote || guardError || (T ? !profilesReady ? 'Saved layouts are unavailable' : !exitGuardReady ? 'Preparing the editor…' : agentLayoutLocked ? 'Applying agent layout changes…' : nativeSaving ? 'Saving changes…' : previewNote || recoveryNote || 'Changes saved in Unified Control' : 'Prototype changes saved on this device');
+  el.classList.toggle('attention', !!storageNote);
+  document.getElementById('storage-retry').hidden=!(T && writer.failed);
+}
+const options = (items, value) => Object.entries(items).map(([v,label]) => `<option value="${esc(v)}"${v===String(value)?' selected':''}>${esc(label)}</option>`).join('');
+const field = (label, id, control) => `<div class="field"><label for="${id}">${label}</label>${control}</div>`;
+function deviceCard(id, title, description, status) {
+  return `<button class="device-card" data-go="${id}"><span class="device-icon">${icon(id)}</span><span class="device-info"><strong>${title}</strong><span>${description}</span></span><span class="chip">${status}</span><span aria-hidden="true">›</span></button>`;
+}
+function faceMarkup(f, k) {
+  const label = f.text || (f.kind === 'icon' ? ACTIONS[k.action] : '');
+  if (f.kind === 'claude' || f.kind === 'codex') return `<span class="allowance"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="ring outer" cx="50" cy="50" r="41"/><circle class="ring inner" cx="50" cy="50" r="29"/></svg><span class="allowance-values">—<br>—</span></span><span class="key-caption">${f.kind === 'claude' ? 'Claude' : 'Codex'} · No data</span>`;
+  if (f.kind === 'clock') return `<span class="key-main clock-value">${new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false})}</span><span class="key-caption">Local time</span>`;
+  if (f.kind === 'reset') return '<span class="key-main">—</span><span class="key-caption">Reset · No data</span>';
+  if (f.kind === 'trend') return '<span class="trend-placeholder" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="key-caption">Trend · No data</span>';
+  if (f.kind === 'icon') return `<span class="key-icon">${icon(k.action)}</span><span class="key-caption">${esc(label)}</span>`;
+  if (f.kind === 'picture') return `${f.asset?`<img class="rendered-key" data-picture="${esc(f.asset)}" alt="${esc(f.text||'Picture')}">`:'<span class="key-main">—</span>'}<span class="key-caption">${esc(f.text||'Picture')}</span>`;
+  if (f.kind === 'date') return `<span class="key-main">${new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short'})}</span>`;
+  if (['cpu','gpu','ram'].includes(f.kind)) return `<span class="key-main">—</span><span class="key-caption">${f.kind.toUpperCase()} · No data</span>`;
+  return `<span class="key-main">${esc(label || '+')}</span>${label?'':'<span class="key-caption">Empty key</span>'}`;
+}
+function dockMarkup() {
+  return `<div class="dock-body"><div class="dock-brand">ULANZI <span>D200H · layout preview</span></div><div class="dock-grid">${page().keys.map((k,i) => `<button class="dock-key${i===13?' wide-key':''}${i===selected?' selected':''}" data-key="${i}" aria-label="${i===13?'Wide display':`Key ${i+1}`}, ${FACES[k[previewFace].kind]}" aria-pressed="${i===selected}">${faceMarkup(k[previewFace],k)}<span class="key-index">${i===13?'Wide':String(i+1).padStart(2,'0')}</span></button>`).join('')}</div></div>`;
+}
+function actionControl(k) {
+  if (k.action === 'none') return '<p class="hint">This key has no action.</p>';
+  if (k.action === 'monitor') return `<div id="monitor-targets"><p class="hint">Loading available monitors…</p></div><p class="hint">Choose the displays this key will toggle.</p>`;
+  if (k.action === 'back') return '<p class="hint">Return from the current folder page.</p>';
+  if (['page','folder'].includes(k.action)) return field('Target page','action-value',`<select id="action-value">${options(Object.fromEntries(profile().pages.map((p,i)=>[String(i),p.name])), k.value)}</select>`);
+  if (k.action === 'media') return field('Media control','action-value',`<select id="action-value">${options(Object.fromEntries(['Play / pause','Next track','Previous track','Volume up','Volume down','Mute'].map(v=>[v,v])),k.value)}</select>`);
+  const labels = {hotkey:'Key combination', launch:'App or file path', url:'URL', text:'Text'};
+  const placeholders = {hotkey:'Ctrl + Shift + M',launch:'C:\\Path\\App.exe',url:'https://example.com',text:'Text to type'};
+  if(k.action==='launch'){let config={path:k.value,args:[]};try{const parsed=JSON.parse(k.value);if(parsed&&typeof parsed.path==='string')config=parsed;}catch{}return field('App, file or folder','action-value',`<input id="action-value" maxlength="500" value="${esc(config.path)}" placeholder="${esc(placeholders.launch)}">`)+field('Arguments (one per line)','launch-args',`<textarea id="launch-args" rows="3" maxlength="3000">${esc((config.args||[]).join('\n'))}</textarea>`);}
+  return field(labels[k.action],'action-value',`<input id="action-value" maxlength="500" value="${esc(k.value)}" placeholder="${esc(placeholders[k.action])}">`);
+}
+function editorMarkup() {
+  const k = activeKey(), f = k[selectedFace];
+  return `<div class="editor-head"><div><span class="eyebrow">Selected display</span><h2>${selected===13?'Wide display':`Key ${selected+1}`}</h2></div><span class="chip">Draft</span></div>
+    <div class="seg" role="group" aria-label="Edit face"><button data-edit-face="a" aria-pressed="${selectedFace==='a'}">Face A</button><button data-edit-face="b" aria-pressed="${selectedFace==='b'}">Face B</button></div>
+    ${field('Presentation','face-kind',`<select id="face-kind">${options(FACES,f.kind)}</select>`)}
+    ${['text','icon','picture'].includes(f.kind)?field('Display text','face-text',`<input id="face-text" maxlength="40" value="${esc(f.text)}" placeholder="Add a label">`):''}
+    ${f.kind==='icon'?field('Icon','face-icon',`<select id="face-icon">${options(FACE_ICONS,f.icon||'app')}</select>`):''}
+    ${f.kind==='picture'?field('Picture','face-picture','<input id="face-picture" type="file" accept="image/png,image/jpeg">'):''}
+    ${['claude','codex'].includes(f.kind)?field('Usage display','usage-view',`<select id="usage-view">${options(Object.fromEntries(Object.entries(USAGE_VIEWS).filter(([id])=>f.kind==='codex'||id!=='tokens')),f.usageView||'rings')}</select>`):''}
+    ${['claude','codex','reset','trend'].includes(f.kind)?'<p class="hint">Unavailable or stale readings stay unknown. Claude needs a supporting Desktop Code session.</p>':''}
+    <div class="section-divider"></div><h3>On press</h3>${field('Find an action','action-search',`<input id="action-search" type="search" value="${esc(actionSearch)}" placeholder="Search actions">`)}${field('Action','action-kind',`<select id="action-kind">${options(Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===k.action||label.toLowerCase().includes(actionSearch.toLowerCase()))),k.action)}</select>`)}
+    ${actionControl(k)}<p class="hint">Actions run from physical keys only. Preview presses never run them.</p>
+    <div class="section-divider"></div><button class="btn full" data-do="preview-flip">Preview flip to Face ${previewFace==='a'?'B':'A'}</button>${T&&state?.fake?'<button class="btn full" data-do="simulate-press">Test simulated key press</button>':''}<p class="hint">Exactly two faces. Choose the same presentation twice for a fixed display.</p>`;
+}
+function dockPage() {
+  return `<div class="page-heading"><div><span class="eyebrow">Ulanzi D200H</span><h1>Stream dock</h1><p>Your keys, pages and actions in one place.</p></div><span class="chip accent">${T?(state?.fake?'Simulated dock':'D200H'):'Browser preview'}</span></div>
+    <div class="device-header"><span class="device-icon">${icon('dock')}</span><div><strong>Stream dock</strong><p id="dock-message">${esc(deviceStatus?.message||'Dock disabled')}</p></div><label class="dock-switch">Enabled <input id="dock-enabled" type="checkbox" role="switch" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Disabled')}</span></div>
+    <div class="dock-controls">${field('Brightness','dock-brightness',`<input id="dock-brightness" type="range" min="1" max="100" value="${deviceStatus?.brightness||50}" ${T?'':'disabled'}>`)}<label class="dock-switch">Follow physical page <input id="follow-physical-page" type="checkbox" ${followPhysicalPage?'checked':''} ${T?'':'disabled'}></label><span class="hint" id="dock-active-page"></span><button class="btn" data-do="undo" ${history.available?'':'disabled'}>Undo</button></div>
+    <div class="workspace-toolbar"><div class="profile-picker">${field('Profile','profile-picker',`<select id="profile-picker">${options(Object.fromEntries(draft.profiles.map((p,i)=>[String(i),p.name])),draft.profile)}</select>`)}</div><button class="btn" data-do="add-profile">Add profile</button><span class="toolbar-spacer"></span><span class="hint">Previewing Face ${previewFace.toUpperCase()}</span><button class="btn" data-do="preview-flip">Flip A / B</button></div>
+    <div class="dock-workspace"><section class="preview-column" aria-label="Dock preview"><div id="dock-preview">${dockMarkup()}</div><div class="page-strip" role="group" aria-label="Dock pages">${profile().pages.map((p,i)=>`<button class="btn${draft.page===i?' active':''}" data-dock-page="${i}" aria-pressed="${draft.page===i}">${esc(p.name)}</button>`).join('')}<button class="btn ghost" data-do="add-page">+ Add page</button></div><div class="names-row">${field('Profile name','profile-name',`<input id="profile-name" maxlength="40" value="${esc(profile().name)}">`)}${field('Page name','page-name',`<input id="page-name" maxlength="40" value="${esc(page().name)}">`)}</div><p class="hint">Select a display to edit it. Changes save as made and apply when the dock is enabled.</p></section><aside class="key-editor" aria-label="Key editor">${editorMarkup()}</aside></div>`;
+}
+function plannedPage(id) {
+  const cooler = id === 'cooler';
+  return `<div class="page-heading"><div><span class="eyebrow">${cooler?'Lovingcool SC70':'Ulanzi Dial'}</span><h1>${NAV[id]}</h1><p>${cooler?'Your cooler display, inside Unified Control.':'A place for your dial controls.'}</p></div><span class="chip">Planned</span></div>
+    <div class="device-header"><span class="device-icon">${icon(id)}</span><div><strong>${NAV[id]}</strong><p>Engine integration is planned.</p></div><span class="chip">Not connected</span></div>
+    <section class="empty-state"><span class="empty-icon">${icon(id)}</span><h2>${cooler?'The cooler page comes next':'Dial support follows the cooler'}</h2><p>${cooler?'Themes, the library and live controls will be brought into this page after the dock passes acceptance. Keep using the current CoolerScreen app.':'The dial will get its own controls here once the dock and cooler are working in the combined app.'}</p><p class="hint">${cooler?'CoolerScreen':'Dial'} controls are not integrated yet.</p><button class="btn" data-go="dock">Explore the dock editor</button></section>`;
+}
+function render() {
+  document.querySelector('.preview-label').textContent=T?(state?.fake?'Simulated dock':'Device controls'):'Browser preview';
+  document.querySelectorAll('.nav-item').forEach(b => {
+    if (b.dataset.page===draft.current) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current');
+  });
+  if(draft.current==='cooler'&&coolerPanel.active(pane)){coolerPanel.refresh();showStorage();return;}
+  coolerPanel.unmount();
+  let html = '';
+  if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
+  else if (draft.current==='cooler') html=coolerPanel.markup();
+  else if (draft.current==='dial') html = plannedPage(draft.current);
+  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. Control the dock and cooler from their own pages. Dial support follows later.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Ulanzi D200H · disabled until enabled'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Disabled'):'Preview')}${deviceCard('cooler','Cooler screen',coolerPanel.state.message||'Lovingcool SC70 · enable from its page',coolerPanel.state.state||'Disabled')}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
+  else if (draft.current === 'general') html = `
+    <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
+    <input id="autostart-enabled" type="checkbox" role="switch" aria-label="Start with Windows" ${state?.autostart?'checked':''} ${!T||state?.fake?'disabled':''}></div>
+    <div class="setting-row"><div><strong>Local agent access</strong><p>Let connected MCP clients read device status and configure dock layouts. Changes appear here. Off unless you enable it.</p></div><input id="agent-access" type="checkbox" role="switch" aria-label="Local agent access" ${state?.agentAccess?'checked':''} ${!T?'disabled':''}></div>
+    <div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div>
+    <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages are saved in the app data folder, with a startup backup.':'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div>
+    <div class="setting-row"><div><strong>Background behavior</strong><p>The visible tray keeps enabled controls running. Quit waits for active work and stops them.</p></div></div></section>`;
+  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Combined device preview</h2><p>Configure key faces and actions, view usage allowances and manage your dock. Enable the dock separately. CoolerScreen controls are integrated on their own page; dial support follows later.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
+  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
+}
+async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
+const MONITOR_DISCOVERY_ERRORS=new Set([
+  'Monitor discovery returned an invalid result','Monitor discovery returned no display list',
+  'Monitor discovery exceeded its display limit','A discovered monitor has no stable key',
+  'A discovered monitor has an invalid stable key','Monitor action lock is unavailable',
+  'Monitor Toggle resources are unavailable','Windows system folder is unavailable',
+  'Monitor Toggle helper could not be started','Monitor operation failed; check its configured targets and saved layout',
+  'Monitor helper result exceeds its size limit','Monitor helper returned an invalid result',
+  'Monitor information unavailable','Monitor discovery requires Windows',
+]);
+async function updateMonitors(){
+  const container=document.getElementById('monitor-targets');if(!container)return;
+  if(!T){container.innerHTML='<p class="hint">Monitor selection is available in the app.</p>';return;}
+  const edited=activeKey();
+  container.textContent='Loading available monitors…';
+  try{
+    const displays=await invoke('monitor_list');if(!container.isConnected||edited!==activeKey())return;
+    let chosen=[];try{chosen=JSON.parse(edited.value).targets||[];}catch{}
+    for(const key of chosen)if(!displays.some(display=>display.key===key))displays.push({key,label:'Saved display (currently unavailable)'});
+    container.innerHTML=displays.map(display=>`<label class="monitor-choice"><input type="checkbox" data-monitor="${esc(display.key)}" ${chosen.includes(display.key)?'checked':''}> ${esc(display.label)}</label>`).join('')||'<p class="hint">No configurable monitors found.</p>';
+  }catch(error){
+    if(!container.isConnected||edited!==activeKey())return;
+    const candidate=typeof error==='string'?error:error?.error||error?.message;
+    const message=MONITOR_DISCOVERY_ERRORS.has(candidate)?candidate:'Monitor information is unavailable.';
+    container.innerHTML=`<p class="hint" role="status">${esc(message)}</p><button class="btn" data-do="retry-monitors">Retry monitor detection</button>`;
+  }
+}
+function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();}
+function updateUsageStatus(){
+  const selected=deviceStatus?.usageStatus?.providers?.filter(item=>item.selected)||[];
+  let note=document.getElementById('dock-usage-status');
+  if(!note&&document.getElementById('dock-message')){note=document.createElement('p');note.id='dock-usage-status';note.className='hint';note.setAttribute('role','status');document.querySelector('.dock-controls').after(note);}
+  if(!note)return;note.hidden=!selected.length;
+  const lines=selected.map(item=>`${item.provider==='claude'?'Claude':'Codex'}: ${item.message||item.status}`);
+  if(selected.length&&deviceStatus.usageStatus.reader?.code!=='ready')lines.unshift(deviceStatus.usageStatus.reader?.message||'AI usage reader is unavailable.');
+  const text=lines.join(' ');if(note.textContent!==text)note.textContent=text;
+}
+function followDeliveredPage(){
+  const target=pageFollower.take(draft,{enabled:followPhysicalPage,ready:profilesReady&&exitGuardReady&&followPreferenceReady,
+    busy:agentLayoutLocked||writer.running||!!writer.pending||writer.failed||nativeSaving||pendingMutations.size>0||!!(editGesture?.isConnected&&document.activeElement===editGesture),visible:draft.current==='dock'});
+  if(!target)return false;
+  draft.profile=target.profile;draft.page=target.page;selected=0;selectedFace='a';previewFace='a';actionSearch='';
+  render();return true;
+}
+function applyDockStatus(result,ticket,intent){
+  if(intent!==editorIntentEpoch||ticket<lastDockStatusTicket)return;
+  lastDockStatusTicket=ticket;deviceStatus=result;pageFollower.observe(result);
+  if(!followDeliveredPage())updateDeviceStatus();
+}
+async function pollDockState(){
+  if(!T||dockPollRunning)return;
+  dockPollRunning=true;
+  const ticket=++dockRequestTicket,intent=editorIntentEpoch;
+  try{applyDockStatus(await invoke('dock_state'),ticket,intent);}catch{}
+  finally{dockPollRunning=false;}
+}
+function setFollowPhysicalPage(enabled){
+  const epoch=++followPreferenceEpoch;followPhysicalPage=enabled;followPreferenceReady=true;
+  if(enabled)pageFollower.requestSync();else pageFollower.manualSelection();
+  followDeliveredPage();
+  followPreferenceWrite=followPreferenceWrite.catch(()=>{}).then(()=>invoke('settings_update',{patch:{followPhysicalPage:enabled}})).then(result=>{
+    savedFollowPhysicalPage=result.followPhysicalPage!==false;
+    if(epoch===followPreferenceEpoch){state=result;followPhysicalPage=savedFollowPhysicalPage;const control=document.getElementById('follow-physical-page');if(control)control.checked=followPhysicalPage;}
+  }).catch(()=>{
+    if(epoch===followPreferenceEpoch){followPhysicalPage=savedFollowPhysicalPage;previewNote='The page-follow setting could not be saved.';showStorage();const control=document.getElementById('follow-physical-page');if(control)control.checked=followPhysicalPage;}
+  });
+}
+async function updateNativePreviews() {
+  const generation=++previewGeneration;
+  if (!T || !profilesReady || !exitGuardReady || draft.current!=='dock') return;
+  const faces=page().keys.map(k=>({...k[previewFace]}));
+  const clock=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false});
+  try {
+    const frames=await invoke('key_previews',{faces,clock});
+    if (generation!==previewGeneration || draft.current!=='dock') return;
+    await Promise.all(frames.map(async frame => {
+      const el=document.querySelector(`[data-key="${frame.index}"]`);
+      if (!el) return;
+      await keyPreviews.render(el,frame.png,FACES[faces[frame.index].kind],()=>generation===previewGeneration && draft.current==='dock' && document.querySelector(`[data-key="${frame.index}"]`)===el);
+    }));
+    if(generation!==previewGeneration || draft.current!=='dock')return;
+    previewNote=''; showStorage();
+  } catch {
+    if (generation===previewGeneration) { previewNote='Key image preview is unavailable.'; showStorage(); }
+  }
+}
+async function loadNativeProfiles() {
+  if (loadRunning) return;
+  loadRunning=true;
+  try {
+    // A window can open while an agent transaction started from the tray. Wait
+    // for that accepted transaction before taking the editor's initial revision.
+    const deadline=Date.now()+20_000;
+    while((await invoke('app_state')).agentBusy===true){
+      if(Date.now()>=deadline)throw new Error('A layout transaction is still running');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const result=await invoke('profiles_state');
+    adoptNativeLayout(result);
+    recoveryNote=result.notice || '';
+    profilesReady=true; storageNote=''; selected=0;
+  } catch {
+    profilesReady=false; storageNote='Saved layouts could not be loaded. Existing files have been kept.';
+  }
+  loadRunning=false;
+  render();followDeliveredPage();
+}
+function adoptNativeLayout(result) {
+  writer.adoptRevision(result.revision);
+  draft=fromNative(result.state,draft.current);
+  history.clear();editorIntentEpoch++;editGesture=null;
+  profilesReady=true;selected=Math.min(selected,13);
+}
+function updateEditorLock(){document.querySelector('.app').inert=agentLayoutLocked||quitPreparing;showStorage();}
+const agentEditor=new AgentEditorLease({
+  invoke,
+  busy:()=>quitPreparing||!profilesReady||!exitGuardReady||writer.failed||!!(editGesture?.isConnected&&document.activeElement===editGesture),
+  flush:async()=>{await Promise.all([...pendingMutations]);await followPreferenceWrite;return writer.flush();},
+  lock:locked=>{agentLayoutLocked=locked;updateEditorLock();},
+  adopt:async result=>{adoptNativeLayout(result);render();},
+  reload:async()=>{
+    try{adoptNativeLayout(await invoke('profiles_state'));render();}
+    catch(error){profilesReady=false;storageNote='The accepted layout could not be reloaded. Reload layouts before editing.';render();throw error;}
+  },
+  onError:()=>{previewNote='The agent layout update could not finish. Your saved layout is kept.';showStorage();},
+});
+async function navigate(id) {
+  if (!Object.hasOwn(NAV,id)) return;
+  if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave();}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
+  hasLocalPage = true; draft.current = id;editGesture=null;
+  // Sidebar navigation changes only the app section. Saving profiles here could
+  // send an editor-inspected page back to a physically navigated dock.
+  if(T)editorIntentEpoch++;else persist();
+  render(); pane.scrollTop = 0;
+  if(id==='dock'){pageFollower.requestSync();followDeliveredPage();}
+  invoke('settings_update',{patch:{page:id}}).then(s=>{state=s;}).catch(()=>{});
+}
+document.addEventListener('click', e => {
+  const nav = e.target.closest('[data-page],[data-go]');
+  if (nav) return navigate(nav.dataset.page || nav.dataset.go);
+  const keyEl = e.target.closest('[data-key]');
+  if (keyEl) { selected = Number(keyEl.dataset.key); render(); return; }
+  const editFace = e.target.closest('[data-edit-face]');
+  if (editFace) { selectedFace = editFace.dataset.editFace; previewFace = selectedFace; render(); return; }
+  const pg = e.target.closest('[data-dock-page]');
+  if (pg) { editGesture=null;pageFollower.manualSelection();draft.page=Number(pg.dataset.dockPage); selected=0; persist(); render(); return; }
+  const action = e.target.closest('[data-do]')?.dataset.do;
+  if (action === 'load-profiles') { loadNativeProfiles(); return; }
+  if (action === 'retry-save') { writer.completion=writer.drain(); return; }
+  if (action === 'retry-monitors') { updateMonitors(); return; }
+  if (action === 'undo') {const previous=history.undo();if(previous){const current=draft.current;draft=previous;draft.current=current;selected=0;persist();render();}return;}
+  if (action === 'simulate-press') {invoke('dock_test_button',{index:selected,pressed:true}).then(()=>invoke('dock_test_button',{index:selected,pressed:false})).catch(()=>{previewNote='The simulated dock is not enabled.';showStorage();});return;}
+  if (action === 'preview-flip') { previewFace = previewFace==='a'?'b':'a'; render(); }
+  if (action === 'add-profile' && draft.profiles.length < 50) {
+    remember();
+    draft.profiles.push({name:`Profile ${draft.profiles.length+1}`,pages:[newPage('Main')]});
+    draft.profile=draft.profiles.length-1; draft.page=0; selected=0; persist(); render(); document.getElementById('profile-name')?.focus();
+  }
+  if (action === 'add-page' && profile().pages.length < 50) {
+    remember();
+    profile().pages.push(newPage(`Page ${profile().pages.length+1}`)); draft.page=profile().pages.length-1; selected=0; persist(); render(); document.getElementById('page-name')?.focus();
+  }
+});
+function refreshNames() {
+  const option = document.querySelector(`#profile-picker option[value="${draft.profile}"]`);
+  if (option) option.textContent = profile().name || 'Untitled profile';
+  const pageButton = document.querySelector(`[data-dock-page="${draft.page}"]`);
+  if (pageButton) pageButton.textContent = page().name || 'Untitled page';
+  if (['page','folder'].includes(activeKey().action)) {
+    document.querySelectorAll('#action-value option').forEach(o => { o.textContent = profile().pages[Number(o.value)]?.name || 'Untitled page'; });
+  }
+}
+function markEditGesture(element){
+  // Text entry spans keystrokes; committed dropdowns are protected by the writer.
+  if(element.matches('textarea,input')&&!['checkbox','file','range','button','submit'].includes(element.type))editGesture=element;
+}
+pane.addEventListener('focusout',e=>{if(e.target===editGesture)editGesture=null;});
+pane.addEventListener('change', e => {
+  const {id,value} = e.target;
+  markEditGesture(e.target);
+  if(id==='follow-physical-page'){setFollowPhysicalPage(e.target.checked);return;}
+  if(id==='autostart-enabled'){invoke('autostart_set',{enabled:e.target.checked}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.autostart;previewNote='The Windows startup setting could not be changed.';showStorage();});return;}
+  if(id==='agent-access'){invoke('settings_update',{patch:{agentAccess:e.target.checked}}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.agentAccess;previewNote='Local agent access could not be saved.';showStorage();});return;}
+  if(id==='dock-enabled'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{applyDockStatus(result,ticket,intent);updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
+  if(id==='dock-brightness'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{applyDockStatus(result,ticket,intent);}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
+  if(e.target.dataset.monitor){remember();activeKey().value=JSON.stringify({targets:[...document.querySelectorAll('[data-monitor]:checked')].map(el=>el.dataset.monitor),mode:'toggle'});persist();return;}
+  if(id==='face-picture'){const file=e.target.files?.[0];if(!file)return;editorIntentEpoch++;const dest=activeKey()[selectedFace],epoch=Symbol();pictureEpoch.set(dest,epoch);remember();const mutation=(async()=>{try{if(file.size>4*1024*1024)throw new Error();const asset=T?await invoke('asset_import',{bytes:[...new Uint8Array(await file.arrayBuffer())]}):await savePreviewPicture(file);if(pictureEpoch.get(dest)!==epoch)return;dest.asset=asset;persist();render();}catch{previewNote='Choose a valid PNG or JPEG of at most 4 MiB and 4096 pixels per side.';showStorage();}})();pendingMutations.add(mutation);mutation.finally(()=>pendingMutations.delete(mutation));return;}
+  if(id==='usage-view'||id==='face-icon'){remember();activeKey()[selectedFace][id==='usage-view'?'usageView':'icon']=value;persist();render();return;}
+  // A blur-triggered change must not replace the next button before its click.
+  if (id === 'action-value'||id==='launch-args') {updateActionValue();persist();return;}
+  if (id === 'profile-name' || id === 'page-name') {
+    const target = id === 'profile-name' ? profile() : page();
+    target.name=value.trim() || (id === 'profile-name' ? 'Untitled profile' : 'Untitled page');
+    e.target.value=target.name; refreshNames(); persist(); return;
+  }
+  if (!['profile-picker','face-kind','action-kind'].includes(id)) return;
+  if(id!=='profile-picker')remember();
+  const k=activeKey();
+  if (id === 'profile-picker') { editGesture=null;pageFollower.manualSelection();draft.profile=Number(value); draft.page=0; selected=0; }
+  else if (id === 'face-kind') { k[selectedFace].kind=value;if(!['claude','codex'].includes(value))delete k[selectedFace].usageView;if(value==='claude'&&k[selectedFace].usageView==='tokens')k[selectedFace].usageView='rings';previewFace=selectedFace; }
+  else if (id === 'action-kind') { k.action=value; k.value=['page','folder'].includes(value)?'0':value==='media'?'Play / pause':''; }
+  else return;
+  persist(); render();
+});
+pane.addEventListener('input', e => {
+  const {id,value} = e.target;
+  markEditGesture(e.target);
+  if(id==='action-search'){actionSearch=value;const choices=Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===activeKey().action||label.toLowerCase().includes(value.toLowerCase())));document.getElementById('action-kind').innerHTML=options(choices,activeKey().action);return;}
+  if(!['face-text','action-value','launch-args','profile-name','page-name'].includes(id))return;
+  remember(`${draft.profile}/${draft.page}/${selected}/${selectedFace}/${id}`);
+  if (id === 'face-text') {
+    activeKey()[selectedFace].text=value; previewFace=selectedFace;
+    // Native previews keep their decoded image until the edited PNG is ready.
+    // Browser-only previews still update their HTML label immediately.
+    if(!T){document.getElementById('dock-preview').innerHTML=dockMarkup();updatePictures();}
+    const label=document.querySelector('.workspace-toolbar .hint');
+    if(label)label.textContent=`Previewing Face ${previewFace.toUpperCase()}`;
+    updateNativePreviews();
+  }
+  else if (id === 'action-value'||id==='launch-args') updateActionValue();
+  else if (id === 'profile-name') { profile().name=value; refreshNames(); }
+  else if (id === 'page-name') { page().name=value; refreshNames(); }
+  else return;
+  persist();
+});
+function updateActionValue(){const input=document.getElementById('action-value');if(!input)return;if(activeKey().action==='launch'){const args=(document.getElementById('launch-args')?.value||'').split('\n').filter(v=>v.length>0);activeKey().value=JSON.stringify({path:input.value,args});}else activeKey().value=input.value;}
+document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(event.target.tagName)){event.preventDefault();document.querySelector('[data-do="undo"]')?.click();}});
+render();
+if (T) {
+  const agentListener=invoke('plugin:event|listen',{event:'uc:agent-event',target:{kind:'Any'},handler:T.transformCallback(e=>agentEditor.event(e.payload))});
+  const quitListener=invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
+    quitPreparing=true;updateEditorLock();
+    try{await coolerPanel.prepareLeave();}catch(error){quitPreparing=false;updateEditorLock();previewNote=error.message;showStorage();await invoke('editor_quit_ready',{saved:false}).catch(()=>{});return;}
+    await Promise.all([...pendingMutations]);
+    await followPreferenceWrite;
+    const saved=await writer.flush();
+    try {
+      await invoke('editor_quit_ready',{saved});
+      if (saved) return; // Remain inert until native exit; no last-moment edits.
+      if (!saved) {storageNote='Changes could not be saved. Unified Control has stayed open so you can retry.';showStorage();}
+    } catch {storageNote='Work is still running. Unified Control has stayed open.';showStorage();}
+    quitPreparing=false;updateEditorLock();
+  })});
+  Promise.all([agentListener,quitListener]).then(()=>invoke('editor_session_ready',{ready:true})).then(async()=>{exitGuardReady=true;guardError='';await loadNativeProfiles();render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
+  window.addEventListener('beforeunload',()=>invoke('editor_session_ready',{ready:false}).catch(()=>{}));
+}
+if(T)invoke('plugin:event|listen',{event:'uc:cooler-event',target:{kind:'Any'},handler:T.transformCallback(e=>coolerPanel.event(e.payload))}).catch(()=>{});
+const initialPreferenceEpoch=followPreferenceEpoch,initialDockTicket=++dockRequestTicket,initialIntent=editorIntentEpoch;
+invoke('app_state').then(s => {
+  state=s;
+  if(followPreferenceEpoch===initialPreferenceEpoch){followPhysicalPage=s.followPhysicalPage!==false;savedFollowPhysicalPage=followPhysicalPage;followPreferenceReady=true;}
+  if(s.dock)applyDockStatus(s.dock,initialDockTicket,initialIntent);
+  if (!hasLocalPage && Object.hasOwn(NAV,s.page)) draft.current=s.page;
+  render();followDeliveredPage();
+}).catch(()=>{});
+setInterval(() => {
+  if (draft.current === 'dock') document.querySelectorAll('.clock-value').forEach(el => { el.textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false}); });
+  pollDockState();
+  if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>['clock','date','cpu','gpu','ram','claude','codex','reset','trend'].includes(k[previewFace].kind))) updateNativePreviews();
+},1000);

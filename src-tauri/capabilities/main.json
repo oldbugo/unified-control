@@ -19,6 +19,23 @@
     "allow-settings-update",
     "allow-activity",
     "allow-job-get",
-    "allow-job-cancel"
+    "allow-job-cancel",
+    "allow-profiles-state",
+    "allow-profiles-save",
+    "allow-key-previews",
+    "allow-editor-session-ready",
+    "allow-editor-quit-ready",
+    "allow-dock-state",
+    "allow-cooler-state",
+    "allow-cooler-configure",
+    "allow-cooler-call",
+    "allow-dock-configure",
+    "allow-dock-test-button",
+    "allow-dock-test-studio",
+    "allow-asset-import",
+    "allow-monitor-list",
+    "allow-agent-editor-present",
+    "allow-agent-editor-ready",
+    "allow-autostart-set"
   ]
 }

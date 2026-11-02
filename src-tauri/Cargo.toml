@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.0.0"
+version = "0.3.0"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"
@@ -18,13 +18,17 @@ serde_json = { version = "1.0.152", features = ["preserve_order"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 dirs = "6"
+ab_glyph = "0.2"
+png = "0.18"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
 
 [dev-dependencies]
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_System_Registry", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_System_Registry", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp"] }
 
 [profile.release]
 codegen-units = 1

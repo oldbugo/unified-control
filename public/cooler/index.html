@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoolerScreen</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/editor.css">
+<link rel="stylesheet" href="css/picture.css">
+<script src="bridge.js"></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <span class="appname">CoolerScreen</span>
+  <nav class="topnav" aria-label="Main">
+    <button type="button" id="navScreen" class="home-btn" title="On screen: the live theme, with its editor">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H8v-2h2v-2H5a2 2 0 0 1-2-2zm2 0v10h14V5z"/></svg>
+      <span>On screen</span>
+    </button>
+    <button type="button" id="navMine" class="home-btn" title="My themes: choose a theme">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2 0v2h2V5zm10 0v2h2V5zM6 9v2h2V9zm10 0v2h2V9zM6 13v2h2v-2zm10 0v2h2v-2zM6 17v2h2v-2zm10 0v2h2v-2zM10 5v14h4V5z"/></svg>
+      <span>My themes</span>
+    </button>
+    <button type="button" id="navBrowse" class="home-btn" title="Browse: themes and clips from your sources">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>
+      <span>Browse</span>
+    </button>
+  </nav>
+  <span class="spacer"></span>
+  <div class="status-combo" role="group" aria-label="Screen and live">
+    <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
+    <span id="pillHint" class="sr-only">Opens the screen settings</span>
+    <label class="live-switch" for="liveSwitch" title="Live: draw the clock, music and PC stats on the screen">
+      <span class="live-label">Live</span>
+      <input type="checkbox" id="liveSwitch" role="switch" aria-label="Live on the screen">
+    </label>
+    <span id="liveHint" class="live-hint" hidden><span id="liveHintText"></span> <button type="button" id="liveHintGo" class="linkbtn"></button></span>
+  </div>
+  <button type="button" id="gear" class="iconbtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+  </button>
+</header>
+
+<div id="banners" class="banners"></div>
+
+<main id="screenView" class="screen-view" aria-labelledby="screenTitle" hidden></main>
+<main id="mineView" class="gallery-view" aria-labelledby="mineTitle" hidden></main>
+<main id="browseView" class="gallery-view" aria-labelledby="browseTitle" hidden></main>
+
+<div class="panes" hidden>
+  <aside class="library" aria-labelledby="libHead">
+    <div class="pane-head">
+      <h2 id="libHead">Themes</h2>
+      <button type="button" id="addBtn" class="btn secondary">+ Add</button>
+      <input type="file" id="fileInput" multiple accept="video/*,image/*,.gif,.mkv,.webm,.mov,.avi,.ht,.zip" hidden>
+    </div>
+    <ul id="libList" class="liblist" role="listbox" aria-labelledby="libHead" tabindex="0"></ul>
+    <div class="lib-foot">
+      <button type="button" id="openFolder" class="btn ghost">Open Gallery folder</button>
+    </div>
+    <div id="dropHint" class="drop-hint" hidden>Drop to add</div>
+  </aside>
+
+  <div id="detail" class="detail" role="main" aria-live="off"></div>
+</div>
+
+<div id="activity" class="activity" role="status" aria-live="polite" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="applyBack" class="apply-back" hidden>
+  <div id="applyBox" class="dialog apply-box" role="dialog" aria-modal="true" aria-labelledby="applyTitle" aria-describedby="applyNote" tabindex="-1">
+    <h2 id="applyTitle">Storing as Embedded</h2>
+    <ol id="applySteps" class="apply-steps"></ol>
+    <div class="progress apply-bar" id="applyBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Progress"><div></div></div>
+    <p id="applyNote" class="muted small apply-note" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button type="button" id="applyStop" class="btn secondary">Stop (Embedded stays as it was)</button></div>
+  </div>
+</div>
+
+<div id="drawerBack" class="drawer-back" hidden>
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">Settings</h2>
+      <button type="button" id="drawerClose" class="iconbtn" aria-label="Close settings">✕</button>
+    </div>
+    <div class="drawer-body">
+      <section id="setRestart" aria-labelledby="hRestart" hidden>
+        <h3 id="hRestart" class="sr-only">Restart CoolerScreen</h3>
+        <div class="row">
+          <button type="button" id="appRestart" class="btn secondary" title="For troubleshooting: quits like the tray's Quit and opens CoolerScreen again">Restart CoolerScreen</button>
+          <span id="appRestartMsg" class="muted small" role="status"></span>
+        </div>
+      </section>
+
+      <section id="setScreen" aria-labelledby="hScreen">
+        <h3 id="hScreen">Screen</h3>
+        <p id="scrStatus" class="status-line"></p>
+        <div class="row">
+          <button type="button" id="scrCheck" class="btn secondary">Check again</button>
+          <button type="button" id="scrRestart" class="btn secondary" title="Use when the screen plays but stops answering">Restart screen</button>
+          <button type="button" id="scrSetup" class="btn primary" hidden>Set up screen</button>
+          <button type="button" id="scrSetupAgain" class="btn ghost" hidden>Run setup again</button>
+        </div>
+        <details><summary>Details</summary><pre id="scrInfo" class="small"></pre></details>
+      </section>
+
+      <section id="setNotch" aria-labelledby="hNotch">
+        <h3 id="hNotch">Notch</h3>
+        <p class="muted small">The camera hole is kept black in every picture.</p>
+        <div class="screenframe small-frame" id="notchFrame">
+          <img id="notchBg" alt="">
+          <div id="notchShape" class="notch edit" hidden></div>
+        </div>
+        <div class="field">
+          <label for="nMode">Shape</label>
+          <select id="nMode">
+            <option value="band">Band on the left edge</option>
+            <option value="circle">Circle</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <div id="nBand">
+          <div class="field">
+            <label for="nPx">Width (pixels)</label>
+            <div class="slider-row"><input type="range" id="nPxR" min="0" max="300" step="1" aria-label="Width (pixels)"><input type="number" id="nPx" min="0" max="300" step="1"></div>
+            <p id="nPxNote" class="muted small"></p>
+          </div>
+          <details><summary>More</summary>
+            <div class="field"><label for="nEdge">Edge</label>
+              <select id="nEdge"><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select></div>
+          </details>
+        </div>
+        <div id="nCircle" class="grid2">
+          <div class="field"><label for="nCx">Centre X</label><input type="number" id="nCx" min="0" max="2400"></div>
+          <div class="field"><label for="nCy">Centre Y</label><input type="number" id="nCy" min="0" max="1080"></div>
+          <div class="field"><label for="nR">Size (radius)</label><input type="number" id="nR" min="0" max="600"></div>
+          <div class="field"><label for="nF">Soft edge</label><input type="number" id="nF" min="0" max="200"></div>
+        </div>
+        <p class="muted small">Corners: default below, or per theme.</p>
+        <p id="nMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setThemes" aria-labelledby="hThemes">
+        <h3 id="hThemes">Themes</h3>
+        <div class="field"><label for="cornerR">Corner radius</label><input type="number" id="cornerR" min="0" max="300" step="1"></div>
+        <div class="src-row"><div class="src-top"><label for="edSnap" class="src-name">Snap in the editor</label><input type="checkbox" id="edSnap" role="switch"></div></div>
+        <p id="thMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setWeather" aria-labelledby="hWeather">
+        <h3 id="hWeather">Weather</h3>
+        <p id="wxPlace" class="small"></p>
+        <div class="inline-ctl"><input type="search" id="wxQuery" placeholder="City" aria-label="City" maxlength="80" spellcheck="false" autocomplete="off"><button type="button" id="wxGo" class="btn secondary">Search</button></div>
+        <ul id="wxResults" class="wx-results"></ul>
+        <div class="field"><label for="wxUnit">Unit</label><select id="wxUnit"><option value="C">°C</option><option value="F">°F</option></select></div>
+        <p id="wxMsg" class="muted small" role="status"></p>
+        <p class="muted small">Search asks open-meteo.com. Nothing is sent until you press Search.</p>
+      </section>
+
+      <section id="setGuides" aria-labelledby="hGuides">
+        <h3 id="hGuides">Screen guides</h3>
+        <p id="gcLive" class="small"></p>
+        <div class="gcal-frame" id="gcFrame"><img id="gcImg" alt=""><div class="guides-layer" id="gcLayer"></div></div>
+        <div id="gcRows"></div>
+        <div class="row"><button type="button" id="gcReset" class="btn ghost">Reset</button></div>
+        <p id="gcMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setFit" aria-labelledby="hFit">
+        <h3 id="hFit">Screen fit</h3>
+        <div class="seg" role="group" aria-label="What the screen shows"><button type="button" id="fitModeRulers" class="seg-btn">Rulers</button><button type="button" id="fitModeTheme" class="seg-btn">My theme</button></div>
+        <p id="fitNote" class="muted small"></p>
+        <div id="fitRows" class="fit-rows"></div>
+        <div class="row"><button type="button" id="fitReset" class="btn ghost">Reset</button></div>
+        <p id="fitStale" class="small" hidden>Embedded is out of date. <button type="button" id="fitStore" class="linkbtn">Update Embedded</button></p>
+        <p id="fitMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setSources" aria-labelledby="hSources">
+        <h3 id="hSources">Sources</h3>
+        <p class="muted small">Extra places to find clips; each shows in Browse.</p>
+        <div id="srcList"></div>
+      </section>
+
+      <section id="setGallery" aria-labelledby="hGallery">
+        <h3 id="hGallery">Gallery folder</h3>
+        <div class="field"><label for="gDir">Folder (leave empty for Documents\CoolerScreen\Gallery)</label><input type="text" id="gDir" spellcheck="false"></div>
+        <div class="row"><button type="button" id="gOpen" class="btn ghost">Open folder</button></div>
+        <p id="gMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setLive" aria-labelledby="hLive">
+        <h3 id="hLive">Live screen</h3>
+        <p class="muted small">Draws your theme's clock, music and PC stats. Closing the window keeps it in the tray; Quit there stops it and the screen shows Embedded.</p>
+        <div class="src-row">
+          <div class="src-top"><label for="lvOn" class="src-name">Live on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
+          <p id="lvMsg" class="muted small" role="status"></p>
+        </div>
+        <div id="lvOpts">
+          <div class="field"><label for="lvFps">Smoothness</label>
+            <select id="lvFps"><option value="60">60 frames per second</option><option value="30">30 frames per second</option></select></div>
+          <div class="src-row"><div class="src-top"><label for="lvFpsOv" class="src-name">Show the frame rate on the screen</label><input type="checkbox" id="lvFpsOv" role="switch"></div>
+            <p class="muted small">Draws the measured frames per second in a corner of the live picture. Off by default.</p></div>
+          <div class="src-row"><div class="src-top"><label for="lvDestroy" class="src-name">Free memory when the window is closed</label><input type="checkbox" id="lvDestroy" role="switch"></div>
+            <p class="muted small">Recommended. Reopening takes a moment longer.</p></div>
+          <div class="field"><label for="lvSleep">When the PC goes to sleep</label>
+            <select id="lvSleep"><option value="loop">Show Embedded</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+          <div class="field"><label for="lvLock">When the PC is locked</label>
+            <select id="lvLock"><option value="loop">Show Embedded</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+          <div class="src-row"><div class="src-top"><label for="lvShut" class="src-name">Turn the screen off when the PC shuts down</label><input type="checkbox" id="lvShut" role="switch"></div>
+            <p class="muted small">Off: the screen keeps showing Embedded.</p></div>
+          <div class="src-row"><div class="src-top"><label for="lvAuto" class="src-name">Start CoolerScreen when Windows starts</label><input type="checkbox" id="lvAuto" role="switch"></div>
+            <p class="muted small">Starts in the tray. Uninstalling removes it.</p></div>
+        </div>
+      </section>
+
+      <section id="setAdvanced" aria-labelledby="hAdv">
+        <details>
+          <summary><h3 id="hAdv">Advanced</h3></summary>
+          <p class="muted small">Lets the vendor app (LOVINGCOOL MONITOR) see the screen again. The screen then switches off 30 seconds after a program closes its connection.</p>
+          <div class="row"><button type="button" id="aRestore" class="btn danger">Restore original driver…</button></div>
+        </details>
+      </section>
+
+      <section id="setAbout" aria-labelledby="hAbout">
+        <h3 id="hAbout">About</h3>
+        <p class="muted small">CoolerScreen <span id="appVer"></span>. Unofficial tool for the Lovingcool SC70 USB screen. With Live off nothing runs in the background; with Live on it runs in the tray.
+          <a href="https://github.com/oldbugo/coolerscreen#readme" target="_blank" rel="noopener">Help and troubleshooting</a></p>
+        <p class="muted small" id="buildLine" style="user-select:text"></p>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

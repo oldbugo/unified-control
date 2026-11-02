@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// The pages of the window's left list (PowerToys-style frame).
-pub const PAGES: [&str; 4] = ["home", "dock", "general", "about"];
+pub const PAGES: [&str; 6] = ["home", "cooler", "dock", "dial", "general", "about"];
 
 /// Settings are always handled as the sanitised JSON object.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,15 +20,29 @@ impl Settings {
 
 pub fn defaults() -> Value {
     json!({
-        "ui": { "page": "home" }
+        "ui": { "page": "home", "followPhysicalPage": true, "agentAccess": false },
+        "dock": { "enabled": false, "brightness": 50 },
+        "cooler": {"enabled":false,"diagnostics":true}
     })
 }
 
 /// Only known keys, each with a valid value (anything else falls back to its default).
 pub fn sanitize(s: &Value) -> Settings {
-    let page = s["ui"]["page"].as_str().filter(|p| PAGES.contains(p)).unwrap_or("home");
+    let page = s["ui"]["page"]
+        .as_str()
+        .filter(|p| PAGES.contains(p))
+        .unwrap_or("home");
     let mut v = defaults();
+    v["cooler"]["enabled"] = json!(s["cooler"]["enabled"].as_bool().unwrap_or(false));
+    v["cooler"]["diagnostics"] = json!(s["cooler"]["diagnostics"].as_bool().unwrap_or(true));
     v["ui"]["page"] = json!(page);
+    v["ui"]["followPhysicalPage"] = json!(s["ui"]["followPhysicalPage"].as_bool().unwrap_or(true));
+    v["ui"]["agentAccess"] = json!(s["ui"]["agentAccess"].as_bool().unwrap_or(false));
+    v["dock"]["enabled"] = json!(s["dock"]["enabled"].as_bool().unwrap_or(false));
+    v["dock"]["brightness"] = json!(s["dock"]["brightness"]
+        .as_u64()
+        .filter(|n| *n <= 100)
+        .unwrap_or(50));
     Settings(v)
 }
 
@@ -43,7 +57,12 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn new(file: impl Into<PathBuf>) -> Self {
-        SettingsStore { file: file.into(), lock: Mutex::new(()), on_change: Mutex::new(None), last_good: Mutex::new(None) }
+        SettingsStore {
+            file: file.into(),
+            lock: Mutex::new(()),
+            on_change: Mutex::new(None),
+            last_good: Mutex::new(None),
+        }
     }
     pub fn file(&self) -> &Path {
         &self.file
@@ -119,9 +138,25 @@ mod tests {
     #[test]
     fn defaults_and_sanitising() {
         assert_eq!(sanitize(&json!({})).0, defaults());
-        assert_eq!(sanitize(&json!({ "ui": { "page": "dock" }, "junk": 1 })).0, json!({ "ui": { "page": "dock" } }));
-        assert_eq!(sanitize(&json!({ "ui": { "page": "cooler" } })).page(), "home", "no cooler page in phase 0/1");
+        assert_eq!(
+            sanitize(&json!({ "ui": { "page": "dock" }, "junk": 1 })).0,
+            json!({ "ui": { "page": "dock", "followPhysicalPage":true, "agentAccess":false }, "dock":{"enabled":false,"brightness":50}, "cooler":{"enabled":false,"diagnostics":true} })
+        );
+        assert_eq!(
+            sanitize(&json!({ "ui": { "page": "cooler" } })).page(),
+            "cooler"
+        );
+        assert_eq!(
+            sanitize(&json!({ "ui": { "page": "dial" } })).page(),
+            "dial"
+        );
+        assert_eq!(
+            sanitize(&json!({ "ui": { "page": "unknown" } })).page(),
+            "home"
+        );
         assert_eq!(sanitize(&json!("not an object")).page(), "home");
+        assert_eq!(sanitize(&json!({"ui":{"agentAccess":true}})).0["ui"]["agentAccess"],true);
+        assert_eq!(sanitize(&json!({"ui":{"agentAccess":"true"}})).0["ui"]["agentAccess"],false);
     }
 
     #[test]
@@ -148,7 +183,11 @@ mod tests {
         for w in writers {
             w.join().unwrap();
         }
-        assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
     }
 
     #[test]
@@ -176,6 +215,12 @@ mod tests {
         });
         st.update(|s| s["ui"]["page"] = json!("dock")).unwrap();
         assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(SettingsStore::new(dir.path().join("settings.json")).load().page(), "dock", "on disk straight away");
+        assert_eq!(
+            SettingsStore::new(dir.path().join("settings.json"))
+                .load()
+                .page(),
+            "dock",
+            "on disk straight away"
+        );
     }
 }
