@@ -9,13 +9,13 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'uc-native-cooler-'));
   const port=await new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
   const env={...process.env,UC_HOME:home,UC_TEST_QUIET:'1',UC_MULTI:'1',UC_FAKE_DEVICE:'1',UC_COOLER_WORKER_EXE:worker,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
-  const child=spawn(exe,[],{env,windowsHide:true,stdio:'ignore'});let browser;
+  const child=spawn(exe,[],{env,windowsHide:true,stdio:'ignore'});let browser,page;
   const exit=new Promise(resolve=>child.once('exit',resolve));
   const requestQuit=()=>new Promise((resolve,reject)=>{const p=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});p.once('error',reject);p.once('exit',resolve);});
   try{
     for(let n=0;n<100;n++){try{if((await fetch(`http://127.0.0.1:${port}/json/version`)).ok)break;}catch{}await delay(150);}
     browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    let page;for(let n=0;n<60;n++){page=browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri/.test(p.url()));if(page)break;await delay(100);}assert.ok(page);
+    for(let n=0;n<60;n++){page=browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri/.test(p.url()));if(page)break;await delay(100);}assert.ok(page);
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
     const call=(command,args={})=>page.evaluate(async({command,args})=>{try{return await window.__TAURI_INTERNALS__.invoke(command,args);}catch(error){throw new Error(JSON.stringify(error));}},{command,args});
@@ -57,14 +57,51 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await page.locator('#page-search').fill('usage');await page.locator('#page-search').press('Enter');
     await page.locator('#page-search').press('Escape');
     await page.waitForFunction(()=>!!document.getElementById('dock-enabled'));
+    // A read-only view may be left while transient preview cleanup is waiting
+    // on an unavailable screen. The parent keeps the RPC alive after unmount.
+    await page.locator('.nav-item[data-page="cooler"]').click();
+    await page.frameLocator('#cooler-frame').locator('#navMine').waitFor();
+    await page.evaluate(async()=>{
+      const {CoolerPanel}=await import('./js/cooler-panel.js'),original=CoolerPanel.prototype.receive;
+      window.__nativeCoolerReceive=original;window.__heldCoolerCleanup=[];
+      CoolerPanel.prototype.receive=function(e){
+        if(e.origin===location.origin&&e.source===this.frame?.contentWindow&&e.data?.channel==='uc-cooler-v1'&&e.data.type==='call'&&e.data.command==='twin_watch'&&e.data.args?.on===false){
+          window.__heldCoolerCleanup.push(()=>this.invoke('cooler_call',{command:'twin_watch',args:{on:false}}));return;
+        }
+        return original.call(this,e);
+      };
+    });
+    await page.frameLocator('#cooler-frame').locator('body').evaluate(async()=>{
+      const {backend}=await import('./js/backend.js');
+      backend.call('twin_watch',{on:true}).catch(()=>{});
+      parent.document.querySelector('.nav-item[data-page="home"]').click();
+    });
+    await page.locator('.nav-item[data-page="home"][aria-current="page"]').waitFor({timeout:1500});
+    assert.equal(await page.locator('#cooler-frame').count(),0,'navigation removes embedded rendering and polling loops');
+    assert.ok(await page.evaluate(()=>window.__heldCoolerCleanup.length>0),'navigation finished before preview cleanup answered');
+    assert.equal((await call('dock_state')).state,'connected','pending cooler cleanup leaves dock available');
+    await page.locator('.nav-item[data-page="dock"]').click();
+    await page.waitForFunction(()=>!!document.getElementById('dock-enabled'),{},{timeout:1500});
+    await page.evaluate(async()=>{const {CoolerPanel}=await import('./js/cooler-panel.js');CoolerPanel.prototype.receive=window.__nativeCoolerReceive;await Promise.all(window.__heldCoolerCleanup.splice(0).map(release=>release()));});
+    await page.locator('.nav-item[data-page="cooler"]').click();
+    await page.locator('.nav-item[data-page="general"]').click();
+    await page.locator('.nav-item[data-page="general"][aria-current="page"]').waitFor({timeout:1500});
+    assert.equal(await page.locator('#cooler-frame').count(),0,'early cooler exit removes the loading frame');
     await waitNative(async()=>!(await window.__TAURI_INTERNALS__.invoke('cooler_state')).busy);
     await call('cooler_configure',{enabled:false});
     assert.equal((await call('cooler_state')).enabled,false);
     assert.equal(await requestQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
     const healthLog=path.join(home,'devices','cooler','connection-health.jsonl');assert.ok(fs.existsSync(healthLog));assert.ok(fs.readFileSync(healthLog,'utf8').trim().split('\n').every(line=>JSON.parse(line).health));
-    console.log('PASS: quiet native UC/worker IPC; embedded themes UI; background health while window closed; diagnostics opt-out; chunked file import; staged-import Quit refusal; saved Live settings; worker crash/restart leaves dock connected; disable/clean Quit. Fake devices only.');
+    console.log('PASS: quiet native UC/worker IPC; embedded themes UI; background health while window closed; diagnostics opt-out; chunked file import; staged-import Quit refusal; saved Live settings; worker crash/restart leaves dock connected; sidebar Home/dock navigation while preview cleanup is held; early cooler exit removes frame; disable/clean Quit. Fake devices only.');
     console.log(`Isolated evidence: ${home}`);
   }finally{
+    // Assertion failures must release only this fixture's held calls before
+    // asking its own UC_HOME instance to quit cooperatively.
+    if(page&&!page.isClosed())await page.evaluate(async()=>{
+      const {CoolerPanel}=await import('./js/cooler-panel.js');
+      if(window.__nativeCoolerReceive)CoolerPanel.prototype.receive=window.__nativeCoolerReceive;
+      await Promise.allSettled((window.__heldCoolerCleanup||[]).splice(0).map(release=>release()));
+    }).catch(()=>{});
     if(child.exitCode===null){await requestQuit();await Promise.race([exit,delay(10000)]);}
     if(browser)await browser.close();
   }

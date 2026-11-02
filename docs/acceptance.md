@@ -1,6 +1,27 @@
 # Dock acceptance status
 
-Updated 2026-11-02. Installed/running version: 0.3.4 (`95a68ee`), idle-safe update during the requested continuation. New startup/PID, MCP version, packaged proxy identity, dock reconnection and unchanged active-page keys verified. Both usage providers report verified status. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
+Updated2026-11-02. Installed/running0.3.5, code source89fbe5d. User approved the idle-safe update; new startup/PID,
+actual MCP version, packaged proxy identity, dock reconnection and unchanged selected profile/page/all14keys verified.
+Both usage providers report verified status. Cooler cached health still reports descriptor43; no recovery is claimed.
+Codex model-client acceptance passes; Claude acceptance, remaining physical dock/cooler/migration checks and Dial remain
+open. Automated navigation failure checks do not establish the user's installed-app feel.
+
+Installed0.3.5 addresses the user's cooler-page navigation freeze: ordinary section exit saves edits/imports but does not
+await transient hardware cleanup. Loading bridge exit, held startup/cleanup, idle cleanup suppression, queued/failed
+saves and active imports are covered in headless checks. Pending guide/fit timers are cancelled; the embedded iframe is
+removed on exit. Independent review found the guide timer race, fixed and regression-tested, then no further issues.
+129 core/11 host, full interface, status/search/editor/MCP and quiet native profile/agent/cooler checks pass. The native
+cooler check activates Home/dock within1500ms while cleanup is deliberately held, confirms the dock stays connected and
+the iframe is absent, and covers immediate cooler-to-General exit. Release packaging and installation verification pass;
+user feel remains pending. The held branch uses parent-panel interception because Tauri's invoke property is not writable.
+JavaScript syntax and diff checks pass. Whole-repository Rust formatting still reports pre-existing differences
+(first:core/autostart.rs); this change modifies no Rust source files and does not reformat unrelated code.
+
+Installer SHA256:`1DC514A4F103B111D965B1A466E633BD37C718331B3DA0ADA611276EDFAAB0AA`.
+Installed request proxy SHA256:`C789C41739951A3BCF6BA6AD3CB46725A671DFABEE2DFAD231B0981B283F8FE1`.
+The raw release executable matches the installed proxy after only the expected Tauri UNK-to-NSS bundle marker change.
+Startup marks89fbe5d+ because acceptance documentation was updated during packaging; the compiled code/assets match
+the89fbe5d commit. No source-code modification occurred during the build.
 
 | Check | Status and evidence |
 | --- | --- |

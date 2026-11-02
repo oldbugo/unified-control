@@ -34,6 +34,29 @@ Connection diagnostics is visible on the cooler page, enabled for the user's exp
 
 Logged values use a strict whitelist: no raw helper/error text, IPC payloads, account identifiers, quota readings, filenames, media tokens or physical device IDs. Coarse stage/counters cannot prove the exact failed USB command, firmware internal state or visible pixels. Logs provide evidence for diagnosis, not an automatic explanation of cause.
 
+## Navigation and background cost (2026-11-02)
+
+User-reported on installed0.3.4: entering Cooler screen could hold section navigation until failed-device work returned.
+Source inspection found the leave handshake awaited transient twin/calibration cleanup even without edits; a frame
+whose bridge had not loaded could also wait for the120second handshake deadline. The navigation fix is installed in0.3.5:
+real edits/imports remain save-guarded, while transient cleanup is submitted to the parent without awaiting USB-dependent
+replies. The embedded view is removed on navigation; no hidden iframe/polling loop is retained. Disable/reset/Quit keep
+their full cleanup guard. Connection failure does not itself prohibit moving to another section. Headless checks hold
+frame load, startup reads and cleanup while preserving import/failed-save guards. Fresh0.3.5 quiet native checks activate
+Home/dock within1500ms while cleanup remains held, keep the dock connected, remove the iframe and cleanly stop the fake
+worker/host. This is simulated fault evidence; installed user feel remains open.
+
+Read-only process sampling of installed0.3.4 with the current descriptor43 failure: cooler worker CPU increased by
+0.109375seconds over55.02seconds (about0.2% of one logical processor,0.012% of this16-logical-processor machine),
+working set34.8MiB/private committed memory47.7MiB. An earlier30second sample rounded worker CPU to0.00% of one processor,
+working set34.7MiB. The entire UC process tree used about0.82% total-machine CPU in that earlier window, including dock,
+usage-reader Node and WebViews; it does not attribute that total to the cooler. Samples do not measure GPU or establish
+healthy Live rendering cost. No installed app/settings/device state was changed to collect them.
+
+The existing connection retry backoff is1,2,4,8,then15seconds, capped at15. Host health polling remains10seconds,
+passive PnP30seconds and bounded logs as above. The UI delay and a CPU saturation fault are different claims:
+these samples show a navigation wait and low worker CPU in the current failed-device state.
+
 ## Manual recovery
 
 Reset cooler USB is explicit. It flushes edits/previews, runs through the cooler's exclusive device scheduler, waits for Windows administrator approval and protects active user work. Normally enumerated recovery requires exactly one physical cooler parent (never an MI interface), valid parent/location and one present hub interface, with a fresh identity check before the sole port-cycle operation. Missing enumeration uses the existing exact remembered-pair selector. No diagnostic timer invokes reset/elevation.
