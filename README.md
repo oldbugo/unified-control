@@ -12,6 +12,10 @@ User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 che
 scoped layouts, monitor discovery, preview, revision-checked apply, last-agent-write undo and job status. It uses the running
 tray app through same-user Windows IPC; it never edits app-data files from a client or starts a second device engine.
 Local agent access is visible in General and off by default. [Setup, tools and evidence](docs/agent-control.md).
+Installed 0.3.0/source `0909429` is verified through startup and a direct installed-MCP connection. Codex and both Claude
+client configurations are registered. Enable Local agent access and reload the client's MCP configuration to use layout tools.
+The dedicated request proxy avoids a packaged client's stale main executable. Reviewed source is in private draft PR11;
+the installed preview does not imply the PR has merged.
 
 Build the combined interface from the start, with Home, Cooler screen, Stream dock, Dial, General and About pages.
 Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,

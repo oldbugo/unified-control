@@ -70,6 +70,10 @@ the Windows packaged app uses its own package's Roaming/Claude configuration fol
 client's MCP configuration or start a fresh client session; Claude Desktop normally needs a full quit/reopen by the user.
 Client registration does not enable UC's access switch.
 
+Claude's Desktop Code tab uses the user-level `mcpServers` entry in `~/.claude.json`, separately from the chat app's
+`claude_desktop_config.json`. Register the same command in both if using both interfaces. Existing entries/settings must be
+preserved. [Claude Desktop configuration](https://code.claude.com/docs/en/desktop).
+
 Official references: [MCP server architecture](https://modelcontextprotocol.io/docs/learn/architecture),
 [official SDK](https://github.com/modelcontextprotocol/typescript-sdk),
 [Codex MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
@@ -87,4 +91,14 @@ Run `scripts/check-agent-mcp.cjs`, `scripts/check-agent-editor.cjs` (with `UC_PL
 `scripts/check-native-agent.cjs` (with `UC_TEST_EXE` pointing to a debug build). Native tests refuse release/installed executables
 and use their own temporary home plus quiet/multi/fake flags.
 
-Release installation/client registration pending the final checkpoint.
+Installed 0.3.0/source `0909429` through the idle-safe updater; startup/version/new process verified. The dedicated proxy
+has the same SHA-256 as the installed app and reports 0.3.0 in both the packaged shell and normal filesystem view. The
+installed bundled Node/production adapter connected through the official SDK, listed seven tools, returned 0.3.0 and
+correctly rejected layout access with `agent-disabled` while the opt-in was off. No GUI automation was used for this check.
+
+The `unified-control` connection is registered for Codex, Claude Code (including the Desktop Code tab) and Claude Desktop
+chat. Existing configuration is preserved; the Claude Code file has a local backup. Clients still need their configuration
+reloaded/fresh sessions, and the user was asked to enable General > Local agent access. Actual client-model tool use is not
+claimed verified. No installed-user layout was modified through MCP during acceptance.
+
+Installer SHA-256: `278B4392AF581077D2EFCE4F9404730F71F39B9F247F9DB818E0C6F42928297F`.
