@@ -4,11 +4,26 @@ use super::{
     key_render::{render_face, FrameCache, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState},
 };
+use std::time::Instant;
 use ulanzi_dock::{
     dock::{Dock, Transport},
     page::{build_partial_page_zip, PageSpec},
     protocol::{ButtonAction, ButtonKind, Event},
 };
+
+/// Bounded stage durations for the most recent render pass. The transfer stage
+/// includes ZIP construction and all transport writes; it is not USB latency.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderTimings {
+    pub faces_rendered: u64,
+    pub face_render_us: u64,
+    pub delivery_prepare_us: u64,
+    pub zip_and_transfer_us: u64,
+}
+pub(super) fn elapsed_us(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingAction {
@@ -162,17 +177,36 @@ impl PageRuntime {
         &mut self,
         dock: &mut Dock<T>,
         inputs: &RenderInputs,
+        render: F,
+        admit: G,
+    ) -> Result<usize, String> {
+        self.render_and_send_measured(dock, inputs, render, admit, &mut RenderTimings::default())
+    }
+    pub fn render_and_send_measured<
+        T: Transport,
+        F: FnMut(usize, &Face, &RenderInputs) -> Result<RenderedFace, String>,
+        G: FnMut() -> bool,
+    >(
+        &mut self,
+        dock: &mut Dock<T>,
+        inputs: &RenderInputs,
         mut render: F,
         mut admit: G,
+        timings: &mut RenderTimings,
     ) -> Result<usize, String> {
+        *timings = RenderTimings::default();
         let mut spec = PageSpec::new();
         let mut frames = Vec::with_capacity(14);
         let mut changed = Vec::new();
         for index in 0..14 {
             let face = self.face(index)?;
-            let frame = render(index, face, inputs)?;
-            frames.push(frame);
+            let started = Instant::now();
+            let frame = render(index, face, inputs);
+            timings.face_render_us = timings.face_render_us.saturating_add(elapsed_us(started));
+            frames.push(frame?);
+            timings.faces_rendered += 1;
         }
+        let prepare_started = Instant::now();
         let now = super::scheduler::now_ms();
         for (index, frame) in frames.iter_mut().enumerate() {
             frame.guard_delivery(now)?;
@@ -185,21 +219,30 @@ impl PageRuntime {
                 spec.set_key(index, None, frame.png.clone())
             }
         }
+        timings.delivery_prepare_us = elapsed_us(prepare_started);
         if !self.full_update && changed.is_empty() {
             return Ok(0);
         }
         if !admit() {
             return Ok(0);
         }
-        let result = if self.full_update {
-            dock.set_page(&spec)
-        } else {
-            let zip = build_partial_page_zip(&spec, &changed).map_err(|e| e.to_string())?;
-            if !admit() {
-                return Ok(0);
-            }
-            dock.update_buttons_zip(&zip)
-        };
+        let transfer_started = Instant::now();
+        let result: Result<bool, String> = (|| {
+            if self.full_update {
+                dock.set_page(&spec).map_err(|e| e.to_string())
+            } else {
+                let zip = build_partial_page_zip(&spec, &changed).map_err(|e| e.to_string())?;
+                if !admit() {
+                    return Ok(false);
+                }
+                dock.update_buttons_zip(&zip).map_err(|e| e.to_string())
+            }?;
+            Ok(true)
+        })();
+        timings.zip_and_transfer_us = elapsed_us(transfer_started);
+        if matches!(result, Ok(false)) {
+            return Ok(0);
+        }
         if let Err(error) = result {
             self.invalidate_images();
             return Err(error.to_string());

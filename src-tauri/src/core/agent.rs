@@ -436,7 +436,7 @@ impl App {
                 let cooler = self.cooler_state();
                 status["revision"] = json!(revision);
                 status["profiles"] = metadata(&state);
-                status["dock"] = json!({"enabled":dock["enabled"],"state":dock["state"],"currentProfile":dock["currentProfile"],"currentPage":dock["currentPage"],"usageStatus":dock["usageStatus"]});
+                status["dock"] = json!({"enabled":dock["enabled"],"state":dock["state"],"currentProfile":dock["currentProfile"],"currentPage":dock["currentPage"],"usageStatus":dock["usageStatus"],"timing":dock["timing"]});
                 status["cooler"] = json!({"enabled":cooler["enabled"],"state":cooler["state"],"busy":cooler["busy"],"engineVersion":cooler["engineVersion"]});
             }
             return Ok(status);
@@ -634,6 +634,41 @@ mod tests {
         assert!(app
             .agent_call("get_status", json!({"unknown":true}))
             .is_err());
+    }
+    #[test]
+    fn timing_status_is_numerical_and_access_gated_without_activating_sources() {
+        let (dir, app) = app();
+        let runtime = super::super::runtime_resources::RuntimeResources::new(
+            dir.path(),
+            dir.path().join("missing-resources"),
+            true,
+        );
+        let controller = Arc::new(super::super::dock_service::Controller::new(
+            app.profiles.clone(),
+            runtime.clone(),
+            true,
+        ));
+        assert!(app.dock.set(controller.clone()).is_ok());
+        let status = app.agent_call("get_status", json!({})).unwrap();
+        let timing = &status["dock"]["timing"];
+        fn numerical(value: &Value) -> bool {
+            match value {
+                Value::Null | Value::Number(_) => true,
+                Value::Object(fields) => fields.values().all(numerical),
+                _ => false,
+            }
+        }
+        assert!(timing.is_object() && numerical(timing));
+        assert_eq!(timing["navigationsStarted"], 0);
+        assert_eq!(status["dock"]["enabled"], false);
+        assert_eq!(runtime.usage_status()["reader"]["code"], "inactive");
+        app.settings_update(&json!({"agentAccess":false})).unwrap();
+        assert!(app
+            .agent_call("get_status", json!({}))
+            .unwrap()
+            .get("dock")
+            .is_none());
+        controller.shutdown();
     }
     #[test]
     fn preview_is_inert_apply_is_atomic_and_undo_requires_latest_revision() {

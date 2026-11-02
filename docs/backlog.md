@@ -17,4 +17,12 @@ static/usage pages with the editor open/closed. Add fake held-render and ACK-bur
 Preserve post-render admission, expiry-at-delivery, strict A/B/input deduplication, folder history, keepalive/probes,
 fresh reconnect rendering and page-status publication only after successful delivery. No timings or speedup are claimed.
 
+The next source checkpoint adds fixed-size numerical timing diagnostics to dock state and MCP status: input preparation,
+face rendering (including any usage-helper wait), delivery preparation, combined ZIP creation/transport writes, poll gaps
+and non-button event counts. The last completed navigation spans host receipt to successful delivery; it cannot measure
+physical press-to-host delay. Counts before a button are not measured queue depth. A cadence-limited log retains the same
+summary without profile names, IDs, action values or account data. Fake held-render, FIFO ACK/heartbeat burst and abort
+fixtures check attribution without changing scheduling. These diagnostics are not installed in0.3.1; hardware timing and
+any optimization remain pending.
+
 Issues #3 and #5 are implemented for 0.1.5. Native text input retains decoded nodes until the latest requested frame is decoded. Virtual page following uses successfully delivered page IDs, has a saved opt-out, waits for active edits/imports/saves and never saves observational navigation back. Browser checks cover these guards; quiet native fake IPC verifies Folder/Back following and preference persistence. Physical confirmation remains pending. Issue #4 remains an investigation; no navigation speedup is claimed. Sleep/resume is deferred at the user's request.

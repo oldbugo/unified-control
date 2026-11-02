@@ -11,7 +11,13 @@ Installed 0.3.1/sourcee23be94 fixes a reproduced AI Usage startup fault: Node re
 Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now passes, along with 120 core
 and 11 host tests. The user approved the idle-safe update on 2026-11-02; startup/new PID, MCP version0.3.1, dedicated proxy
 hash and dock reconnection were verified. Both Codex and Claude subsequently reported verified observations through MCP.
-Sustained refresh and physical usage acceptance are being checked separately.
+Both providers remained fresh beyond the five-minute cutoff in a bounded MCP watch. Codex briefly became unavailable
+and recovered automatically; its cause remains unknown. This is not an uninterrupted reliability pass. Physical usage,
+exact account-panel comparison and account-switch acceptance remain open. Claude needs a supporting Desktop Code companion.
+
+Next source checkpoint (not installed): bounded numerical navigation timing in dock/MCP status, fake held-render and
+ACK-burst regressions, and preservation of guarded Codex error/stale reasons.123 core/11 host and62 reader tests pass.
+Scheduling is unchanged; physical latency and any speedup remain unmeasured.
 
 ## Current direction (2026-10-30)
 

@@ -2,7 +2,7 @@
 //! native ownership mutex; a separate serial executor finishes active actions.
 //! Construction starts disabled and performs no profile, process or device I/O.
 use super::{
-    dock_runtime::{PageRuntime, PendingAction},
+    dock_runtime::{elapsed_us, PageRuntime, PendingAction, RenderTimings},
     key_render::{render_face, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState, ProfileStore},
 };
@@ -49,6 +49,41 @@ pub struct DockStatus {
     pub probe_writes: u64,
     pub actions: u64,
     pub errors: u64,
+    pub timing: DockTimings,
+}
+/// Fixed-size numerical diagnostics only. Receipt starts at the host's completed
+/// poll, not at the physical press; preceding events are not a queue-depth claim.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockTimings {
+    pub polls: u64,
+    pub non_button_events: u64,
+    pub last_poll_us: u64,
+    pub last_poll_gap_us: u64,
+    pub max_poll_gap_us: u64,
+    pub navigations_started: u64,
+    pub navigations_completed: u64,
+    pub navigations_aborted: u64,
+    pub last_inputs_us: u64,
+    pub last_render: RenderTimings,
+    pub last_navigation: Option<NavigationTiming>,
+}
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigationTiming {
+    pub receipt_to_delivery_us: u64,
+    pub handling_us: u64,
+    pub wait_for_render_us: u64,
+    pub inputs_us: u64,
+    pub render: RenderTimings,
+    pub preceding_non_button_events: u64,
+    pub poll_gap_before_receipt_us: u64,
+}
+struct PendingNavigation {
+    received: Instant,
+    handled: Instant,
+    preceding_non_button_events: u64,
+    poll_gap_before_receipt_us: u64,
 }
 struct Shared {
     status: Mutex<DockStatus>,
@@ -138,6 +173,7 @@ impl Controller {
                 probe_writes: 0,
                 actions: 0,
                 errors: 0,
+                timing: DockTimings::default(),
             }),
             enabled: AtomicBool::new(false),
             brightness: AtomicU8::new(50),
@@ -330,6 +366,10 @@ struct Worker {
     next_keep_alive: Option<Instant>,
     last_brightness_write: Option<Instant>,
     probe_sent: bool,
+    timing: DockTimings,
+    last_poll_finished: Option<Instant>,
+    non_button_since_button: u64,
+    pending_navigation: Option<PendingNavigation>,
 }
 impl Worker {
     fn new(
@@ -367,6 +407,10 @@ impl Worker {
             next_keep_alive: None,
             last_brightness_write: None,
             probe_sent: false,
+            timing: DockTimings::default(),
+            last_poll_finished: None,
+            non_button_since_button: 0,
+            pending_navigation: None,
         }
     }
     fn activity(&mut self, enabled: bool) {
@@ -376,6 +420,9 @@ impl Worker {
         self.providers_enabled = enabled;
     }
     fn release(&mut self) {
+        self.abort_navigation();
+        self.last_poll_finished = None;
+        self.non_button_since_button = 0;
         if self.dock.is_some() {
             self.shared.action_epoch.fetch_add(1, Ordering::SeqCst);
         }
@@ -392,6 +439,11 @@ impl Worker {
         }
         if self.providers_enabled {
             self.activity(false);
+        }
+    }
+    fn abort_navigation(&mut self) {
+        if self.pending_navigation.take().is_some() {
+            self.timing.navigations_aborted = self.timing.navigations_aborted.saturating_add(1);
         }
     }
     fn failed(&mut self, now: Instant, message: &str) {
@@ -532,6 +584,7 @@ impl Worker {
                 }
             }) {
             Ok(()) => {
+                self.abort_navigation();
                 self.shared.action_epoch.fetch_add(1, Ordering::SeqCst);
                 self.revision = revision;
                 self.next_render = now;
@@ -546,9 +599,16 @@ impl Worker {
         }
     }
     fn step(&mut self, now: Instant) {
+        self.step_inner(now);
+        self.shared.status.lock().unwrap().timing = self.timing.clone();
+    }
+    fn step_inner(&mut self, now: Instant) {
         if self.shared.enabled.load(Ordering::SeqCst) && now >= self.next_diagnostic {
             let s = self.shared.status();
             crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} keepalive={} probe={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,s.keep_alives_sent,s.probe_writes,now.saturating_duration_since(self.last_activity).as_millis()));
+            let t = &self.timing;
+            let n = t.last_navigation.as_ref().cloned().unwrap_or_default();
+            crate::device::log(&format!("dock timing polls={} nonbutton={} max_poll_gap_us={} nav_started={} nav_completed={} nav_aborted={} nav_receipt_to_delivery_us={} nav_handling_us={} nav_wait_for_render_us={} nav_inputs_us={} nav_faces={} nav_face_render_us={} nav_prepare_us={} nav_zip_and_transfer_us={} nav_preceding_nonbutton={} nav_poll_gap_us={}",t.polls,t.non_button_events,t.max_poll_gap_us,t.navigations_started,t.navigations_completed,t.navigations_aborted,n.receipt_to_delivery_us,n.handling_us,n.wait_for_render_us,n.inputs_us,n.render.faces_rendered,n.render.face_render_us,n.render.delivery_prepare_us,n.render.zip_and_transfer_us,n.preceding_non_button_events,n.poll_gap_before_receipt_us));
             self.next_diagnostic = now + Duration::from_secs(10);
         }
         while let Ok(done) = self.completed.try_recv() {
@@ -681,12 +741,15 @@ impl Worker {
                 return;
             }
             self.shared.writing.store(true, Ordering::SeqCst);
+            let render_started = Instant::now();
+            let inputs_started = Instant::now();
             let inputs = self.hooks.inputs();
+            self.timing.last_inputs_us = elapsed_us(inputs_started);
             let hooks = self.hooks.clone();
             let flash = self.flash;
             let shared = self.shared.clone();
             let revision = self.revision;
-            let result = self.runtime.as_mut().unwrap().render_and_send_guarded(
+            let result = self.runtime.as_mut().unwrap().render_and_send_measured(
                 self.dock.as_mut().unwrap(),
                 &inputs,
                 |index, face, input| {
@@ -697,6 +760,7 @@ impl Worker {
                     }
                 },
                 || shared.safe_to_act() && shared.revision.load(Ordering::SeqCst) == revision,
+                &mut self.timing.last_render,
             );
             self.shared.writing.store(false, Ordering::SeqCst);
             if !self.shared.enabled.load(Ordering::SeqCst)
@@ -719,6 +783,28 @@ impl Worker {
                         s.current_page = Some(state.current_page.clone());
                         if self.next_keep_alive.is_none() {
                             self.next_keep_alive = Some(now);
+                        }
+                        if let Some(pending) = self.pending_navigation.take() {
+                            self.timing.navigations_completed =
+                                self.timing.navigations_completed.saturating_add(1);
+                            self.timing.last_navigation = Some(NavigationTiming {
+                                receipt_to_delivery_us: elapsed_us(pending.received),
+                                handling_us: pending
+                                    .handled
+                                    .saturating_duration_since(pending.received)
+                                    .as_micros()
+                                    .min(u64::MAX as u128)
+                                    as u64,
+                                wait_for_render_us: render_started
+                                    .saturating_duration_since(pending.handled)
+                                    .as_micros()
+                                    .min(u64::MAX as u128)
+                                    as u64,
+                                inputs_us: self.timing.last_inputs_us,
+                                render: self.timing.last_render.clone(),
+                                preceding_non_button_events: pending.preceding_non_button_events,
+                                poll_gap_before_receipt_us: pending.poll_gap_before_receipt_us,
+                            });
                         }
                     }
                 }
@@ -751,13 +837,36 @@ impl Worker {
             }
             self.last_fake_heartbeat = now;
         }
+        let poll_started = Instant::now();
+        self.timing.last_poll_gap_us = self.last_poll_finished.map_or(0, |at| {
+            poll_started
+                .saturating_duration_since(at)
+                .as_micros()
+                .min(u64::MAX as u128) as u64
+        });
+        self.timing.max_poll_gap_us = self
+            .timing
+            .max_poll_gap_us
+            .max(self.timing.last_poll_gap_us);
         let result = self.dock.as_mut().unwrap().poll_event(if self.shared.fake {
             Duration::ZERO
         } else {
             Duration::from_millis(10)
         });
+        let received = Instant::now();
+        self.timing.last_poll_us = elapsed_us(poll_started);
+        self.timing.polls = self.timing.polls.saturating_add(1);
+        self.last_poll_finished = Some(received);
         match result {
             Ok(Some(event)) => {
+                if !matches!(event, Event::Button(_)) {
+                    self.timing.non_button_events = self.timing.non_button_events.saturating_add(1);
+                    self.non_button_since_button = self.non_button_since_button.saturating_add(1);
+                }
+                let preceding_non_button_events = self.non_button_since_button;
+                if matches!(event, Event::Button(_)) {
+                    self.non_button_since_button = 0;
+                }
                 self.inbound += 1;
                 match &event {
                     Event::Heartbeat(_) => self.heartbeats += 1,
@@ -811,8 +920,17 @@ impl Worker {
                             }
                         }
                         if before != self.runtime.as_ref().unwrap().state().current_page {
+                            self.abort_navigation();
                             self.flash = [None; 14];
                             self.activity(true);
+                            self.timing.navigations_started =
+                                self.timing.navigations_started.saturating_add(1);
+                            self.pending_navigation = Some(PendingNavigation {
+                                received,
+                                handled: Instant::now(),
+                                preceding_non_button_events,
+                                poll_gap_before_receipt_us: self.timing.last_poll_gap_us,
+                            });
                         }
                         if matches!(event, Event::Button(_)) {
                             self.next_render = now;
@@ -1047,6 +1165,7 @@ mod tests {
                 probe_writes: 0,
                 actions: 0,
                 errors: 0,
+                timing: DockTimings::default(),
             }),
             enabled: AtomicBool::new(true),
             brightness: AtomicU8::new(50),
@@ -1324,11 +1443,100 @@ mod tests {
         c.simulate_button(0, true).unwrap();
         wait(|| hooks.renders.load(Ordering::SeqCst) > renders);
         let during = c.status().current_page;
+        assert_eq!(c.status().timing.navigations_started, 1);
+        assert_eq!(c.status().timing.navigations_completed, 0);
+        // Hold the real render callback, not a mocked timer. Its elapsed time
+        // must appear in both the face stage and host receipt-to-delivery span.
+        thread::sleep(Duration::from_millis(50));
         hooks.hold_render.store(false, Ordering::SeqCst);
-        wait(|| c.status().pages_sent == 2);
+        wait(|| c.status().pages_sent == 2 && c.status().timing.navigations_completed == 1);
         assert_eq!(during.as_deref(), Some(main.as_str()));
         assert_eq!(c.status().current_page.as_deref(), Some(target.as_str()));
+        let timing = c.status().timing;
+        let navigation = timing.last_navigation.unwrap();
+        assert_eq!(navigation.render.faces_rendered, 14);
+        assert!(navigation.render.face_render_us >= 50_000);
+        assert!(navigation.receipt_to_delivery_us >= navigation.render.face_render_us);
+        assert_eq!(timing.navigations_aborted, 0);
         c.shutdown();
+    }
+    #[test]
+    fn ack_burst_is_counted_before_navigation_without_claiming_physical_latency() {
+        use ulanzi_dock::protocol::{build_simple_packet, Command};
+        let (_dir, shared, mut worker) = stepped_worker(Link::Fake(FakeDock::new()));
+        let mut state = worker.profiles.state().unwrap();
+        let page = super::super::profiles::Page::new("private page name");
+        let target = page.id.clone();
+        state.profiles[0].pages[0].keys[0].action = "folder".into();
+        state.profiles[0].pages[0].keys[0].value = target.clone();
+        state.profiles[0].pages.push(page);
+        worker.profiles.save(&state).unwrap();
+        let now = Instant::now();
+        worker.step(now);
+        // Discard only baseline fixture replies, then inject a known FIFO burst.
+        let Link::Fake(fake) = worker.dock.as_mut().unwrap().transport_mut() else {
+            panic!("fake only")
+        };
+        while fake.read(Duration::ZERO).unwrap().is_some() {}
+        for _ in 0..6 {
+            fake.inject_raw(build_simple_packet(Command::In010b, &[]).unwrap());
+            fake.heartbeat();
+        }
+        fake.press(0);
+        let before = worker.timing.non_button_events;
+        worker.non_button_since_button = 0;
+        for index in 0..12 {
+            worker.step(now + Duration::from_millis(index + 1));
+            assert_eq!(shared.status().timing.navigations_started, 0);
+        }
+        assert_eq!(worker.timing.non_button_events - before, 12);
+        worker.step(now + Duration::from_millis(13));
+        assert_eq!(shared.status().timing.navigations_started, 1);
+        assert_eq!(shared.status().timing.navigations_completed, 0);
+        worker.step(now + Duration::from_millis(14));
+        let status = shared.status();
+        assert_eq!(status.current_page.as_deref(), Some(target.as_str()));
+        assert_eq!(status.timing.navigations_completed, 1);
+        assert_eq!(
+            status
+                .timing
+                .last_navigation
+                .as_ref()
+                .unwrap()
+                .preceding_non_button_events,
+            12
+        );
+        assert_eq!(status.timing.last_render.faces_rendered, 14);
+        // Diagnostics retain one fixed-size sample and finite numerical fields,
+        // never a page identifier, label, action, account field or history list.
+        fn numeric_tree(value: &serde_json::Value) -> bool {
+            match value {
+                serde_json::Value::Null | serde_json::Value::Number(_) => true,
+                serde_json::Value::Object(fields) => fields.values().all(numeric_tree),
+                _ => false,
+            }
+        }
+        assert!(numeric_tree(&serde_json::to_value(status.timing).unwrap()));
+    }
+    #[test]
+    fn disabling_aborts_pending_navigation_without_publishing_a_delivery_sample() {
+        let (_dir, shared, mut worker) = stepped_worker(Link::Fake(FakeDock::new()));
+        let now = Instant::now();
+        worker.pending_navigation = Some(PendingNavigation {
+            received: now,
+            handled: now,
+            preceding_non_button_events: 0,
+            poll_gap_before_receipt_us: 0,
+        });
+        worker.timing.navigations_started = 1;
+        shared.enabled.store(false, Ordering::SeqCst);
+        worker.step(now);
+        let timing = shared.status().timing;
+        assert_eq!(timing.navigations_completed, 0);
+        assert_eq!(timing.navigations_aborted, 1);
+        assert!(timing.last_navigation.is_none());
+        worker.step(now);
+        assert_eq!(shared.status().timing.navigations_aborted, 1);
     }
     #[test]
     fn failed_action_flashes_then_restores_without_leaking_action_data() {
