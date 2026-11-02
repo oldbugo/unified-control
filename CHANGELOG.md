@@ -1,12 +1,15 @@
 # Changelog
 
-## 0.3.4 — prepared 2026-11-02
+## 0.3.4 — 2026-11-02
 
 Add the planned sidebar page search. Match page names and related terms such as usage, themes and MCP. Filtering does not
 save or navigate; Enter opens the first result through the existing guarded navigation path. Escape clears the query.
 Keyboard focus skips hidden results. Compact sidebars expose a search button and can expand/collapse without losing access.
 Closing compact search clears its filter; resizing with an active query keeps search visible instead of hiding pages
 behind an invisible filter.
+
+Installed corrected source95a68ee through the idle-safe updater, with newPID/startup version, actual MCP version,
+packaged proxy identity, unchanged active layout and dock/provider recovery verified. The earlier draft package was not installed.
 
 ## 0.3.3 — 2026-11-02
 

@@ -1,5 +1,10 @@
 # Dock follow-up backlog
 
+Planned phase2.5 sidebar search is installed in0.3.4. It filters page names and fixed related terms without saving or
+navigating; Enter uses the existing guarded page activation. Three-width/compact keyboard, focus and filtering checks,
+plus native Search-to-General/cooler/dock navigation, pass. Closing compact search restores every page; active filters stay
+visible across compact resizing. User review remains separate from these software checks.
+
 User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. Updated 2026-11-01: preview fixes and virtual page following are built and software-tested for 0.1.5; user-visible verification remains pending.
 
 | Item | Priority and next check |
