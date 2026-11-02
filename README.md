@@ -7,6 +7,11 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Prepared 0.3.1 fixes a reproduced AI Usage startup fault: Node rejects the canonical Windows script-path spelling
+supplied by the packaged app. Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now
+passes, along with 120 core and 11 host tests. The installed account-inactive reader smoke check also passes.
+0.3.1 is not installed; 0.3.0 remains running, and live provider refresh/physical usage acceptance remain open.
+
 ## Current direction (2026-10-30)
 
 User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 checkpoint provides seven tools for status,
@@ -16,6 +21,9 @@ Local agent access is visible in General and off by default. [Setup, tools and e
 Installed 0.3.0/source `0909429` is verified through startup and a direct installed-MCP connection. Codex and both Claude
 client configurations are registered. The user enabled Local agent access; direct production MCP reads the 14-key layout and
 connected dock without changes. Reload the client's MCP configuration/start a fresh session to discover its tools.
+Fresh Codex desktop model-client acceptance passed on 2026-11-02: status/layout/monitor discovery, preview, a temporary
+inactive-profile write/readback, stale-revision refusal and undo. The inactive profile's keys were restored exactly;
+the active Everyday page stayed selected. Claude model-client acceptance remains open.
 The dedicated request proxy avoids a packaged client's stale main executable. The completed stack is consolidated onto
 private `main`; `v0.3.0` preserves the installed build source. See the handoff before new development.
 
