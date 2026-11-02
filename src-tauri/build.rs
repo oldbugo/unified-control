@@ -67,6 +67,8 @@ fn main() {
         "dock_test_studio",
         "asset_import",
         "monitor_list",
+        "agent_editor_present",
+        "agent_editor_ready",
         "autostart_set",
     ];
     tauri_build::try_build(

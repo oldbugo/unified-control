@@ -8,6 +8,11 @@ UI and navigation follow-ups: [backlog](docs/backlog.md).
 
 ## Current direction (2026-10-30)
 
+User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 checkpoint provides seven tools for status,
+scoped layouts, monitor discovery, preview, revision-checked apply, last-agent-write undo and job status. It uses the running
+tray app through same-user Windows IPC; it never edits app-data files from a client or starts a second device engine.
+Local agent access is visible in General and off by default. [Setup, tools and evidence](docs/agent-control.md).
+
 Build the combined interface from the start, with Home, Cooler screen, Stream dock, Dial, General and About pages.
 Implement working dock support first, run normal functional and real-device acceptance tests, then integrate CoolerScreen,
 then add the dial. A week-long daily-use trial is not required. The existing CoolerScreen installation stays separate
@@ -16,15 +21,15 @@ until its integration is built and tested.
 User direction on 2026-11-02: prioritize Monitor Toggle for immediate use. The live picker failure was traced to a canonical
 Windows resource path rejected by PowerShell 5.1's path provider. 0.2.3 normalizes filesystem paths at the adapter boundary;
 the original helper is unchanged. A temporary installed-helper correction restored discovery, and the user confirmed the
-physical Dell toggle worked on Key 10. The permanent adapter passes the canonical-path read-only regression. Installation
-and a final live check of 0.2.3 follow. [Evidence and limits](docs/function-failures.md).
+physical Dell toggle worked on Key 10. The permanent adapter passes the canonical-path read-only regression; 0.2.3 was
+installed with startup and original helper hashes verified. The user subsequently confirmed Monitor Toggle works.
+[Evidence and limits](docs/function-failures.md).
 
 User direction on 2026-11-01: integrate CoolerScreen now, then refine the UI. Preview 0.2.0 reuses the existing cooler
 interface and engine in a supervised worker. First enable copies settings/library/gallery into UC, preserving the original
 fallback; close the separate CoolerScreen app yourself before enabling. No uninstall or automatic device enablement.
-[Architecture, migration and limits](docs/device-app/architecture.md). AI Usage and Monitor Toggle are implemented but
-reported nonworking; [functional follow-ups](docs/function-failures.md) distinguish the parser fix from unverified source
-and physical behavior. Sleep/resume stays deferred.
+[Architecture, migration and limits](docs/device-app/architecture.md). AI Usage remains unresolved; Monitor Toggle is now
+user-confirmed working. [Functional follow-ups](docs/function-failures.md). Sleep/resume stays deferred.
 
 Installed 0.2.1 adds the requested [background connection diagnostics](docs/cooler-connection-health.md), with a saved
 Connection diagnostics switch on the cooler page. It records bounded local evidence while UC stays in the tray; it never
@@ -74,7 +79,7 @@ check covers real IPC/files, image import, A/B persistence, physical-size PNGs, 
 suppression and disable. Fake mode never starts real account readers, sensors or Windows actions. Native Quit also waits
 for delayed image import and queued saves. Automated tests never open the physical dock or send input/audio/display actions.
 Live Codex refreshed autonomously beyond five minutes in a six-minute check; Claude's existing source remained stale and
-must show unknown. Preview 0.2.1/source `f079a96` is installed and running after cooperative idle-safe update; new PID and
+must show unknown. Earlier preview 0.2.1/source `f079a96` was installed through cooperative idle-safe update; new PID and
 startup version were verified at 10:50:10 UTC on 2026-11-01. Dock reconnected with a fresh full page and zero errors. Cooler
 is enabled but fails USB enumeration; background health records code43 with one exact-matched descriptor failure and no
 normal nodes. A USB port-cycle request did not recover it; physical reconnect is deferred because its cable is inaccessible.

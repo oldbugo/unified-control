@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod instance_id;
+mod agent_transport;
 mod live_app;
 mod quit_cmd;
 mod relaunch;
@@ -16,6 +17,10 @@ use uc_core::core::App;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // MCP's request-only bridge must never create or focus an application.
+    if args.iter().any(|a| a == "--agent-request") {
+        std::process::exit(agent_transport::run_request());
+    }
     // `--quit`: ask the running app (same app folder) to quit like the tray's Quit; never shows a window or starts an app.
     if args.iter().any(|a| a == "--quit") {
         std::process::exit(quit_cmd::run_request(quit_cmd::Request::Quit));
@@ -103,6 +108,8 @@ fn main() {
             cc::dock_test_studio,
             cc::asset_import,
             cc::monitor_list,
+            cc::agent_editor_present,
+            cc::agent_editor_ready,
             cc::autostart_set
         ])
         .setup(move |app| {
@@ -115,6 +122,19 @@ fn main() {
                 .0
                 .start_runtime(app.path().resource_dir()?)
                 .map_err(|error| std::io::Error::other(error.message))?;
+            let agent_core = app.state::<Core>().0.clone();
+            match agent_transport::start(Arc::new(move |request| {
+                match agent_core.agent_call(
+                    request["method"].as_str().unwrap_or(""),
+                    request["params"].clone(),
+                ) {
+                    Ok(result) => serde_json::json!({"ok":true,"result":result}),
+                    Err(error) => agent_error(error),
+                }
+            })) {
+                Ok(server) => { app.manage(std::sync::Mutex::new(Some(server))); }
+                Err(_) => uc_core::device::log("local agent connection unavailable"),
+            }
             // the tray is always there (Open, Quit): closing the window leaves the app in the tray
             live_app::ensure_tray(app.handle(), false);
             if !tray_only && !background {
@@ -192,9 +212,38 @@ fn main() {
         }
         RunEvent::Exit => {
             live_app::arm_exit_watchdog("exit");
+            if let Some(server) = app.try_state::<std::sync::Mutex<Option<agent_transport::Server>>>() {
+                if let Some(mut server) = server.lock().unwrap().take() { server.shutdown(); }
+            }
             app.state::<Core>().0.shutdown();
             uc_core::device::log("exit");
         }
         _ => {}
     });
+}
+
+fn agent_error(error: uc_core::core::error::CoreError) -> serde_json::Value {
+    let (code, message) = match error.code.as_deref() {
+        Some("profiles") => ("profiles", "Dock layout could not be saved or read."),
+        Some(code @ ("revision_conflict" | "invalid-arguments" | "busy" | "agent-disabled"
+            | "method-not-found" | "runtime-unavailable" | "monitor-unavailable"
+            | "render-unavailable" | "undo-unavailable" | "stale-lease"))
+            if error.message.len() <= 512 && !error.message.chars().any(char::is_control) => (code, error.message.as_str()),
+        _ => ("agent_error", "The agent operation could not be completed."),
+    };
+    serde_json::json!({"ok":false,"error":{"code":code,"message":message}})
+}
+
+#[cfg(test)]
+mod agent_error_tests {
+    use super::*;
+    use uc_core::core::error::CoreError;
+    #[test]
+    fn agent_errors_keep_conflicts_but_hide_private_storage_and_unknown_details() {
+        let private = "private fixture path or operating system detail";
+        for error in [CoreError::coded("profiles",private),CoreError::new(private),CoreError::coded("future-code",private)] {
+            assert!(!agent_error(error).to_string().contains(private));
+        }
+        assert_eq!(agent_error(CoreError::coded("revision_conflict","Dock layout changed"))["error"]["code"],"revision_conflict");
+    }
 }

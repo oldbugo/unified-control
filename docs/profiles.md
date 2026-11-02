@@ -15,6 +15,11 @@ its mutex serializes all readers and writers in that process.
   establishes the startup backup. Later reads return the last successful state.
 - `save(&ProfileState)` validates and persists the entire state and returns the
   saved state. Call it when changes occur; there is no separate Save step.
+- `state_with_revision()` returns state and an opaque in-process revision atomically. `save_if_revision()` validates and
+  persists only if that revision still matches, under the same store mutex. Every successful write advances the token;
+  restarting the app creates a new epoch. The token is separate from the on-disk schema version.
+- Native UI `profiles_save` requires `expectedRevision`. Agent clients use typed batches through the running host with
+  the same revision checks and an editor lease; they never replace profile files directly. [MCP contract](agent-control.md).
 - `recovery_notice()` returns a short message if loading used the recovery
   journal or startup backup. Show this message to the user.
 - `import_preview(&serde_json::Value)` converts the original index-based

@@ -5,6 +5,7 @@ import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
 import {KeyPreviewRenderer} from './js/key-preview.js';
 import {DevicePageFollower} from './js/device-page-follow.js';
 import {CoolerPanel} from './js/cooler-panel.js';
+import {AgentEditorLease} from './js/agent-editor.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const coolerPanel=new CoolerPanel(invoke,!!T);
@@ -57,6 +58,7 @@ let actionSearch='',deviceStatus=null;
 let followPhysicalPage=true,followPreferenceReady=!T,followPreferenceEpoch=0,savedFollowPhysicalPage=true,followPreferenceWrite=Promise.resolve();
 let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0;
 let editGesture=null;
+let agentLayoutLocked=false,quitPreparing=false;
 const pageFollower=new DevicePageFollower();
 function remember(group=''){history.checkpoint(draft,group);const undo=document.querySelector('[data-do="undo"]');if(undo)undo.disabled=!history.available;}
 let profilesReady = !T, exitGuardReady = !T, guardError = '', loadRunning = false, nativeSaving = false, recoveryNote = '', previewNote = '', previewGeneration = 0;
@@ -89,7 +91,7 @@ function persist() {
 }
 function showStorage() {
   const el = document.getElementById('storage-status');
-  el.textContent = storageNote || guardError || (T ? !profilesReady ? 'Saved layouts are unavailable' : !exitGuardReady ? 'Preparing the editor…' : nativeSaving ? 'Saving changes…' : previewNote || recoveryNote || 'Changes saved in Unified Control' : 'Prototype changes saved on this device');
+  el.textContent = storageNote || guardError || (T ? !profilesReady ? 'Saved layouts are unavailable' : !exitGuardReady ? 'Preparing the editor…' : agentLayoutLocked ? 'Applying agent layout changes…' : nativeSaving ? 'Saving changes…' : previewNote || recoveryNote || 'Changes saved in Unified Control' : 'Prototype changes saved on this device');
   el.classList.toggle('attention', !!storageNote);
   document.getElementById('storage-retry').hidden=!(T && writer.failed);
 }
@@ -167,6 +169,7 @@ function render() {
     <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
     <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
     <input id="autostart-enabled" type="checkbox" role="switch" aria-label="Start with Windows" ${state?.autostart?'checked':''} ${!T||state?.fake?'disabled':''}></div>
+    <div class="setting-row"><div><strong>Local agent access</strong><p>Let connected MCP clients read device status and configure dock layouts. Changes appear here. Off unless you enable it.</p></div><input id="agent-access" type="checkbox" role="switch" aria-label="Local agent access" ${state?.agentAccess?'checked':''} ${!T?'disabled':''}></div>
     <div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div>
     <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages are saved in the app data folder, with a startup backup.':'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div>
     <div class="setting-row"><div><strong>Background behavior</strong><p>The visible tray keeps enabled controls running. Quit waits for active work and stops them.</p></div></div></section>`;
@@ -212,7 +215,7 @@ function updateUsageStatus(){
 }
 function followDeliveredPage(){
   const target=pageFollower.take(draft,{enabled:followPhysicalPage,ready:profilesReady&&exitGuardReady&&followPreferenceReady,
-    busy:writer.running||!!writer.pending||writer.failed||nativeSaving||pendingMutations.size>0||!!(editGesture?.isConnected&&document.activeElement===editGesture),visible:draft.current==='dock'});
+    busy:agentLayoutLocked||writer.running||!!writer.pending||writer.failed||nativeSaving||pendingMutations.size>0||!!(editGesture?.isConnected&&document.activeElement===editGesture),visible:draft.current==='dock'});
   if(!target)return false;
   draft.profile=target.profile;draft.page=target.page;selected=0;selectedFace='a';previewFace='a';actionSearch='';
   render();return true;
@@ -263,8 +266,15 @@ async function loadNativeProfiles() {
   if (loadRunning) return;
   loadRunning=true;
   try {
+    // A window can open while an agent transaction started from the tray. Wait
+    // for that accepted transaction before taking the editor's initial revision.
+    const deadline=Date.now()+20_000;
+    while((await invoke('app_state')).agentBusy===true){
+      if(Date.now()>=deadline)throw new Error('A layout transaction is still running');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
     const result=await invoke('profiles_state');
-    draft=fromNative(result.state,draft.current);
+    adoptNativeLayout(result);
     recoveryNote=result.notice || '';
     profilesReady=true; storageNote=''; selected=0;
   } catch {
@@ -273,6 +283,25 @@ async function loadNativeProfiles() {
   loadRunning=false;
   render();followDeliveredPage();
 }
+function adoptNativeLayout(result) {
+  writer.adoptRevision(result.revision);
+  draft=fromNative(result.state,draft.current);
+  history.clear();editorIntentEpoch++;editGesture=null;
+  profilesReady=true;selected=Math.min(selected,13);
+}
+function updateEditorLock(){document.querySelector('.app').inert=agentLayoutLocked||quitPreparing;showStorage();}
+const agentEditor=new AgentEditorLease({
+  invoke,
+  busy:()=>quitPreparing||!profilesReady||!exitGuardReady||writer.failed||!!(editGesture?.isConnected&&document.activeElement===editGesture),
+  flush:async()=>{await Promise.all([...pendingMutations]);await followPreferenceWrite;return writer.flush();},
+  lock:locked=>{agentLayoutLocked=locked;updateEditorLock();},
+  adopt:async result=>{adoptNativeLayout(result);render();},
+  reload:async()=>{
+    try{adoptNativeLayout(await invoke('profiles_state'));render();}
+    catch(error){profilesReady=false;storageNote='The accepted layout could not be reloaded. Reload layouts before editing.';render();throw error;}
+  },
+  onError:()=>{previewNote='The agent layout update could not finish. Your saved layout is kept.';showStorage();},
+});
 async function navigate(id) {
   if (!Object.hasOwn(NAV,id)) return;
   if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave();}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
@@ -329,6 +358,7 @@ pane.addEventListener('change', e => {
   markEditGesture(e.target);
   if(id==='follow-physical-page'){setFollowPhysicalPage(e.target.checked);return;}
   if(id==='autostart-enabled'){invoke('autostart_set',{enabled:e.target.checked}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.autostart;previewNote='The Windows startup setting could not be changed.';showStorage();});return;}
+  if(id==='agent-access'){invoke('settings_update',{patch:{agentAccess:e.target.checked}}).then(result=>{state=result;}).catch(()=>{e.target.checked=!!state?.agentAccess;previewNote='Local agent access could not be saved.';showStorage();});return;}
   if(id==='dock-enabled'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{applyDockStatus(result,ticket,intent);updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
   if(id==='dock-brightness'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{applyDockStatus(result,ticket,intent);}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
   if(e.target.dataset.monitor){remember();activeKey().value=JSON.stringify({targets:[...document.querySelectorAll('[data-monitor]:checked')].map(el=>el.dataset.monitor),mode:'toggle'});persist();return;}
@@ -375,10 +405,10 @@ function updateActionValue(){const input=document.getElementById('action-value')
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(event.target.tagName)){event.preventDefault();document.querySelector('[data-do="undo"]')?.click();}});
 render();
 if (T) {
-  loadNativeProfiles();
-  invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
-    document.querySelector('.app').inert=true;
-    try{await coolerPanel.prepareLeave();}catch(error){document.querySelector('.app').inert=false;previewNote=error.message;showStorage();await invoke('editor_quit_ready',{saved:false}).catch(()=>{});return;}
+  const agentListener=invoke('plugin:event|listen',{event:'uc:agent-event',target:{kind:'Any'},handler:T.transformCallback(e=>agentEditor.event(e.payload))});
+  const quitListener=invoke('plugin:event|listen',{event:'uc:prepare-quit',target:{kind:'Any'},handler:T.transformCallback(async()=>{
+    quitPreparing=true;updateEditorLock();
+    try{await coolerPanel.prepareLeave();}catch(error){quitPreparing=false;updateEditorLock();previewNote=error.message;showStorage();await invoke('editor_quit_ready',{saved:false}).catch(()=>{});return;}
     await Promise.all([...pendingMutations]);
     await followPreferenceWrite;
     const saved=await writer.flush();
@@ -387,8 +417,9 @@ if (T) {
       if (saved) return; // Remain inert until native exit; no last-moment edits.
       if (!saved) {storageNote='Changes could not be saved. Unified Control has stayed open so you can retry.';showStorage();}
     } catch {storageNote='Work is still running. Unified Control has stayed open.';showStorage();}
-    document.querySelector('.app').inert=false;
-  })}).then(()=>invoke('editor_session_ready',{ready:true})).then(()=>{exitGuardReady=true;guardError='';render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
+    quitPreparing=false;updateEditorLock();
+  })});
+  Promise.all([agentListener,quitListener]).then(()=>invoke('editor_session_ready',{ready:true})).then(async()=>{exitGuardReady=true;guardError='';await loadNativeProfiles();render();}).catch(()=>{exitGuardReady=false;guardError='The editor exit guard is unavailable. Layout editing is disabled.';render();});
   window.addEventListener('beforeunload',()=>invoke('editor_session_ready',{ready:false}).catch(()=>{}));
 }
 if(T)invoke('plugin:event|listen',{event:'uc:cooler-event',target:{kind:'Any'},handler:T.transformCallback(e=>coolerPanel.event(e.payload))}).catch(()=>{});

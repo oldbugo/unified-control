@@ -2,7 +2,7 @@
 
 User-reported 2026-11-01: AI Usage and Monitor Toggle did not work. User direction 2026-11-02 prioritizes Monitor Toggle for immediate use. AI Usage remains unresolved; UI refinement follows integration.
 
-Private follow-ups: [AI Usage #6](https://github.com/oldbugo/unified-control/issues/6) and [Monitor Toggle #7](https://github.com/oldbugo/unified-control/issues/7). The fixes/status messages are included in 0.2.0; neither issue is claimed physically resolved.
+Private follow-ups: [AI Usage #6](https://github.com/oldbugo/unified-control/issues/6) remains unresolved. [Monitor Toggle #7](https://github.com/oldbugo/unified-control/issues/7) is now user-confirmed working after the 0.2.3 path fix.
 
 ## Monitor Toggle
 
@@ -15,7 +15,8 @@ confirmed the physical key worked after selecting only the Dell and labelling bo
 Permanent fix in 0.2.3: normalize trusted verbatim disk/UNC filesystem paths before passing the helper script and snapshot
 path to PowerShell. Preserve UTF-16 and leave target identifiers/device namespaces unchanged. The original helper files stay
 unchanged. A canonical-resource regression reproduced failure before the fix and passed afterward; pure disk/UNC/Unicode
-tests, headless picker retry/save tests and native fake discovery IPC pass. Installation/final live discovery check pending.
+tests, headless picker retry/save tests and native fake discovery IPC pass. Installed startup/new PID and original helper hashes
+were verified; the final computer-use picker check was stopped with Escape. The user subsequently confirmed Monitor Toggle works.
 Automated checks never change display topology or audio. User profiles, targets and snapshots remain local.
 
 Read-only audit found a concrete adapter defect: the preserved PowerShell helper can return `displays` as an object for exactly one monitor and null for no monitors, while UC required an array. UC now normalizes null/object/array before validating stable keys and readable names. Missing/malformed shapes still fail. Pure fixture regression covers zero/one/many shapes and rejects malformed single objects; the original helper is unchanged. This may explain discovery failure on a one-display setup, but has not been established as the user's cause.

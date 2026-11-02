@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-01. Installed/running version: 0.2.1 (`f079a96`), new startup/PID verified after cooperative update. User authorized proceeding with CoolerScreen integration before UI polish; remaining dock tests stay open. Cooler engine/interface are integrated in preview; current enabled cooler cannot enumerate, so physical acceptance has not passed. Real-data import/content continuity remains unverified. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
+Updated 2026-11-02. Installed/running version: 0.2.3 (`d4ffdf6`), new startup/PID and original monitor helper hashes verified after cooperative update. User confirms Monitor Toggle works. MCP 0.3.0 software is built/tested; installation and client registration are pending. Remaining dock tests stay open. Cooler engine/interface are integrated in preview; current cooler cannot enumerate, so physical acceptance has not passed. Real-data import/content continuity remains unverified. Dial remains unintegrated. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -10,10 +10,10 @@ Updated 2026-11-01. Installed/running version: 0.2.1 (`f079a96`), new startup/PI
 | USB unplug/replug | User confirmed on 0.1.4: layout returned automatically without toggling Enabled or reopening UC. Logs show disconnect at 12:09:03 UTC, retry backoff and Connected plus a fresh full-page send at 12:09:34. Exact replug time was not captured; do not infer recovery latency from the disconnect timestamp. Retry errors during the intentional unplug are expected. |
 | Folder and Back | User confirmed both actions work on 0.1.4. Approximately one-second navigation delay is a separate performance follow-up; the virtual editor currently does not follow physical page changes. [Follow-up backlog](backlog.md). |
 | All physical keys and wide area | Remaining per-key coverage and firmware wide-area behavior pending. |
-| Hotkey/text/launch/media/Monitor Toggle | Software/fake checks pass; user reported functions mostly work, but individual physical action results remain incomplete. Monitor/audio actions require a suitable hands-on check. |
+| Hotkey/text/launch/media/Monitor Toggle | Software/fake checks pass; user reported functions mostly work. Monitor Toggle on Key 10 (one Dell target) passed the requested physical off/on test after the path correction, and the user confirms it works after 0.2.3. Explicit audio preservation and other action/monitor combinations remain unverified. |
 | Profiles, autosave and restart persistence | User confirmed on 0.1.4: profile, Test page and assignments remained after tray Quit/Start-menu reopen, and UC reconnected. Automated IPC/storage/quit tests also pass. |
 | Usage and account states | Codex idle source refresh verified; source freshness/unknown/account gates tested. Claude fresh-source/account-panel comparison and account-switch/logout acceptance remain pending. |
-| Reported AI Usage and Monitor Toggle failures | User reports both nonworking. 0.2.0 fixes zero/one-monitor discovery and adds usage status messages; actual causes/physical resolution remain open in [functional follow-ups](function-failures.md). Installed startup logged finite `reader-unavailable`, not successful live usage. |
+| Reported AI Usage and Monitor Toggle failures | Monitor Toggle's installed-path failure is fixed in 0.2.3 and user-confirmed working. AI Usage remains unresolved; installed reader status is `reader-unavailable`. [Functional follow-ups](function-failures.md). |
 | Sleep/resume | Deferred at the user's request; cannot do this now. Remains pending and will be revisited later. |
 | Editor usability/scaling | Browser checks at three widths pass; full user review pending. Minor preview flicker tracked below. |
 

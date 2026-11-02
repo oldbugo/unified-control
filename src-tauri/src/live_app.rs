@@ -87,7 +87,13 @@ pub fn create_window_as(
     app: &AppHandle,
     how: Option<crate::window::Present>,
 ) -> tauri::Result<WebviewWindow> {
-    let win = crate::window::create(app)?;
+    // Until the new editor has registered its event listener, external writes
+    // must wait/refuse instead of racing its initial layout snapshot.
+    let _ = app.state::<Core>().0.agent_editor_present(true);
+    let win = match crate::window::create(app) {
+        Ok(win) => win,
+        Err(error) => { let _ = app.state::<Core>().0.agent_editor_present(false); return Err(error); }
+    };
     attach_close_handler(&win);
     if let Some(h) = how {
         crate::window::present(&win, h);
@@ -310,6 +316,10 @@ pub fn quit_app(app: &AppHandle) {
 }
 
 fn request_exit(app: &AppHandle, request: crate::quit_cmd::Request, background: bool) {
+    if app.state::<Core>().0.agent_busy() {
+        uc_core::device::log("quit deferred: an agent layout change is in progress");
+        return;
+    }
     *PENDING_EXIT.lock().unwrap() = Some((request, background));
     if EDITOR_READY.load(Ordering::SeqCst) {
         if let Some(window) = app.get_webview_window("main") {
@@ -382,8 +392,9 @@ fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
 }
 
 #[tauri::command]
-pub fn editor_session_ready(ready: bool) {
+pub fn editor_session_ready(core: tauri::State<'_, Core>, ready: bool) {
     EDITOR_READY.store(ready, Ordering::SeqCst);
+    let _ = core.0.agent_editor_present(ready);
 }
 
 #[tauri::command]

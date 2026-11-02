@@ -33,7 +33,11 @@ export function fromNative(snapshot, current='home') {
 // One write in flight. Later edits replace the queued snapshot, never race an
 // older disk write. Errors are surfaced and the last edit remains available to retry.
 export class ProfileWriter {
-  constructor(invoke, onStatus) { this.invoke=invoke; this.onStatus=onStatus; this.pending=null; this.running=false; this.failed=false; this.completion=Promise.resolve(); }
+  constructor(invoke, onStatus) { this.invoke=invoke; this.onStatus=onStatus; this.pending=null; this.running=false; this.failed=false; this.revision=undefined; this.completion=Promise.resolve(); }
+  adoptRevision(revision) {
+    if (this.running || this.pending || this.failed) throw new Error('Finish pending layout edits before adopting another revision');
+    this.revision=revision;
+  }
   enqueue(snapshot) {
     this.pending=JSON.parse(JSON.stringify(snapshot));
     this.failed=false;
@@ -52,11 +56,14 @@ export class ProfileWriter {
     while (this.pending) {
       const snapshot=this.pending;
       this.pending=null;
-      try { await this.invoke('profiles_save',{snapshot}); }
+      try {
+        const result=await this.invoke('profiles_save',{snapshot,expectedRevision:this.revision});
+        if(typeof result?.revision==='string')this.revision=result.revision;
+      }
       catch (error) {
         // An older edit can be invalid while a newer one is already valid
         // (for example clearing then retyping a profile name).
-        if (this.pending) continue;
+        if (this.pending && error?.code!=='revision_conflict') continue;
         this.pending ||= snapshot;
         this.running=false; this.failed=true;
         this.onStatus('failed',error);

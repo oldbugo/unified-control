@@ -11,5 +11,6 @@ export class EditorHistory {
     this.items.push(text);this.bytes+=text.length;this.group=group;this.at=now;
   }
   undo(){const text=this.items.pop();if(!text)return null;this.bytes-=text.length;this.group='';return JSON.parse(text);}
+  clear(){this.items=[];this.bytes=0;this.group='';this.at=0;}
   get available(){return this.items.length>0;}
 }

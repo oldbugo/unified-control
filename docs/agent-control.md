@@ -1,0 +1,88 @@
+# Local agent control (MCP)
+
+The 0.3.0 checkpoint lets compatible MCP clients inspect UC and configure dock layouts through the running app.
+The same server works with modern MCP discovery and older initialize clients. No model or provider API key is embedded.
+
+## Connection and lifecycle
+
+Enable **General > Local agent access** in UC. It is off by default and can be disabled at any time.
+UC must already be running in the tray. A client never starts its GUI or another hardware engine.
+Quitting a client disconnects its adapter and leaves UC running; quitting UC makes tool calls report app unavailable.
+There is no Windows service or network listener.
+
+The included stdio adapter uses the bundled Node runtime and official MCP SDK 2.4.0. It invokes only UC's
+request-only `--agent-request` mode. That mode runs before GUI/single-instance setup and forwards a bounded request to
+the existing host. A Windows named pipe has a protected current-user/SYSTEM ACL, rejects remote clients and checks the
+server user's identity. Installed, debug and isolated test scopes are separate. Neither client reads UC's AppData files;
+this also avoids packaged-shell AppData redirection.
+
+## Tools
+
+| Tool | Result |
+| --- | --- |
+| `uc_get_status` | App version, available operations and access state; enabled access also provides bounded device/usage status and profile metadata |
+| `uc_get_layout` | One page's keys, profile/page IDs and current revision |
+| `uc_list_monitors` | Read-only choices for configuring a monitor action |
+| `uc_preview_changes` | Validated proposed layout and operation summary, without saving or executing actions |
+| `uc_apply_changes` | One durable revision-checked batch, accepted state and undo token |
+| `uc_undo_changes` | Restore the last agent batch, provided no later layout edit has occurred |
+| `uc_get_job` | Job state/progress, without exposing raw job errors or payloads |
+
+Read the latest layout, preview a patch and apply it with its `expectedRevision`. At most 64 typed operations are accepted:
+`set_face`, `set_action`, `rename_page` and `create_page`. Keys are numbered **1–14**, with 14 the wide display; faces are
+exactly `a` and `b`. Existing IDs select profiles/pages; UC generates IDs for new pages. The host validates the entire
+result before saving once. An invalid operation saves none of the batch. No generic JSON patch or full-layout replacement
+is exposed to MCP. Static Face A rendering and complete-key patches also exist in the host API, outside these seven tools.
+
+Example operation (obtain IDs/revision from `uc_get_layout`):
+
+```json
+{"op":"set_face","profileId":"<profile ID>","pageId":"<page ID>","key":10,"face":"a","value":{"kind":"text","text":"Monitor"}}
+```
+
+## Editor coordination and results
+
+Every UI save and agent write checks the current revision. A stale revision returns `revision_conflict`; read again and
+recompute the change. Before an agent write, a live editor refuses active text entry or a failed save. Otherwise it freezes
+editing, waits for imports and queued writes to finish, then acknowledges the lease. The host commits against the expected
+revision. The editor adopts the accepted layout, clears stale undo history and reloads authoritative state before unlocking.
+A lease timeout during a slow import cannot unlock the editor before that import finishes. Failed drafts are kept.
+
+Quit/update respect active agent writes. Cancellation or a request timeout does not prove a write was cancelled: read back
+before retrying. Application writes return saved state; physical delivery/recovery remains a separate device status/result.
+Configuring a monitor/media/launch action never executes it. This checkpoint exposes no physical action, reset, firmware,
+shell execution, account-authentication or application-start tool.
+
+## Client setup
+
+Use absolute installed paths, for example:
+
+```text
+command: C:/Users/<user>/AppData/Local/Unified Control/node/node.exe
+args: ["C:/Users/<user>/AppData/Local/Unified Control/agent-mcp/server.mjs"]
+```
+
+Codex registration uses `codex mcp add unified-control -- <command> <server path>`. Codex's desktop/CLI/IDE configuration
+is shared. Claude Desktop uses the same command/arguments under `mcpServers.unified-control` in its desktop configuration;
+the Windows packaged app uses its own package's Roaming/Claude configuration folder. Preserve other entries. Reload the
+client's MCP configuration or start a fresh client session; Claude Desktop normally needs a full quit/reopen by the user.
+Client registration does not enable UC's access switch.
+
+Official references: [MCP server architecture](https://modelcontextprotocol.io/docs/learn/architecture),
+[official SDK](https://github.com/modelcontextprotocol/typescript-sdk),
+[Codex MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Claude Desktop setup](https://py.sdk.modelcontextprotocol.io/get-started/real-host/).
+
+## Verification
+
+Software checks include the full Rust suite, actual Windows pipe ACL/identity/limits/shutdown, official-SDK stdio clients
+(modern and legacy protocol), pure editor/revision tests and headless editor fixtures. The quiet native fake test connects
+SDK -> request proxy -> host -> real UI IPC/storage, including access opt-in, preview/apply/undo, two clients, stale revisions,
+focused text, an expired lease during a held import, busy-safe Quit, hidden editor and client disconnect. No automated physical
+device, display, audio or account action is used. Client-host acceptance and installation are recorded separately.
+
+Run `scripts/check-agent-mcp.cjs`, `scripts/check-agent-editor.cjs` (with `UC_PLAYWRIGHT_MODULE`) and
+`scripts/check-native-agent.cjs` (with `UC_TEST_EXE` pointing to a debug build). Native tests refuse release/installed executables
+and use their own temporary home plus quiet/multi/fake flags.
+
+Release installation/client registration pending the final checkpoint.
