@@ -11,7 +11,9 @@ Quitting a client disconnects its adapter and leaves UC running; quitting UC mak
 There is no Windows service or network listener.
 
 The included stdio adapter uses the bundled Node runtime and official MCP SDK 2.4.0. It invokes only UC's
-request-only `--agent-request` mode. That mode runs before GUI/single-instance setup and forwards a bounded request to
+request-only `--agent-request` mode through a dedicated `UC-AgentRequest-v1.exe` identity in the install folder. The installer creates
+this copy of the reviewed app binary, so a packaged client's stale virtualized main executable cannot become a GUI launch.
+There is no fallback to the main executable. That mode runs before GUI/single-instance setup and forwards a bounded request to
 the existing host. A Windows named pipe has a protected current-user/SYSTEM ACL, rejects remote clients and checks the
 server user's identity. Installed, debug and isolated test scopes are separate. Neither client reads UC's AppData files;
 this also avoids packaged-shell AppData redirection.
