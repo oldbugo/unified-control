@@ -1,6 +1,6 @@
 # Navigation timing checks
 
-Prepared for 0.3.2. Read enabled MCP `uc_get_status` and inspect `dock.timing`. Status reads do not navigate or execute
+Available in installed 0.3.2. Read enabled MCP `uc_get_status` and inspect `dock.timing`. Status reads do not navigate or execute
 actions. Keep the installed app running; use its normal Folder/Back keys for a physical navigation sample.
 
 The fixed-size state retains counters and one latest successful navigation. `receiptToDeliveryUs` starts when the host's
@@ -30,3 +30,11 @@ files or saves account readings. Keep captures local; they are diagnostics, not 
 
 Fake tests cover held rendering, FIFO ACK/heartbeat events, aborted navigation, access gating and numerical-only timing.
 Physical Folder/Back measurements remain separate from these software checks.
+
+## 0.3.2 package identity
+
+Installed source: `29414fb8db44db15ae2b3f90bf64be8af7080b77`. Installer SHA-256:
+`19ADF0291ED59ED978B2E2281B08BB60681A0085F187B0AFE28E206126BCDDE3`.
+The installed request proxy hash is `054D8E1ED3B3FEA1D32042267208F29B3BF35F4080468F01756CDA65955A18D4`.
+Its bytes match the built release exactly after Tauri's three-byte bundle marker changes from `UNK` to `NSS` for NSIS.
+The packaged shell's old main-executable view is not an authoritative installed-binary check; use the proxy and live MCP.

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.2 — prepared 2026-11-02
+## 0.3.2 — 2026-11-02
 
 Keep keyboard focus on the matching dock editor control after display/face/presentation/action changes. Tab continues
 through the editor. Undo keeps the selected display on the same stable profile/page, with a safe fallback if that page
@@ -12,6 +12,10 @@ host-receipt-to-delivery sample and navigation completion/abort counts. No sched
 
 Preserve guarded Codex error/stale states while continuing to hide all unverified numbers. Missing account identity still
 suppresses otherwise valid readings. Simulated regressions cover throttling, recovery and history/token clearing.
+
+Installed through the idle-safe updater during the user's requested continuation. New process/startup version, MCP0.3.2,
+dock reconnection, unchanged active-page keys and both providers verified. Numerical timings are readable; physical
+navigation capture/feel remains separate from automated checks.
 
 ## 0.3.1 — 2026-11-02
 

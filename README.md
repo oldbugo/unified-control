@@ -7,7 +7,12 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Installed 0.3.1/sourcee23be94 fixes a reproduced AI Usage startup fault: Node rejects canonical Windows script paths.
+Installed 0.3.2/source29414fb keeps keyboard focus during dock editing and retains the selected display on Undo when its
+page survives. It includes bounded numerical navigation timings in MCP/dock status and guarded Codex error/stale reasons.
+The idle-safe update verified startup/new PID, MCP version, dock reconnection, both providers verified and an unchanged
+fourteen-key active page. [Navigation measurement guide](docs/navigation-timing.md). Physical timing/feel checks are pending.
+
+Version 0.3.1/sourcee23be94 fixed a reproduced AI Usage startup fault: Node rejects canonical Windows script paths.
 Trusted filesystem paths are normalized at launch. The failing canonical-path fixture now passes, along with 120 core
 and 11 host tests. The user approved the idle-safe update on 2026-11-02; startup/new PID, MCP version0.3.1, dedicated proxy
 hash and dock reconnection were verified. Both Codex and Claude subsequently reported verified observations through MCP.
@@ -15,12 +20,11 @@ Both providers remained fresh beyond the five-minute cutoff in a bounded MCP wat
 and recovered automatically; its cause remains unknown. This is not an uninterrupted reliability pass. Physical usage,
 exact account-panel comparison and account-switch acceptance remain open. Claude needs a supporting Desktop Code companion.
 
-Next source checkpoint (not installed): bounded numerical navigation timing in dock/MCP status, fake held-render and
-ACK-burst regressions, and preservation of guarded Codex error/stale reasons.123 core/11 host and62 reader tests pass.
+Included in 0.3.2: bounded numerical navigation timing in dock/MCP status, fake held-render and ACK-burst regressions,
+and preservation of guarded Codex error/stale reasons. 123 core/11 host and 62 reader tests pass.
 Scheduling is unchanged; physical latency and any speedup remain unmeasured.
 
-Prepared 0.3.2 also fixes keyboard focus loss during dock editing and keeps the selected display on Undo when its page
-survives. Headless keyboard/Tab/context checks cover three widths. [Navigation measurement guide](docs/navigation-timing.md).
+Headless keyboard/Tab/context checks cover three widths; native profile and MCP integration checks pass with fake devices.
 
 ## Current direction (2026-10-30)
 

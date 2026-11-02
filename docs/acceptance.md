@@ -1,6 +1,6 @@
 # Dock acceptance status
 
-Updated 2026-11-02. Installed/running version: 0.3.1 (`e23be94`), user-approved cooperative update with new startup/PID, MCP version, proxy hash and dock reconnection verified. Both usage providers reached verified status; sustained refresh is checked separately. User confirms Monitor Toggle works after 0.2.3. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
+Updated 2026-11-02. Installed/running version: 0.3.2 (`29414fb`), idle-safe update during the requested continuation. New startup/PID, MCP version, packaged proxy identity, dock reconnection and unchanged active-page keys verified. Both usage providers report verified status. Codex model-client read/preview/apply/undo acceptance passes; Claude model-client acceptance remains open. Remaining dock tests, cooler physical/migration acceptance and Dial remain open. These results distinguish user observation from software/transport evidence.
 
 | Check | Status and evidence |
 | --- | --- |
@@ -8,7 +8,7 @@ Updated 2026-11-02. Installed/running version: 0.3.1 (`e23be94`), user-approved 
 | A/B presses | User tentatively reported the two-press check worked. Broader per-key checks remain pending. |
 | Idle display and host liveness | User saw ten idle minutes without fallback on 0.1.2, but logs exposed hidden reconnects. 0.1.3 response probes then ran with zero host errors for hours. This is not a full physical/performance soak pass. |
 | USB unplug/replug | User confirmed on 0.1.4: layout returned automatically without toggling Enabled or reopening UC. Logs show disconnect at 12:09:03 UTC, retry backoff and Connected plus a fresh full-page send at 12:09:34. Exact replug time was not captured; do not infer recovery latency from the disconnect timestamp. Retry errors during the intentional unplug are expected. |
-| Folder and Back | User confirmed both actions work on 0.1.4. Approximately one-second navigation delay is a separate performance follow-up; the virtual editor currently does not follow physical page changes. [Follow-up backlog](backlog.md). |
+| Folder and Back | User confirmed both actions work on 0.1.4. Approximately one-second navigation delay remains a performance follow-up. Virtual following is built since0.1.5 and passes native fake checks; physical confirmation is pending. Installed0.3.2 provides timing capture without changing scheduling. [Follow-up backlog](backlog.md). |
 | All physical keys and wide area | Remaining per-key coverage and firmware wide-area behavior pending. |
 | Hotkey/text/launch/media/Monitor Toggle | Software/fake checks pass; user reported functions mostly work. Monitor Toggle on Key 10 (one Dell target) passed the requested physical off/on test after the path correction, and the user confirms it works after 0.2.3. Explicit audio preservation and other action/monitor combinations remain unverified. |
 | Profiles, autosave and restart persistence | User confirmed on 0.1.4: profile, Test page and assignments remained after tray Quit/Start-menu reopen, and UC reconnected. Automated IPC/storage/quit tests also pass. |
@@ -16,7 +16,7 @@ Updated 2026-11-02. Installed/running version: 0.3.1 (`e23be94`), user-approved 
 | Reported AI Usage and Monitor Toggle failures | Monitor Toggle's installed-path failure is fixed in 0.2.3 and user-confirmed working. The0.3.1 reader launch fix is installed; reader now reports ready and both providers reached verified observations through actual MCP. Sustained refresh/physical gauge acceptance are checked separately. [Functional follow-ups](function-failures.md). |
 | MCP status and layout configuration | Codex desktop model-client acceptance passed on 2026-11-02: status, scoped read, monitor discovery, preview, temporary inactive-profile apply/readback, stale-revision refusal and undo. All fourteen inactive-profile keys matched the baseline afterward; active Everyday selection and dock connection were preserved. Earlier opt-out and quiet native concurrency/import/Quit tests also pass. Claude client acceptance remains open. [Contract and evidence](agent-control.md). |
 | Sleep/resume | Deferred at the user's request; cannot do this now. Remains pending and will be revisited later. |
-| Editor usability/scaling | Browser checks at three widths pass; full user review pending. Minor preview flicker tracked below. |
+| Editor usability/scaling | Headless checks at three widths and native profile/MCP checks pass. Installed0.3.2 retains keyboard focus and selected-display context on Undo; removed-page/disabled-control/outside-focus safeguards tested. Full user review pending. Minor preview flicker tracked below. |
 
 ## Cooler integration preview
 
