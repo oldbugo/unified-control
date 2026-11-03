@@ -7,7 +7,7 @@ unchanged selected profile/page/all14keys. The user confirms physical Live conti
 closing UC to the tray. They then report a pause/reconnection on each return. Retained real logs confirm repeated
 `device task: check` → Live pause/Embedded handover → resume/new connection, caused by unconditional iframe startup checks.
 
-Prepared0.4.1 reads a fresh worker state after UI hydration and omits that automatic firmware check when saved Live or a
+Installed0.4.1/sourcebc9a864 reads a fresh worker state after UI hydration and omits that automatic firmware check when saved Live or a
 physical preview owns the connection. Initial Live-off checks and explicit Check/Reconnect remain. Actual embedded-UI
 regression failed before the fix (one healthy-entry check instead of zero), then passes for repeated entry, startup,
 retry, holds, physical preview/tuning, fresh-state changes, unknown state and explicit Check. Quiet native lifetime
@@ -15,7 +15,11 @@ checks pass three actual Home/cooler return cycles with no added check tasks/no 
 followed by watchdog/tray/off/disable/Quit checks. Broader interface/settings/status/search/editor checks pass.
 
 The user granted standing permission for tested idle-safe UC updates without repeated approval questions, recorded in
-CLAUDE.md and the vault.0.4.1 packaging/install verification follows; installed version currently remains0.4.0.
+CLAUDE.md and the vault.0.4.1 packaging/install passed through the idle-safe updater. Startup/newPID44856, actual
+MCP0.4.1, expected-only NSIS marker substitution and unchanged selected profile/page/all14keys verified. Physical reentry
+smoothness remains separate from the automated no-check-task tests. Installer SHA256
+`3C3E2C82AB0BCE7C2D42EC2ADA216CB34FBA168A9097D3861C35B739559BC0FC`; installed proxy SHA256
+`AB9474E7894D5118D2090C5717658CA645371BCA60EB0A34108DB5EA818AEEF7`.
 
 ## 2026-11-03 background Live and interface checkpoint
 

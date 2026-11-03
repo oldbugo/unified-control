@@ -8,6 +8,8 @@ retain their connection too. An actually-off screen still gets its initial check
 
 The user grants standing permission to install tested UC updates as needed without repeated approval questions;
 the idle-safe updater, quiet restart and verification remain mandatory.
+Installed from clean sourcebc9a864 through the idle-safe updater; startup/newPID, actual MCP0.4.1, packaged proxy and
+unchanged selected profile/page/all14keys verified. Real reentry smoothness remains separate from the automated check.
 
 ## 0.4.0 — 2026-11-03
 

@@ -7,8 +7,9 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Prepared0.4.1 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
+Installed0.4.1/sourcebc9a864 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
 the user-confirmed pause/reconnect on each return. Explicit Check/Reconnect and initial checks with Live off remain.
+Quiet idle-safe update, startup/newPID, actual MCP0.4.1, packaged proxy and unchanged selected14-key layout verified.
 
 Installed0.4.0 moves device enablement into General, shows enabled devices only in Home/sidebar/search and removes the
 large workspace enable banners. Cooler controls fill the right pane, with coordinated toolbar styling. Refined navigation,
