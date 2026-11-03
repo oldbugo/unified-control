@@ -47,7 +47,8 @@ const server=http.createServer((req,res)=>{
         if(c==='theme_get')throw {error:'Fixture theme missing',code:'not-found',status:404};
         return {};
       };
-      window.__panel=new CoolerPanel(invoke,true);const container=document.createElement('div');container.id='cooler-test';container.innerHTML=window.__panel.markup();document.getElementById('pane').replaceChildren(container);window.__panel.mount(container);
+      window.__panel=new CoolerPanel(invoke,true);const container=document.createElement('div');container.id='cooler-test';container.style.height='760px';container.innerHTML=window.__panel.markup();const settings=document.createElement('div');settings.id='cooler-settings-test';document.getElementById('pane').replaceChildren(settings,container);window.__panel.mount(container);window.__panel.mountSettings(settings);settings.querySelector('details').open=true;
+      if(container.querySelector('#cooler-enabled')||container.querySelector('.device-header'))throw Error('Device enablement must live in General settings, outside the cooler workspace');
     });
     let releaseFrame,finishFrame;
     const frameReleased=new Promise(resolve=>finishFrame=resolve);
@@ -75,6 +76,7 @@ const server=http.createServer((req,res)=>{
     await page.waitForFunction(()=>document.getElementById('cooler-health')?.textContent.includes('answered after the USB reset'));
     assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.command==='cooler_call'&&c.args.command==='device_reconnect').length),1);
     assert.equal(await frame.locator('#cs-titlebar').count(),0,'embedded UI has no independent native titlebar');
+    assert.equal(await frame.locator('#topbar > .appname').isVisible(),false,'workspace toolbar does not repeat app chrome');
     assert.equal(await frame.locator('#setRestart').isVisible(),false);
     await frame.locator('#navMine').click();assert.equal(await frame.locator('#mineView').isVisible(),true,'existing My themes view works');
     const imported=await frame.evaluate(async()=>{const {backend}=await import('./js/backend.js');return backend.importFile(new File([new Uint8Array([1,2,3])],'sample.png'));});

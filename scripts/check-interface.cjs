@@ -88,7 +88,7 @@ const server = http.createServer((req,res) => {
     await page.locator('[data-page="cooler"]').click();
     assert.match(await page.locator('#pane').textContent(),/integrated controls are available in the Windows app/);
     await page.screenshot({path:path.join(output,'uc-cooler.png'),fullPage:true});
-    await page.locator('[data-page="dial"]').click();
+    assert.equal(await page.locator('[data-page="dial"]').isVisible(),false,'unimplemented Dial is absent from the workspace');
     await page.locator('[data-page="general"]').click();
     assert.equal(await page.locator('#autostart-enabled').isDisabled(),true);
     await page.locator('[data-page="about"]').click();
@@ -219,7 +219,7 @@ const server = http.createServer((req,res) => {
         if(window.__holdPreviewDecode)await new Promise(resolve=>window.__pendingPreviewDecodes.push(resolve));
       };
       const frames=new Map();
-      const dock={state:'disabled',enabled:false,message:'Fixture dock disabled',fake:true};
+      const dock={state:'connected',enabled:true,message:'Fixture dock connected',fake:true};
       const appState={page:'dock',appVersion:'fixture',autostart:false,dock};
       window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
         if(command==='app_state'||command==='settings_update')return appState;
@@ -393,7 +393,7 @@ const server = http.createServer((req,res) => {
     assert.equal(await followPage.evaluate(()=>window.__profileSnapshot.profiles[0].pages[0].keys[0].a.text),'Retry retained');
     await followPage.evaluate(()=>window.__dock.currentPage='main');
     await followPage.waitForFunction(()=>document.getElementById('page-name')?.value==='Main');
-    await followPage.evaluate(()=>{window.__dock.state='disabled';window.__dock.enabled=false;window.__dock.currentPage='test';});
+    await followPage.evaluate(()=>{window.__dock.state='disconnected';window.__dock.currentPage='test';});
     await nextFollowPoll();
     assert.equal(await followPage.locator('#page-name').inputValue(),'Main','disconnected state cannot change editor selection');
     await followPage.evaluate(()=>{window.__dock.state='connected';window.__dock.enabled=true;});
@@ -426,7 +426,7 @@ const server = http.createServer((req,res) => {
     assert.equal(await followPage.evaluate(()=>window.__followPreference),false);
     assert.deepEqual(followErrors,[]);
     await followPage.close();
-    console.log('PASS: six pages; 14 displays; A/B flip; persistence; undo and display context; keyboard focus/tab order at 3 sizes; no outside-focus theft or removed-control restoration; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview retention/decoded swap/typing stability; physical page follow/back/optout/manual/pending-edit/import/stale-poll guards; no page errors.');
+    console.log('PASS: enabled-device workspace; settings-managed devices; 14 displays; A/B flip; persistence; undo and display context; keyboard focus/tab order at 3 sizes; no outside-focus theft or removed-control restoration; picture reload; 16 usage choices; literal launch arguments; escaped text; profiles/pages; stable IDs and targets; serialized saves/coalescing/retry; corrupt draft recovery; 3 responsive sizes; native preview retention/decoded swap/typing stability; physical page follow/back/optout/manual/pending-edit/import/stale-poll guards; no page errors.');
     console.log(output);
   } finally {if(browser) await browser.close(); await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

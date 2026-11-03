@@ -4,6 +4,12 @@ User request, 2026-11-01: the physical cooler freezes repeatedly, cannot connect
 
 ## Current incident
 
+**Later recovery,2026-11-03:** after the user manually clicked Reconnect, they report physical Live working. Root MCP
+confirms connected, normalNodes2/problemCodes[0,0] and zero matched descriptor failures, with the same worker generation.
+The earlier same-day failed check and historical incident below remain valid observations at their own times. No agent
+reset was performed. The user then reports physical Live returning to Embedded on device-page navigation; prepared0.4.0
+addresses temporary stream ownership and retirement separately from USB enumeration. Long-run recovery remains open.
+
 Before recovery, Windows showed normal cooler nodes with statusOK/problem0. UC's worker repeatedly opened WinUSB but timed out attempting to write, sending zero bytes in those failed opens. Its first Live attempt at06:40:35UTC already failed; retained logs contain no successful Live connection in that session. A brief ownership/access conflict aligned with original CoolerScreen opening around07:05UTC, then write timeouts resumed. This is not evidence that UC first connected and later froze, nor proof that development work caused the fault.
 
 The old Reconnect path treated any normal USB identity as already connected and returned without resetting, even when firmware writes timed out. The new manual ResetPresent path was dry-run verified against exactly one cooler parent/port/hub interface. After the user approved Windows elevation, one port-cycle request succeeded around10:31:17UTC, but normal enumeration did not return within twenty seconds. Windows subsequently showed descriptor failure/problem43. The reset did not recover the screen. Only a physical USB reconnect/power removal can establish the next recovery result; a port cycle need not remove power. No broad hub reset, PC reboot/sleep, firmware update or unrelated-device reset was performed.

@@ -1,5 +1,30 @@
 # Dock acceptance status
 
+## 2026-11-03 background Live and interface checkpoint
+
+User manually clicked cooler Reconnect and reports physical Live recovered. Root MCP independently verified connected,
+normalNodes2/problemCodes[0,0], zero matched descriptor failures and no worker restart. Earlier same-day checks had
+confirmed descriptor43 and only user-reported Embedded playback; the manual recovery is later evidence, not proof of
+the initiating cause or long-run reliability. Ulanzi Studio currently owns the dock; UC correctly reports it blocked.
+
+User confirms the physical display stops updating/returns to Embedded when leaving Cooler for dock. Prepared0.4.0 claims
+saved Live independently of temporary editor streams, clears stale fit ownership after off/on and coordinates old
+pipeline retirement with new startup. Twin/fit ownership and deterministic cleanup/retirement tests failed before fixes,
+then passed. Four worker tests and14 LiveHost tests pass; one helper is ignored. A debug frame-rate test fails both with
+and without the core change under the same load; that pre-existing rate limit is excluded and not claimed green.
+
+Device switches move to General; enabled devices only appear in Home/sidebar/search. Large enable headers are removed,
+the cooler fills the right pane, and shell/toolbar styling is refined. Browser checks cover failure/revert, no startup
+enablement, selected-provider usage placement, empty devices, three widths, focus, autosave and editor leases.
+129 UC core/11 host tests and quiet native profile/MCP/cooler checks pass. Final native lifetime checks verify positive
+frame production after actual Cooler-to-Home navigation, beyond the11.5second temporary-stream watchdog and after
+close-to-tray, with Live settings unchanged. Explicit Live off/device disable/Quit still pass. Fresh1280px fake native
+cooler workspace screenshot was inspected. Release build/install checks follow; installed version remains0.3.5 until an
+approved update. Physical feel remains separate acceptance. Whole-repository Rust formatting has pre-existing unrelated
+differences (UC core/autostart.rs; cooler benches/media_bench.rs); diff and JavaScript syntax checks pass.
+
+## Previous installed checkpoint
+
 Updated2026-11-02. Installed/running0.3.5, code source89fbe5d. User approved the idle-safe update; new startup/PID,
 actual MCP version, packaged proxy identity, dock reconnection and unchanged selected profile/page/all14keys verified.
 Both usage providers report verified status. Cooler cached health still reports descriptor43; no recovery is claimed.

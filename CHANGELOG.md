@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — 2026-11-03
+
+Move device enable switches into General. Only enabled devices appear in Home, the sidebar and search; enabling a device
+does not leave settings, and failed changes preserve the previous state. Hide the unimplemented Dial entry. Remove large
+device enable headers and let the cooler workspace use the full right pane without an outer frame or duplicate app name.
+Refine navigation, spacing, typography, cards, settings and switches, with compact layouts and reduced-motion support.
+
+Preserve saved cooler Live across editor page changes and close-to-tray. Claim temporary editor streams when Live is
+enabled, clear stale temporary ownership after explicit off, and detach only the temporary stream being cleaned up.
+Explicit Live off/device disable/Quit retain their behavior; autosave/import guards and local diagnostics remain.
+
+Prepared for final checks and approval; installed version remains0.3.5.
+
 ## 0.3.5 — 2026-11-02
 
 Fix cooler section navigation waiting for unavailable-device preview cleanup. Real edits and imports still flush before

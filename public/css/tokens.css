@@ -4,11 +4,11 @@
   color-scheme: dark;
 
   /* surfaces */
-  --bg: #0f1115;
-  --surface-1: #161920;
-  --surface-2: #1d2129;
-  --surface-3: #262b35;
-  --border: #2b313c;           /* decorative dividers */
+  --bg: #101318;
+  --surface-1: #171c24;
+  --surface-2: #202733;
+  --surface-3: #2a3443;
+  --border: #2b3543;           /* decorative dividers */
   --border-strong: #4a5262;    /* frames of previews, hovered cards */
   --border-control: #646d7f;   /* outlines of inputs, selects, secondary buttons, switch tracks: >= 3:1 on surface-2 */
 
@@ -18,8 +18,8 @@
   --text-faint: #858d9e;       /* >= 4.5:1 on surface-1/2 */
 
   /* meaning */
-  --accent: #5aa9ff;
-  --accent-hover: #7dbbff;
+  --accent: #8abaff;
+  --accent-hover: #afd0ff;
   --accent-ink: #04121f;
   --accent-soft: rgba(90, 169, 255, .14);
   --accent-faint: rgba(90, 169, 255, .07);
@@ -51,7 +51,7 @@
 
   /* type */
   --font: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --fs-display: 22px;  --lh-display: 28px;
+  --fs-display: 30px;  --lh-display: 38px;
   --fs-title: 20px;    --lh-title: 28px;
   --fs-h: 15px;        --lh-h: 22px;
   --fs-body: 14px;     --lh-body: 20px;

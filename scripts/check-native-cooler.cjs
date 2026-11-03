@@ -51,12 +51,12 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await waitNative(async old=>{const s=await window.__TAURI_INTERNALS__.invoke('cooler_state');return s.state==='running'&&s.pid!==old&&!s.busy;},before.pid,{timeout:30000});
     assert.equal((await call('dock_state')).state,'connected','cooler worker crash must leave dock connected');
     await frame.locator('#navMine').click();
-    await page.waitForFunction(()=>document.getElementById('cooler-state')?.textContent==='Engine running');
+    await waitNative(async()=>{const state=await window.__TAURI_INTERNALS__.invoke('cooler_state');return state.state==='running';});
     assert.deepEqual(errors,[]);
     await page.screenshot({path:path.join(home,'combined-cooler.png')});
     await page.locator('#page-search').fill('usage');await page.locator('#page-search').press('Enter');
     await page.locator('#page-search').press('Escape');
-    await page.waitForFunction(()=>!!document.getElementById('dock-enabled'));
+    await page.waitForFunction(()=>!!document.getElementById('dock-preview'));
     // A read-only view may be left while transient preview cleanup is waiting
     // on an unavailable screen. The parent keeps the RPC alive after unmount.
     await page.locator('.nav-item[data-page="cooler"]').click();
@@ -81,7 +81,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     assert.ok(await page.evaluate(()=>window.__heldCoolerCleanup.length>0),'navigation finished before preview cleanup answered');
     assert.equal((await call('dock_state')).state,'connected','pending cooler cleanup leaves dock available');
     await page.locator('.nav-item[data-page="dock"]').click();
-    await page.waitForFunction(()=>!!document.getElementById('dock-enabled'),{},{timeout:1500});
+    await page.waitForFunction(()=>!!document.getElementById('dock-preview'),{},{timeout:1500});
     await page.evaluate(async()=>{const {CoolerPanel}=await import('./js/cooler-panel.js');CoolerPanel.prototype.receive=window.__nativeCoolerReceive;await Promise.all(window.__heldCoolerCleanup.splice(0).map(release=>release()));});
     await page.locator('.nav-item[data-page="cooler"]').click();
     await page.locator('.nav-item[data-page="general"]').click();

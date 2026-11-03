@@ -10,7 +10,7 @@ export function installNavigationSearch(nav){
     for(const button of buttons){
       const id=button.dataset.page,aliases=Object.hasOwn(ALIASES,id)?ALIASES[id]:'';
       const text=`${button.getAttribute('aria-label')||button.textContent} ${id} ${aliases}`.toLowerCase();
-      button.hidden=!terms.every(term=>text.includes(term));
+      button.hidden=button.dataset.available==='false'||!terms.every(term=>text.includes(term));
     }
     const visible=buttons.filter(button=>!button.hidden);
     if(heading)heading.hidden=!visible.some(button=>['cooler','dock','dial'].includes(button.dataset.page));
@@ -41,4 +41,5 @@ export function installNavigationSearch(nav){
     }
   });
   apply();
+  return apply;
 }

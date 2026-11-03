@@ -58,6 +58,10 @@ async function run() {
     await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
     assert.deepEqual(await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('monitor_list')),
       [{key:'fake:display-1',label:'Simulated display'}], 'monitor discovery must be admitted through native IPC');
+    assert.equal(await page.locator('[data-page="dock"]').isVisible(),false,'disabled dock is absent from navigation');
+    await page.locator('[data-page="general"]').click();
+    await page.locator('#dock-enabled').check();
+    await page.locator('[data-page="dock"]').waitFor({state:'visible'});
     await page.locator('[data-page="dock"]').click();
     await page.locator('[data-key="0"]').click();
     await page.locator('#face-kind').selectOption('text');
@@ -120,6 +124,11 @@ async function run() {
     await waitForAsync(page,async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===true);
     await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}}));
     await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
+    await page.locator('[data-page="dock"]').waitFor({state:'hidden'});
+    await page.locator('[data-page="general"]').click();
+    await page.locator('#dock-enabled').check();
+    await page.locator('[data-page="dock"]').waitFor({state:'visible'});
+    await page.locator('[data-page="dock"]').click();
     await page.locator('[data-key="0"]').click();
     const index=JSON.parse(fs.readFileSync(path.join(home,'profiles','index.json'),'utf8'));
     const profile=JSON.parse(fs.readFileSync(path.join(home,'profiles',`profile-${index.currentProfile}.json`),'utf8'));
@@ -131,7 +140,8 @@ async function run() {
     assert.equal(await page.locator('#face-text').inputValue(),'Native A');
     await page.locator('[data-edit-face="b"]').click();
     assert.equal(await page.locator('#face-text').inputValue(),'Native B');
-    await page.locator('[data-page="cooler"]').click();
+    assert.equal(await page.locator('[data-page="cooler"]').isVisible(),false,'disabled cooler is absent from navigation');
+    await page.locator('[data-page="general"]').click();
     await page.locator('[data-page="dock"]').click();
     await page.waitForFunction(()=>document.querySelectorAll('img.rendered-key').length===14);
     await page.screenshot({path:path.join(output,'uc-native-dock.png')});
