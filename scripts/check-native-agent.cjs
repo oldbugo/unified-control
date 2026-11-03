@@ -63,6 +63,8 @@ async function run(){
     assert.ok(Object.hasOwn(status.result.cooler.lastHealthSample,'pnpSampledAt'));
     assert.equal(status.result.cooler.lastHealthSample.message,undefined);assert.equal(status.result.cooler.pid,undefined);
     assert.deepEqual((await call('list_monitors')).result,[{key:'fake:display-1',label:'Simulated display'}]);
+    await page.locator('#dock-enabled').check();
+    await page.locator('[data-page="dock"]').waitFor({state:'visible'});
     await page.locator('[data-page="dock"]').click();await page.locator('[data-key="0"]').click();
     const original=(await call('get_layout')).result;
     const scope={profileId:original.profileId,pageId:original.pageId,key:1};
@@ -132,7 +134,7 @@ async function run(){
     assert.ok(fs.existsSync(path.join(home,'assets',`${afterImport.keys[0].a.asset}.png`)));
     const recovered=await call('apply_changes',change(afterImport.revision,'Recovered agent'));assert.equal(recovered.ok,true);
     await wait(()=>page.evaluate(()=>!document.querySelector('.app').inert&&document.getElementById('face-text')?.value==='Recovered agent'),'writes recover after timeout');
-    const dock=await invoke('dock_state');assert.equal(dock.usageReaderRunning,false);assert.equal(dock.enabled,false);assert.equal(dock.actions,0);
+    const dock=await invoke('dock_state');assert.equal(dock.usageReaderRunning,false);assert.equal(dock.enabled,true,'MCP preserves the device explicitly enabled in General');assert.equal(dock.actions,0);
     await invoke('win_close');assert.equal((await call('get_status')).ok,true,'MCP remains available while editor hides to tray');
     await client.close();await second.close();assert.equal(child.exitCode,null,'disconnecting MCP clients must leave UC running');
     const closedClientStatus=await proxy(['--agent-request']);

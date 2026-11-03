@@ -9,7 +9,8 @@ import {AgentEditorLease} from './js/agent-editor.js';
 import {installNavigationSearch} from './js/navigation-search.js';
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
-const coolerPanel=new CoolerPanel(invoke,!!T,()=>updateHomeDeviceStatus());
+const coolerPanel=new CoolerPanel(invoke,!!T,()=>{syncDeviceVisibility();updateHomeDeviceStatus();});
+let refreshNavigationSearch=()=>{};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
 const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
@@ -107,18 +108,36 @@ function homeDockSummary(){
   if(dockStatusUnavailable)return {description:'Dock status could not be refreshed.',status:'Status unavailable'};
   return {description:deviceStatus?.message||'Waiting for dock status.',status:deviceStatus?.enabled===false?'Disabled':deviceStatus?.state||'Status unknown'};
 }
+function deviceEnabled(id){
+  if(id==='dial')return false;
+  if(!T)return true; // Browser previews expose the workspaces without enabling hardware.
+  return id==='dock'?deviceStatus?.enabled===true:coolerPanel.state.enabled===true;
+}
+function deviceKnown(id){return !T||(id==='dock'?typeof deviceStatus?.enabled==='boolean':typeof coolerPanel.state.enabled==='boolean');}
+function syncDeviceVisibility(){
+  for(const id of ['dock','cooler','dial']){
+    const button=document.querySelector(`.nav-item[data-page="${id}"]`);
+    if(button)button.dataset.available=String(deviceEnabled(id));
+  }
+  refreshNavigationSearch();
+  if(['dock','cooler','dial'].includes(draft.current)&&deviceKnown(draft.current)&&!deviceEnabled(draft.current))navigate('home');
+}
 function updateHomeDeviceStatus(){
   if(draft.current!=='home')return;
+  const list=pane.querySelector('.device-list');if(!list)return;
   const cooler=coolerPanel.summary(),dock=homeDockSummary();
-  for(const [id,description,status] of [
-    ['dock',dock.description,dock.status],
-    ['cooler',cooler.description,cooler.status],
+  for(const [id,title,description,status] of [
+    ['dock','Stream dock',dock.description,dock.status],
+    ['cooler','Cooler screen',cooler.description,cooler.status],
   ]){
-    const card=pane.querySelector(`.device-card[data-go="${id}"]`);
-    const text=card?.querySelector('[data-device-description]'),chip=card?.querySelector('[data-device-status]');
-    if(text&&text.textContent!==description)text.textContent=description;
-    if(chip&&chip.textContent!==status)chip.textContent=status;
+    let card=list.querySelector(`.device-card[data-go="${id}"]`);
+    if(!deviceEnabled(id)){card?.remove();continue;}
+    if(!card){list.insertAdjacentHTML('beforeend',deviceCard(id,title,description,status));card=list.lastElementChild;}
+    const text=card.querySelector('[data-device-description]'),chip=card.querySelector('[data-device-status]');
+    if(text.textContent!==description)text.textContent=description;
+    if(chip.textContent!==status)chip.textContent=status;
   }
+  const empty=pane.querySelector('#devices-empty');if(empty)empty.hidden=!!list.children.length;
 }
 function faceMarkup(f, k) {
   const label = f.text || (f.kind === 'icon' ? ACTIONS[k.action] : '');
@@ -162,7 +181,7 @@ function editorMarkup() {
 }
 function dockPage() {
   return `<div class="page-heading"><div><span class="eyebrow">Ulanzi D200H</span><h1>Stream dock</h1><p>Your keys, pages and actions in one place.</p></div><span class="chip accent">${T?(state?.fake?'Simulated dock':'D200H'):'Browser preview'}</span></div>
-    <div class="device-header"><span class="device-icon">${icon('dock')}</span><div><strong>Stream dock</strong><p id="dock-message">${esc(deviceStatus?.message||'Dock disabled')}</p></div><label class="dock-switch">Enabled <input id="dock-enabled" type="checkbox" role="switch" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Disabled')}</span></div>
+    <div class="workspace-status"><span class="status-dot" aria-hidden="true"></span><span id="dock-state">${esc(deviceStatus?.state||(!T?'Preview':'Waiting'))}</span><span id="dock-message">${esc(deviceStatus?.message||(!T?'Your layout preview. Connect hardware in the Windows app.':'Waiting for dock status.'))}</span></div>
     <div class="dock-controls">${field('Brightness','dock-brightness',`<input id="dock-brightness" type="range" min="1" max="100" value="${deviceStatus?.brightness||50}" ${T?'':'disabled'}>`)}<label class="dock-switch">Follow physical page <input id="follow-physical-page" type="checkbox" ${followPhysicalPage?'checked':''} ${T?'':'disabled'}></label><span class="hint" id="dock-active-page"></span><button class="btn" data-do="undo" ${history.available?'':'disabled'}>Undo</button></div>
     <div class="workspace-toolbar"><div class="profile-picker">${field('Profile','profile-picker',`<select id="profile-picker">${options(Object.fromEntries(draft.profiles.map((p,i)=>[String(i),p.name])),draft.profile)}</select>`)}</div><button class="btn" data-do="add-profile">Add profile</button><span class="toolbar-spacer"></span><span class="hint">Previewing Face ${previewFace.toUpperCase()}</span><button class="btn" data-do="preview-flip">Flip A / B</button></div>
     <div class="dock-workspace"><section class="preview-column" aria-label="Dock preview"><div id="dock-preview">${dockMarkup()}</div><div class="page-strip" role="group" aria-label="Dock pages">${profile().pages.map((p,i)=>`<button class="btn${draft.page===i?' active':''}" data-dock-page="${i}" aria-pressed="${draft.page===i}">${esc(p.name)}</button>`).join('')}<button class="btn ghost" data-do="add-page">+ Add page</button></div><div class="names-row">${field('Profile name','profile-name',`<input id="profile-name" maxlength="40" value="${esc(profile().name)}">`)}${field('Page name','page-name',`<input id="page-name" maxlength="40" value="${esc(page().name)}">`)}</div><p class="hint">Select a display to edit it. Changes save as made and apply when the dock is enabled.</p></section><aside class="key-editor" aria-label="Key editor">${editorMarkup()}</aside></div>`;
@@ -191,7 +210,8 @@ function restoreEditorFocus(focus,fallback) {
 }
 function render({preserveFocus=false,focusFallback=''}={}) {
   const focus=preserveFocus?editorFocus():null;
-  document.querySelector('.preview-label').textContent=T?(state?.fake?'Simulated dock':'Device controls'):'Browser preview';
+  document.querySelector('.preview-label').textContent=T?(state?.fake?'Simulated workspace':'Device workspace'):'Browser preview';
+  pane.classList.toggle('cooler-workspace',draft.current==='cooler');
   document.querySelectorAll('.nav-item').forEach(b => {
     if (b.dataset.page===draft.current) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current');
   });
@@ -201,17 +221,21 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
   else if (draft.current==='cooler') html=coolerPanel.markup();
   else if (draft.current==='dial') html = plannedPage(draft.current);
-  else if (draft.current === 'home') html = `<div class="page-heading"><div><span class="eyebrow">Unified Control</span><h1>Your devices, together</h1><p>One place to shape your desktop controls.</p></div></div><div class="home-intro"><div><h2>Start with your stream dock</h2><p>Arrange keys, choose two faces and assign actions. Control the dock and cooler from their own pages. Dial support follows later.</p><button class="btn primary" data-go="dock">Open dock editor</button></div><span class="intro-icon">${icon('dock')}</span></div><h2 class="section-title">Devices</h2><div class="device-list">${deviceCard('dock','Stream dock',T?(deviceStatus?.message||'Waiting for dock status.'):'Ulanzi D200H · editable layout preview',T?(deviceStatus?.state||'Status unknown'):'Preview')}${coolerHomeCard()}${deviceCard('dial','Dial','Ulanzi Dial · controls in a later step','Planned')}</div><p class="hint">${T?'Enable the dock from its page. If Ulanzi Studio is running, quit it from its tray before connecting.':'Browser previews do not connect to hardware.'}</p>`;
+  else if (draft.current === 'home') html = `<div class="home-intro"><div><span class="eyebrow">YOUR WORKSPACE</span><h1>Your devices, together.</h1><p>Make the desk your own. Your enabled devices keep working as you move between them.</p><button class="btn" data-go="general">Manage devices ${icon('general')}</button></div><div class="workspace-art" aria-hidden="true"><span class="art-screen">${icon('cooler')}</span><span class="art-dock">${icon('dock')}</span><span class="art-orbit"></span></div></div><div class="section-heading"><div><span class="eyebrow">DEVICE WORKSPACE</span><h2>Devices</h2></div><span class="local-badge"><i></i>Runs locally</span></div><div class="device-list"></div><section id="devices-empty" class="empty-devices"><span class="device-icon">${icon('general')}</span><div><h3>Choose your devices</h3><p>Enable a device in General to add it to your workspace.</p></div><button class="btn primary" data-go="general">Open settings</button></section><p class="workspace-footnote">${T?'Closing the window keeps enabled devices running in the tray.':'Browser previews do not connect to hardware.'}</p>`;
   else if (draft.current === 'general') html = `
-    <div class="page-heading"><div><span class="eyebrow">App settings</span><h1>General</h1><p>Common settings for all your devices.</p></div></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start in the tray. Off unless you enable it.</p></div>
+    <div class="page-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h1>General</h1><p>Your devices and the way Unified Control works.</p></div></div>
+    <div class="settings-section-heading"><h2>Devices</h2><p>Enabled devices appear in Home and the sidebar. They keep working in the background.</p></div>
+    <section class="settings-list device-settings"><div class="device-setting"><span class="device-icon">${icon('dock')}</span><div class="device-setting-copy"><strong>Stream dock</strong><p>Ulanzi D200H · keys, profiles and actions</p><p id="dock-message" class="setting-status">${esc(deviceStatus?.message||'Waiting for dock status.')}</p></div><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Unknown')}</span><label class="device-setting-control"><input id="dock-enabled" type="checkbox" role="switch" aria-label="Enable Stream dock" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label></div><div id="cooler-settings"></div></section>
+    <p class="settings-note">Dial support is planned. It will appear here when it is available.</p>
+    <div class="settings-section-heading"><h2>Application</h2><p>Local controls, always within reach.</p></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start quietly in the tray. Off unless you enable it.</p></div>
     <input id="autostart-enabled" type="checkbox" role="switch" aria-label="Start with Windows" ${state?.autostart?'checked':''} ${!T||state?.fake?'disabled':''}></div>
-    <div class="setting-row"><div><strong>Local agent access</strong><p>Let connected MCP clients read device status and configure dock layouts. Changes appear here. Off unless you enable it.</p></div><input id="agent-access" type="checkbox" role="switch" aria-label="Local agent access" ${state?.agentAccess?'checked':''} ${!T?'disabled':''}></div>
-    <div class="setting-row"><div><strong>Appearance</strong><p>Uses the current CoolerScreen dark theme.</p></div><span class="chip">Dark</span></div>
-    <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages are saved in the app data folder, with a startup backup.':'Preview drafts are stored in this browser. They are separate from app profile files.'}</p></div><span class="chip">Local only</span></div>
-    <div class="setting-row"><div><strong>Background behavior</strong><p>The visible tray keeps enabled controls running. Quit waits for active work and stops them.</p></div></div></section>`;
-  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>Combined device preview</h2><p>Configure key faces and actions, view usage allowances and manage your dock. Enable the dock separately. CoolerScreen controls are integrated on their own page; dial support follows later.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
-  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
+    <div class="setting-row"><div><strong>Local agent access</strong><p>Let connected MCP clients read device status and configure dock layouts. Changes appear here.</p></div><input id="agent-access" type="checkbox" role="switch" aria-label="Local agent access" ${state?.agentAccess?'checked':''} ${!T?'disabled':''}></div>
+    <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages stay in the app data folder, with a startup backup.':'Preview drafts are stored in this browser, separately from app profiles.'}</p></div><span class="chip">Local only</span></div>
+    <div class="setting-row"><div><strong>Background behavior</strong><p>Close the window to keep enabled devices running in the tray. Use Quit to stop them; active work finishes first.</p></div></div></section>`;
+  else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>One workspace. Your devices.</h2><p>Shape your dock, manage your cooler display and keep your controls close. Choose enabled devices in General. Dial support follows later.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
+  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane);if(draft.current==='general')coolerPanel.mountSettings(pane.querySelector('#cooler-settings')); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
+  syncDeviceVisibility();
   restoreEditorFocus(focus,focusFallback);
 }
 async function updatePictures(){if(T)return;for(const img of document.querySelectorAll('[data-picture]')){try{const blob=await previewPicture(img.dataset.picture);if(blob&&img.isConnected){const url=URL.createObjectURL(blob);img.onload=img.onerror=()=>URL.revokeObjectURL(url);img.src=url;}}catch{}}}
@@ -241,11 +265,13 @@ async function updateMonitors(){
     container.innerHTML=`<p class="hint" role="status">${esc(message)}</p><button class="btn" data-do="retry-monitors">Retry monitor detection</button>`;
   }
 }
-function updateDeviceStatus(){const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();updateHomeDeviceStatus();}
+function updateDeviceStatus(){syncDeviceVisibility();const message=document.getElementById('dock-message'),chip=document.getElementById('dock-state'),enabled=document.getElementById('dock-enabled');if(message)message.textContent=deviceStatus?.message||'Dock disabled';if(chip)chip.textContent=deviceStatus?.state||'Disabled';if(enabled)enabled.checked=!!deviceStatus?.enabled;const active=document.getElementById('dock-active-page');if(active)active.textContent=deviceStatus?.currentPage?`On dock: ${deviceStatus.currentProfileName||''} / ${deviceStatus.currentPageName||deviceStatus.currentPage}`:'';document.querySelectorAll('[data-key]').forEach(key=>key.classList.toggle('action-error',Number(key.dataset.key)===deviceStatus?.errorKey));updateUsageStatus();updateHomeDeviceStatus();}
 function updateUsageStatus(){
+  // General has a dock status row too; usage belongs to the dock workspace.
+  if(!pane.querySelector('#dock-preview'))return;
   const selected=deviceStatus?.usageStatus?.providers?.filter(item=>item.selected)||[];
   let note=document.getElementById('dock-usage-status');
-  if(!note&&document.getElementById('dock-message')){note=document.createElement('p');note.id='dock-usage-status';note.className='hint';note.setAttribute('role','status');document.querySelector('.dock-controls').after(note);}
+  if(!note&&document.getElementById('dock-message')){note=document.createElement('p');note.id='dock-usage-status';note.className='hint';note.setAttribute('role','status');pane.querySelector('.dock-controls').after(note);}
   if(!note)return;note.hidden=!selected.length;
   const lines=selected.map(item=>`${item.provider==='claude'?'Claude':'Codex'}: ${item.message||item.status}`);
   if(selected.length&&deviceStatus.usageStatus.reader?.code!=='ready')lines.unshift(deviceStatus.usageStatus.reader?.message||'AI usage reader is unavailable.');
@@ -341,7 +367,7 @@ const agentEditor=new AgentEditorLease({
   onError:()=>{previewNote='The agent layout update could not finish. Your saved layout is kept.';showStorage();},
 });
 async function navigate(id) {
-  if (!Object.hasOwn(NAV,id)) return;
+  if (!Object.hasOwn(NAV,id)||(['dock','cooler','dial'].includes(id)&&!deviceEnabled(id))) return;
   if(draft.current==='cooler'&&id!=='cooler'){pane.inert=true;try{await coolerPanel.prepareLeave({navigation:true});}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}}
   hasLocalPage = true; draft.current = id;editGesture=null;
   // Sidebar navigation changes only the app section. Saving profiles here could
@@ -485,4 +511,5 @@ setInterval(() => {
   pollDockState();
   if (T && profilesReady && draft.current==='dock' && page().keys.some(k=>['clock','date','cpu','gpu','ram','claude','codex','reset','trend'].includes(k[previewFace].kind))) updateNativePreviews();
 },1000);
-installNavigationSearch(document.querySelector('.nav'));
+refreshNavigationSearch=installNavigationSearch(document.querySelector('.nav'))||(()=>{});
+syncDeviceVisibility();

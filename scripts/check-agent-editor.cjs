@@ -37,7 +37,7 @@ async function checkHeadless(){
     page.on('pageerror',error=>errors.push(error.message));
     await page.addInitScript(()=>{
       const callbacks=new Map(),listeners=new Map();let next=0;
-      const dock={enabled:false,state:'disabled',message:'Fixture dock'};
+      const dock={enabled:true,state:'connected',message:'Fixture dock'};
       window.__fixtureLayout={version:1,currentProfile:'fixture-profile',currentPage:'fixture-page',profiles:[{id:'fixture-profile',name:'Fixture',pages:[{id:'fixture-page',name:'Main',keys:Array.from({length:14},()=>({a:{kind:'text',text:''},b:{kind:'text',text:''},action:'none',value:''}))}]}]};
       window.__fixtureRevision='initial';window.__fixtureReadiness=[];window.__fixtureFailReload=false;window.__fixtureSaves=0;
       window.__emitAgent=message=>callbacks.get(listeners.get('uc:agent-event'))({payload:message});

@@ -8,6 +8,10 @@ The user is not a programmer: report in plain language.
 
 ## Standing user instructions (read in full at every session start)
 
+- 2026-11-03: Cooler Live must continue when switching device pages and closing UC to the tray. Device enable toggles belong
+  in General; only enabled devices appear in the sidebar and Home. Remove the large per-device enable headers, let cooler
+  controls fill the right pane without an outer frame, and polish the overall interface. The user reports manual Reconnect
+  recovered physical Live; software checks must distinguish real Live ownership from temporary editor previews.
 - 2026-11-02: Build an agent-agnostic MCP interface for direct status, diagnostics and personalized configuration from Codex or Claude. Reuse the running app's core, coordinate with the editor and test with simulated devices. Physical action tools follow separately.
 - 2026-11-01: Repeated cooler freezes require targeted recovery and persistent local connection diagnostics in UC, including while its editor is closed. The requested diagnostics are on with a saved opt-out; no hidden service or automatic elevated/USB resets.
 - 2026-11-01: Proceed with CoolerScreen integration, then refine the UI. AI Usage and Monitor Toggle were reported not working; keep these as functional failures to resolve, not missing planned features. Sleep/resume remains deferred.

@@ -1,5 +1,9 @@
 # Dock follow-up backlog
 
+2026-11-03: user reports manual cooler Reconnect recovered Live, but physical Live stops when leaving its page.0.4.0
+prepares worker ownership/retirement fixes, General-only device enable switches, enabled-only Home/sidebar/search,
+an unframed cooler pane and overall UI polish. Simulated tests are distinct from installed physical acceptance.
+
 Cooler navigation regression reported2026-11-02 on0.3.4: entering an unavailable cooler could delay switching sections.
 Fix installed in0.3.5: do not await transient USB preview cleanup on section navigation; retain saves/imports and full
 shutdown guards, leave still-loading frames, remove the iframe on exit and avoid idle cleanup request flooding.

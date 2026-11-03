@@ -1,0 +1,17 @@
+/* UC supplies the window chrome; the cooler toolbar belongs to the workspace. */
+:root {
+  --bg: #10151d;
+  --surface-1: #171e28;
+  --surface-2: #202a38;
+  --surface-3: #29374a;
+  --accent: #8abaff;
+}
+.topbar { height: 52px; padding: 0 20px; background: var(--bg); }
+.topbar > .appname { display: none; }
+.topnav { gap: 5px; }
+@media (min-width: 760px) {
+  .topnav .home-btn span { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+}
+@media (max-width: 800px) {
+  .topbar { padding: 0 12px; gap: 10px; }
+}

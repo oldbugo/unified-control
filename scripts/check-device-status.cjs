@@ -72,7 +72,7 @@ async function main(){
     await page.evaluate(()=>{window.__failDock=false;window.__failCooler=false;window.__cooler.state='blocked';});
     await page.waitForFunction(()=>document.querySelector('.device-card[data-go="cooler"] [data-device-status]')?.textContent==='Engine blocked');
     assert.equal(await page.evaluate(()=>window.__calls.some(c=>['cooler_configure','settings_update','cooler_call'].includes(c))),false,'Home polling does not change configuration or call the worker');
-    await card('cooler').click();
+    await page.locator('[data-page="general"]').click();
     assert.equal(await page.locator('#cooler-state').textContent(),'Engine blocked');
     const settingsWrites=await page.evaluate(()=>window.__calls.filter(c=>c==='settings_update').length);
     await page.evaluate(()=>{window.__cooler.state='running';window.__cooler.diagnosticsEnabled=false;});
