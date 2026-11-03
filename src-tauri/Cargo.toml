@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.4.0"
+version = "0.4.1"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"

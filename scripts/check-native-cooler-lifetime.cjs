@@ -30,9 +30,22 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     await cooler('twin_watch',{on:false});
     assert.equal((await cooler('app_state')).live.status.running,true,'ending a digital twin cannot stop saved Live');
     await poll(async()=>(await cooler('app_state')).live.status.measuredFps>0);
+    const checkCount=()=>fs.readFileSync(path.join(home,'devices','cooler','device.log'),'utf8').split('\n').filter(line=>line.includes('device task: check')).length;
+    const initialChecks=checkCount();
     await poll(async()=>await page.locator('.nav-item[data-page="cooler"]').isVisible());
     await page.locator('.nav-item[data-page="cooler"]').click();
     await page.frameLocator('#cooler-frame').locator('#navScreen').waitFor();
+    await page.frameLocator('#cooler-frame').locator('body').evaluate(async()=>{await(await import('./app.js')).initialized;});
+    assert.equal(checkCount(),initialChecks,'entering a running Live workspace does not schedule a USB check');
+    for(let visit=0;visit<3;visit++){
+      await page.locator('.nav-item[data-page="home"]').click();
+      await page.locator('.nav-item[data-page="home"][aria-current="page"]').waitFor({timeout:2000});
+      await page.locator('.nav-item[data-page="cooler"]').click();
+      await page.frameLocator('#cooler-frame').locator('body').evaluate(async()=>{await(await import('./app.js')).initialized;});
+      const live=(await cooler('app_state')).live.status;
+      assert.equal(live.running,true);assert.equal(live.deviceHold,false,'returning to the editor never pauses Live for a check');
+      assert.equal(checkCount(),initialChecks,'repeated editor entry does not reestablish the connection');
+    }
     await page.frameLocator('#cooler-frame').locator('body').evaluate(async()=>{const {backend}=await import('./js/backend.js');await backend.call('twin_watch',{on:true});});
     const baseline=(await cooler('app_state')).live.settings;
     await page.locator('.nav-item[data-page="home"]').click();
