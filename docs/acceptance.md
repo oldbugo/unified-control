@@ -19,8 +19,9 @@ enablement, selected-provider usage placement, empty devices, three widths, focu
 129 UC core/11 host tests and quiet native profile/MCP/cooler checks pass. Final native lifetime checks verify positive
 frame production after actual Cooler-to-Home navigation, beyond the11.5second temporary-stream watchdog and after
 close-to-tray, with Live settings unchanged. Explicit Live off/device disable/Quit still pass. Fresh1280px fake native
-cooler workspace screenshot was inspected. Release build/install checks follow; installed version remains0.3.5 until an
-approved update. Physical feel remains separate acceptance. Whole-repository Rust formatting has pre-existing unrelated
+cooler workspace screenshot was inspected. Release build/package passed from clean sourceb18a4a1; installer SHA256
+`A84BE6F858A7F80807C6181C2938AFDB1DBCD2D68A11F653E083F392CAECB115`. Installation approval pending; installed version
+remains0.3.5. Physical feel remains separate acceptance. Whole-repository Rust formatting has pre-existing unrelated
 differences (UC core/autostart.rs; cooler benches/media_bench.rs); diff and JavaScript syntax checks pass.
 
 ## Previous installed checkpoint

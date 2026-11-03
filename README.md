@@ -11,7 +11,8 @@ Prepared0.4.0 moves device enablement into General, shows enabled devices only i
 large workspace enable banners. Cooler controls fill the right pane, with coordinated toolbar styling. Refined navigation,
 cards, switches, settings, typography and spacing retain the existing autosave/editor safeguards. Background lifetime
 fixes claim saved Live independently of temporary editor streams and prevent delayed preview cleanup from stopping it.
-Installed version remains0.3.5 pending final integration checks and an approved idle-safe update.
+All targeted browser/native integration checks and release packaging pass. Installed version remains0.3.5 pending an
+approved idle-safe update; real background playback/navigation/tray acceptance follows installation.
 
 Installed0.3.5/source89fbe5d fixes leaving Cooler screen while its device is unavailable or its embedded page is loading. Saved edits
 and imports remain guarded; transient screen-preview cleanup no longer blocks section navigation, and the iframe is

@@ -11,7 +11,7 @@ Preserve saved cooler Live across editor page changes and close-to-tray. Claim t
 enabled, clear stale temporary ownership after explicit off, and detach only the temporary stream being cleaned up.
 Explicit Live off/device disable/Quit retain their behavior; autosave/import guards and local diagnostics remain.
 
-Prepared for final checks and approval; installed version remains0.3.5.
+Built and software-tested from clean sourceb18a4a1; installation approval pending, installed version remains0.3.5.
 
 ## 0.3.5 — 2026-11-02
 
