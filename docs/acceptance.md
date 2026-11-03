@@ -1,5 +1,22 @@
 # Dock acceptance status
 
+## 2026-11-03 cooler workspace return
+
+Installed0.4.0/sourceb18a4a1 passed startup/newPID/MCP0.4/engine4.18.2, expected-only packaged proxy marker change and
+unchanged selected profile/page/all14keys. The user confirms physical Live continues after leaving the cooler page and
+closing UC to the tray. They then report a pause/reconnection on each return. Retained real logs confirm repeated
+`device task: check` → Live pause/Embedded handover → resume/new connection, caused by unconditional iframe startup checks.
+
+Prepared0.4.1 reads a fresh worker state after UI hydration and omits that automatic firmware check when saved Live or a
+physical preview owns the connection. Initial Live-off checks and explicit Check/Reconnect remain. Actual embedded-UI
+regression failed before the fix (one healthy-entry check instead of zero), then passes for repeated entry, startup,
+retry, holds, physical preview/tuning, fresh-state changes, unknown state and explicit Check. Quiet native lifetime
+checks pass three actual Home/cooler return cycles with no added check tasks/no device hold and continuing frames,
+followed by watchdog/tray/off/disable/Quit checks. Broader interface/settings/status/search/editor checks pass.
+
+The user granted standing permission for tested idle-safe UC updates without repeated approval questions, recorded in
+CLAUDE.md and the vault.0.4.1 packaging/install verification follows; installed version currently remains0.4.0.
+
 ## 2026-11-03 background Live and interface checkpoint
 
 User manually clicked cooler Reconnect and reports physical Live recovered. Root MCP independently verified connected,

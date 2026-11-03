@@ -8,6 +8,7 @@ import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
 import { createScreenPreview } from './js/screenpreview.js';
 import { screenStatus, rememberedScreen, connectionMessage, liveMessage, shouldWatchPresence, presenceArrival } from './js/connection-status.js';
+import { shouldCheckScreenOnEntry } from './js/entry-check.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -2901,7 +2902,7 @@ initApply({ call, backend, plainWait });
 // ---------- start ----------
 upgradeGlyphs();
 initSettingsNav();
-(async function init() {
+export const initialized = (async function init() {
   // Opens on the view chosen last time (On screen by default); with nothing on the screen yet, on My themes (or Browse).
   const stored = lsGet(HOME_KEY);
   setView(['screen', 'mine', 'browse'].includes(stored) ? stored : 'screen');
@@ -2913,5 +2914,9 @@ initSettingsNav();
   else if (!S.userNavigated && S.view === 'mine' && !S.originals.length && !S.adding.length && enabledSources().length) setView('browse');
   renderActivity();
   backend.start();
-  checkScreen(); // once at launch; presence watches only resume a failed check when the device returns
+  // The embedded editor is recreated on page entry. Live already owns its
+  // firmware handshake and retries; do not pause it for another startup check.
+  // Hydration may have taken time, so decide from a fresh worker snapshot.
+  await loadApp();
+  if (shouldCheckScreenOnEntry(S.app?.live)) await checkScreen();
 })().catch(e => toast(e.message, true, 10000));

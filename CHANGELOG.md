@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 — 2026-11-03
+
+Opening the cooler workspace no longer interrupts an active Live stream with another automatic firmware check.
+After editor hydration, use a fresh worker snapshot: Live owns its startup/retry/held connection, and physical previews
+retain their connection too. An actually-off screen still gets its initial check. Explicit Check/Reconnect remain.
+
+The user grants standing permission to install tested UC updates as needed without repeated approval questions;
+the idle-safe updater, quiet restart and verification remain mandatory.
+
 ## 0.4.0 — 2026-11-03
 
 Move device enable switches into General. Only enabled devices appear in Home, the sidebar and search; enabling a device
@@ -11,7 +20,8 @@ Preserve saved cooler Live across editor page changes and close-to-tray. Claim t
 enabled, clear stale temporary ownership after explicit off, and detach only the temporary stream being cleaned up.
 Explicit Live off/device disable/Quit retain their behavior; autosave/import guards and local diagnostics remain.
 
-Built and software-tested from clean sourceb18a4a1; installation approval pending, installed version remains0.3.5.
+Installed from clean sourceb18a4a1 with startup/newPID, actual MCP0.4/engine4.18.2, packaged proxy and unchanged14-key
+layout verified. User confirms physical Live continues across page changes and close-to-tray; repeated entry is fixed above.
 
 ## 0.3.5 — 2026-11-02
 

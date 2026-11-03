@@ -7,12 +7,16 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Prepared0.4.0 moves device enablement into General, shows enabled devices only in Home/sidebar/search and removes the
+Prepared0.4.1 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
+the user-confirmed pause/reconnect on each return. Explicit Check/Reconnect and initial checks with Live off remain.
+
+Installed0.4.0 moves device enablement into General, shows enabled devices only in Home/sidebar/search and removes the
 large workspace enable banners. Cooler controls fill the right pane, with coordinated toolbar styling. Refined navigation,
 cards, switches, settings, typography and spacing retain the existing autosave/editor safeguards. Background lifetime
 fixes claim saved Live independently of temporary editor streams and prevent delayed preview cleanup from stopping it.
-All targeted browser/native integration checks and release packaging pass. Installed version remains0.3.5 pending an
-approved idle-safe update; real background playback/navigation/tray acceptance follows installation.
+All targeted browser/native integration checks and release packaging pass. Startup/newPID, actual MCP0.4/engine4.18.2,
+packaged proxy identity and unchanged14-key layout verified. The user confirms physical background playback away from
+the cooler page and in the tray. Standing permission covers future tested idle-safe UC updates without asking again.
 
 Installed0.3.5/source89fbe5d fixes leaving Cooler screen while its device is unavailable or its embedded page is loading. Saved edits
 and imports remain guarded; transient screen-preview cleanup no longer blocks section navigation, and the iframe is

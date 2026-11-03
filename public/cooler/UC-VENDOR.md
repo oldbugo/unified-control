@@ -19,3 +19,7 @@ UC0.4 lets the workspace fill the right pane, removes duplicate application bran
 from the embedded toolbar and aligns its surface colours through `uc-shell.css`.
 Device enablement and connection diagnostics live in General. Closing/removing the
 editor view does not disable the saved Live stream; the worker owns its lifetime.
+
+UC0.4.1 checks a fresh worker Live snapshot after UI hydration and skips the automatic firmware check when Live or a
+physical preview owns the connection. Recreating the editor does not pause/reconnect an already-running stream.
+The initialized promise is exported for deterministic fixture readiness; explicit hardware controls remain unchanged.

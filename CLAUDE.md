@@ -8,6 +8,9 @@ The user is not a programmer: report in plain language.
 
 ## Standing user instructions (read in full at every session start)
 
+- 2026-11-03: Install tested UC builds as needed without asking again. Use the idle-safe updater; defer while busy and
+  never force-close. Install/restart quietly to the tray, then verify startup, device reconnection and preserved
+  configuration. This is standing permission for UC updates, not unrelated apps.
 - 2026-11-03: Cooler Live must continue when switching device pages and closing UC to the tray. Device enable toggles belong
   in General; only enabled devices appear in the sidebar and Home. Remove the large per-device enable headers, let cooler
   controls fill the right pane without an outer frame, and polish the overall interface. The user reports manual Reconnect
