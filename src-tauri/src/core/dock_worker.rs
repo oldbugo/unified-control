@@ -30,6 +30,8 @@ enum Op {
         home: PathBuf,
         resources: PathBuf,
         fake: bool,
+        #[serde(default)]
+        shared_hardware: bool,
     },
     Profiles {
         state: ProfileState,
@@ -55,6 +57,9 @@ enum Op {
     Studio {
         running: bool,
     },
+    Hardware {
+        snapshot: Option<super::hardware::Snapshot>,
+    },
     Shutdown {},
     Quiesce {},
     Resume {},
@@ -79,6 +84,8 @@ enum Message {
         status: DockStatus,
         busy: bool,
         usage: Value,
+        #[serde(default)]
+        hardware: Value,
     },
 }
 fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, String> {
@@ -139,6 +146,8 @@ struct Cache {
     next_start: Instant,
     last_status: Instant,
     profile_revision: Option<String>,
+    hardware: Value,
+    hardware_pending: Option<u64>,
 }
 struct Session {
     child: Child,
@@ -191,6 +200,8 @@ impl Controller {
                 next_start: Instant::now(),
                 last_status: Instant::now(),
                 profile_revision: None,
+                hardware: Value::Null,
+                hardware_pending: None,
             })),
             operation: Mutex::new(()),
             enabled: AtomicBool::new(false),
@@ -295,8 +306,10 @@ impl Controller {
             c.busy = true;
             c.uncertain = false;
             c.retiring = false;
+            c.hardware_pending = None;
             c.status = unavailable(self.enabled.load(Ordering::SeqCst), self.fake);
             c.usage = inactive_usage();
+            c.hardware = Value::Null;
             c.last_status = Instant::now();
             c.profile_revision = None;
             c.generation
@@ -321,6 +334,9 @@ impl Controller {
                             let _ = tx.send(result);
                         }
                         let mut c = cache.lock().unwrap();
+                        if c.generation == generation && c.hardware_pending == Some(id) {
+                            c.hardware_pending = None;
+                        }
                         if c.generation == generation && pending.is_empty() && !c.retiring {
                             c.uncertain = false;
                         }
@@ -330,12 +346,14 @@ impl Controller {
                         status,
                         busy,
                         usage,
+                        hardware,
                     } if version == VERSION => {
                         let mut c = cache.lock().unwrap();
                         if c.generation == generation {
                             c.status = status;
                             c.busy = busy;
                             c.usage = usage;
+                            c.hardware = hardware;
                             c.last_status = Instant::now();
                         }
                     }
@@ -350,6 +368,8 @@ impl Controller {
                     c.busy = false;
                     c.status = unavailable(c.status.enabled, c.status.fake);
                     c.usage = inactive_usage();
+                    c.hardware = Value::Null;
+                    c.hardware_pending = None;
                     c.pid = None;
                     c.next_start = Instant::now() + Duration::from_millis(500);
                 }
@@ -399,6 +419,7 @@ impl Controller {
                 home: self.home.clone(),
                 resources: self.resources.clone(),
                 fake: self.fake,
+                shared_hardware: true,
             })?;
             self.cache.lock().unwrap().profile_revision = Some(snapshot_revision);
             self.rpc_inner(Op::Configure {
@@ -415,20 +436,25 @@ impl Controller {
         initialized
     }
     fn rpc_inner(&self, request: Op) -> Result<Value, String> {
+        let ephemeral = matches!(request, Op::Hardware { .. });
         if !matches!(request, Op::Shutdown {}) {
             let c = self.cache.lock().unwrap();
             if c.uncertain || c.retiring || c.last_status.elapsed() > Duration::from_secs(3) {
                 return Err("Dock worker is unresponsive; outcome is uncertain".into());
             }
         }
-        self.inflight.fetch_add(1, Ordering::SeqCst);
-        struct Guard<'a>(&'a AtomicUsize);
+        if !ephemeral {
+            self.inflight.fetch_add(1, Ordering::SeqCst);
+        }
+        struct Guard<'a>(&'a AtomicUsize, bool);
         impl Drop for Guard<'_> {
             fn drop(&mut self) {
-                self.0.fetch_sub(1, Ordering::SeqCst);
+                if self.1 {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
             }
         }
-        let _guard = Guard(&self.inflight);
+        let _guard = Guard(&self.inflight, !ephemeral);
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         {
@@ -439,6 +465,9 @@ impl Controller {
             }
             let sender = s.input.as_ref().ok_or("Dock worker pipe is closed")?;
             s.pending.lock().unwrap().insert(id, tx);
+            if ephemeral {
+                self.cache.lock().unwrap().hardware_pending = Some(id);
+            }
             if sender
                 .try_send(Request {
                     version: VERSION,
@@ -448,15 +477,31 @@ impl Controller {
                 .is_err()
             {
                 s.pending.lock().unwrap().remove(&id);
-                drop(s.input.take());
+                if ephemeral {
+                    self.cache.lock().unwrap().hardware_pending = None;
+                } else {
+                    drop(s.input.take());
+                }
                 return Err("Dock worker request queue is full or closed".into());
             }
         }
         // A slow active action is never killed. Keep its admission pending until
         // an acknowledged result or pipe loss; callers run off the UI thread.
-        match rx.recv_timeout(Duration::from_secs(15)) {
+        match rx.recv_timeout(if ephemeral {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(15)
+        }) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if ephemeral {
+                    if let Some(session) = self.session.lock().unwrap().as_ref() {
+                        session.pending.lock().unwrap().remove(&id);
+                    }
+                    // Keep the single probe gate until the actual late reply.
+                    // Ephemeral readings cannot create action uncertainty.
+                    return Err("Hardware exchange is deferred".into());
+                }
                 {
                     let mut c = self.cache.lock().unwrap();
                     c.uncertain = true;
@@ -570,6 +615,46 @@ impl Controller {
     pub fn worker_status(&self) -> Value {
         let c = self.cache.lock().unwrap();
         json!({"pid":c.pid,"generation":c.generation,"restarts":c.restarts,"busy":c.busy,"state":if c.alive{"running"}else{"unavailable"}})
+    }
+    pub fn hardware_state(&self) -> Value {
+        let cache = self.cache.lock().unwrap();
+        let mut state = cache.hardware.clone();
+        if !state.is_object() {
+            state = json!({"shared":true,"fresh":false,"local_polls":null});
+        }
+        if !cache.alive
+            || cache.uncertain
+            || cache.retiring
+            || cache.last_status.elapsed() > Duration::from_secs(3)
+            || state["expires_at_ms"]
+                .as_u64()
+                .is_none_or(|at| at <= super::scheduler::now_ms())
+        {
+            state["fresh"] = json!(false);
+            state["cpu_present"] = json!(false);
+            state["ram_present"] = json!(false);
+            state["gpu_fields"] = json!(0);
+            state["demand"] = json!(super::hardware::Demand::default());
+        }
+        state
+    }
+    /// Readings never start a disabled/missing worker, and do not queue behind
+    /// editor work. The bridge coalesces to the latest snapshot on its next turn.
+    pub fn hardware_exchange(
+        &self,
+        snapshot: Option<super::hardware::Snapshot>,
+    ) -> Result<Value, String> {
+        let _operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| "Dock worker is busy")?;
+        if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
+            return Err("Dock worker admission is closed".into());
+        }
+        if self.cache.lock().unwrap().hardware_pending.is_some() {
+            return Err("Hardware exchange is waiting for a reply".into());
+        }
+        self.rpc_inner(Op::Hardware { snapshot })
     }
     pub fn busy(&self) -> bool {
         let cache_busy = {
@@ -695,6 +780,7 @@ pub fn worker_main() -> Result<(), String> {
         home,
         resources,
         fake,
+        shared_hardware,
     } = first.request
     else {
         return Err("Dock worker init must be first".into());
@@ -703,7 +789,11 @@ pub fn worker_main() -> Result<(), String> {
         return Err("Fake dock requires a debug build".into());
     }
     let profiles = Arc::new(ProfileStore::replica(state).map_err(|e| e.to_string())?);
-    let resources = RuntimeResources::new(&home, resources, fake);
+    let resources = if shared_hardware {
+        RuntimeResources::new_shared(&home, resources, fake)
+    } else {
+        RuntimeResources::new(&home, resources, fake)
+    };
     let controller = Arc::new(dock_service::Controller::new(
         profiles.clone(),
         resources.clone(),
@@ -733,6 +823,7 @@ pub fn worker_main() -> Result<(), String> {
                     status: c.status(),
                     busy: c.busy(),
                     usage: r.usage_status(),
+                    hardware: r.hardware_state(),
                 },
             )
             .is_err()
@@ -832,6 +923,7 @@ fn dispatch(
         Op::Brightness { value } => controller.set_brightness(value)?,
         Op::Button { index, pressed } => controller.simulate_button(index, pressed)?,
         Op::Studio { running } => controller.set_fake_studio(running)?,
+        Op::Hardware { snapshot } => return resources.hardware_exchange(snapshot),
         Op::Shutdown {} => {
             controller.shutdown();
             resources.shutdown();

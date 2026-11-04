@@ -438,6 +438,7 @@ impl App {
                 status["profiles"] = metadata(&state);
                 status["dock"] = json!({"enabled":dock["enabled"],"state":dock["state"],"currentProfile":dock["currentProfile"],"currentPage":dock["currentPage"],"usageStatus":dock["usageStatus"],"timing":dock["timing"]});
                 status["cooler"] = cooler_status(&cooler);
+                status["hardware"] = self.hardware.get().map(|hardware| hardware.status()).unwrap_or(Value::Null);
             }
             return Ok(status);
         }

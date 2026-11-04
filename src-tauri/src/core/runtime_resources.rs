@@ -74,9 +74,23 @@ pub struct RuntimeResources {
     health: Mutex<ReaderHealth>,
     usage_diagnostics: Mutex<UsageDiagnostics>,
     started: Instant,
+    shared_hardware: bool,
+    hardware: Mutex<super::hardware::Receiver>,
+    local_sensor_polls: std::sync::atomic::AtomicU64,
 }
 impl RuntimeResources {
     pub fn new(home: &Path, resource_dir: PathBuf, fake: bool) -> Arc<Self> {
+        Self::with_hardware_mode(home, resource_dir, fake, false)
+    }
+    pub fn new_shared(home: &Path, resource_dir: PathBuf, fake: bool) -> Arc<Self> {
+        Self::with_hardware_mode(home, resource_dir, fake, true)
+    }
+    fn with_hardware_mode(
+        home: &Path,
+        resource_dir: PathBuf,
+        fake: bool,
+        shared_hardware: bool,
+    ) -> Arc<Self> {
         let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let resources = if cfg!(debug_assertions) {
             source_root.join("resources")
@@ -113,7 +127,46 @@ impl RuntimeResources {
             }),
             usage_diagnostics: Mutex::new(UsageDiagnostics::default()),
             started: Instant::now(),
+            shared_hardware,
+            hardware: Mutex::new(super::hardware::Receiver::default()),
+            local_sensor_polls: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+    pub fn hardware_exchange(
+        &self,
+        snapshot: Option<super::hardware::Snapshot>,
+    ) -> Result<Value, String> {
+        if !self.shared_hardware {
+            return Err("Shared hardware mode is disabled".into());
+        }
+        if let Some(snapshot) = snapshot {
+            self.hardware
+                .lock()
+                .unwrap()
+                .accept(snapshot, super::scheduler::now_ms())?;
+        }
+        Ok(json!({"demand":self.hardware_demand(),"state":self.hardware_state()}))
+    }
+    fn hardware_demand(&self) -> super::hardware::Demand {
+        let needs = *self.needs.lock().unwrap();
+        let enabled = self.enabled.load(Ordering::SeqCst);
+        super::hardware::Demand {
+            cpu: enabled && needs.cpu,
+            ram: enabled && needs.ram,
+            gpu: enabled && needs.gpu,
+            hz: 1,
+        }
+    }
+    pub fn hardware_state(&self) -> Value {
+        let mut state = self
+            .hardware
+            .lock()
+            .unwrap()
+            .state(super::scheduler::now_ms());
+        state["shared"] = json!(self.shared_hardware);
+        state["demand"] = json!(self.hardware_demand());
+        state["local_polls"] = json!(self.local_sensor_polls.load(Ordering::SeqCst));
+        state
     }
     pub fn shutdown(&self) {
         let _activation = self.activation.lock().unwrap();
@@ -286,7 +339,27 @@ impl DockHooks for RuntimeResources {
     fn inputs(&self) -> RenderInputs {
         self.ensure_reader();
         let mut inputs = local_time();
-        if self.enabled.load(Ordering::SeqCst) && !self.fake {
+        if self.enabled.load(Ordering::SeqCst) && self.shared_hardware {
+            if let Some(snapshot) = self
+                .hardware
+                .lock()
+                .unwrap()
+                .current(super::scheduler::now_ms())
+            {
+                inputs.hardware_valid_until_ms = Some(snapshot.expires_at_ms);
+                inputs.cpu = snapshot.cpu_load_pct.map(|value| value as f32);
+                inputs.ram = snapshot
+                    .ram_used_bytes
+                    .zip(snapshot.ram_total_bytes)
+                    .filter(|(_, total)| *total > 0)
+                    .map(|(used, total)| (used as f64 / total as f64 * 100.) as f32);
+                inputs.gpu = snapshot
+                    .gpu
+                    .and_then(|gpu| gpu.load_pct)
+                    .map(|value| value as f32);
+            }
+        } else if self.enabled.load(Ordering::SeqCst) && !self.fake {
+            self.local_sensor_polls.fetch_add(1, Ordering::SeqCst);
             let readings = self
                 .sampler
                 .lock()
@@ -314,6 +387,18 @@ impl DockHooks for RuntimeResources {
         let mut codex = false;
         let mut tokens = false;
         if enabled {
+            // Hardware interest follows the delivered page. Account providers
+            // retain their existing active-profile policy independently.
+            if let Some(page) = state.active_page() {
+                for face in page.keys.iter().flat_map(|key| [&key.a, &key.b]) {
+                    match face.kind.as_str() {
+                        "cpu" => needs.cpu = true,
+                        "gpu" => needs.gpu = true,
+                        "ram" => needs.ram = true,
+                        _ => {}
+                    }
+                }
+            }
             if let Some(profile) = state.active_profile() {
                 for face in profile
                     .pages
@@ -322,9 +407,6 @@ impl DockHooks for RuntimeResources {
                     .flat_map(|key| [&key.a, &key.b])
                 {
                     match face.kind.as_str() {
-                        "cpu" => needs.cpu = true,
-                        "gpu" => needs.gpu = true,
-                        "ram" => needs.ram = true,
                         "claude" => claude = true,
                         "codex" => {
                             codex = true;
@@ -438,6 +520,29 @@ pub fn local_time() -> RenderInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hardware_demand_stops_on_pages_without_sensor_faces() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimeResources::new_shared(home.path(), home.path().join("resources"), true);
+        let mut state = ProfileState::default();
+        state.profiles[0].pages[0].keys[0].a.kind = "cpu".into();
+        state.profiles[0].pages[0].keys[1].b.kind = "gpu".into();
+        runtime.active_profile(&state, true);
+        let demand = runtime.hardware_demand();
+        assert!(demand.cpu && demand.gpu && !demand.ram);
+        let empty = super::super::profiles::Page::new("No hardware");
+        state.current_page = empty.id.clone();
+        state.profiles[0].pages.push(empty);
+        runtime.active_profile(&state, true);
+        assert!(!runtime.hardware_demand().active());
+        state.current_page = state.profiles[0].pages[0].id.clone();
+        runtime.active_profile(&state, true);
+        assert!(runtime.hardware_demand().cpu);
+        runtime.active_profile(&state, false);
+        assert!(!runtime.hardware_demand().active());
+        assert_eq!(runtime.local_sensor_polls.load(Ordering::SeqCst), 0);
+    }
     #[test]
     fn usage_diagnostics_are_inert_finite_and_contain_no_numbers_or_paths() {
         let home = tempfile::tempdir().unwrap();

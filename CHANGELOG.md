@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 — 2026-11-05
+
+Collect CPU, RAM and full NVIDIA GPU readings once for interested dock/cooler displays. Expiring per-consumer demand
+selects the required source families and fastest1/2/4Hz rate; unused sources stop. Cooler engine4.19.0 consumes injected
+readings through both legacy stats and modern widgets, with replaced local aggregate readers disabled.
+
+Preserve original observation/expiry through worker exchanges, cached status and dock pixel delivery. Missing, failed
+or expired readings remain unknown; validated generation/sequence checks prevent replay. Independent coalescing delivery
+keeps a stalled consumer from blocking its peer. Ephemeral probes cannot create durable-action uncertainty.
+
+This is shared-services slice2.6a. AI usage, music, weather and other data sources retain existing ownership for now.
+Cooler workspace entry delay remains separately tracked in issue23.
+
 ## 0.6.0 — 2026-11-04
 
 Move the dock driver, renderer, profile runtime, native actions and account reader into a supervised process.

@@ -49,6 +49,9 @@ pub struct Cooler {
     finishing_transfers: Mutex<HashMap<u64, String>>,
     diagnostics: super::cooler_health::Diagnostics,
     health_blocked: AtomicBool,
+    probe_id: AtomicU64,
+    probe_active_id: AtomicU64,
+    hardware_cache: Mutex<(Instant, Option<u32>, Value)>,
 }
 
 impl Cooler {
@@ -86,6 +89,9 @@ impl Cooler {
                 home.join("connection-health.jsonl"),
             ),
             health_blocked: AtomicBool::new(false),
+            probe_id: AtomicU64::new(0),
+            probe_active_id: AtomicU64::new(0),
+            hardware_cache: Mutex::new((Instant::now(), None, Value::Null)),
             executable,
             home,
             resources,
@@ -117,7 +123,26 @@ impl Cooler {
     }
     pub fn status(&self) -> Value {
         let state = self.state.lock().unwrap();
-        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock().unwrap().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id()),"diagnosticsEnabled":self.diagnostics.enabled(),"health":self.diagnostics.status()})
+        let hardware = self.hardware_cache.lock().unwrap();
+        let mut hardware_state = hardware.2.clone();
+        if hardware.1 != state.session.as_ref().map(|session| session.child.id())
+            || !hardware_state.is_object()
+        {
+            hardware_state = json!({"shared":true,"fresh":false,"accepted_sequence":0,"local_polls":null,"local_legacy_polls":null,"local_metric_polls":null,"cpu_present":false,"ram_present":false,"gpu_fields":0,"demand":super::hardware::Demand::default(),"expires_at_ms":null});
+        }
+        if !state.enabled
+            || !state.ready
+            || hardware.0.elapsed() > Duration::from_secs(3)
+            || hardware_state["expires_at_ms"]
+                .as_u64()
+                .is_none_or(|at| at <= super::scheduler::now_ms())
+        {
+            hardware_state["fresh"] = json!(false);
+            hardware_state["cpu_present"] = json!(false);
+            hardware_state["ram_present"] = json!(false);
+            hardware_state["gpu_fields"] = json!(0);
+        }
+        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock().unwrap().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id()),"diagnosticsEnabled":self.diagnostics.enabled(),"health":self.diagnostics.status(),"hardware":hardware_state})
     }
     pub fn busy(&self) -> bool {
         let state = self.state.lock().unwrap();
@@ -162,6 +187,7 @@ impl Cooler {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .env("UC_COOLER_WORKER", "1")
+            .env("UC_SHARED_HARDWARE", "1")
             .env("COOLERSCREEN_HOME", &self.home)
             .env("COOLERSCREEN_SOURCES_DIR", self.home.join("Sources"))
             .env("CS_FFMPEG", self.resources.join("cooler/ffmpeg.exe"))
@@ -232,6 +258,8 @@ impl Cooler {
                 });
                 state.generation = state.generation.saturating_add(1);
                 self.health_blocked.store(false, Ordering::SeqCst);
+                self.probe_id.store(0, Ordering::SeqCst);
+                self.probe_active_id.store(0, Ordering::SeqCst);
                 state.ready = false;
                 state.phase = "starting";
                 state.message = "Starting CoolerScreen engine".into();
@@ -392,10 +420,55 @@ impl Cooler {
     /// Read-only probes use distinct IDs/pending entries but never mutation
     /// uncertainty or job busy flags. A lost health reply cannot prevent Quit.
     fn health_request(&self) -> Result<Value, &'static str> {
-        // Permit only one tiny probe after the last confirmed worker reply.
-        // A hung reader cannot accumulate diagnostic writes in its pipe.
+        self.probe_request("health_status", json!({}), Duration::from_secs(2))
+    }
+    /// Hardware exchange has only ephemeral in-memory effects. Like health
+    /// sampling, its timeout must not create mutation uncertainty or block Quit.
+    pub fn hardware_exchange(
+        &self,
+        snapshot: Option<super::hardware::Snapshot>,
+    ) -> CoreResult<Value> {
+        let _operation = self
+            .operation
+            .try_read()
+            .map_err(|_| CoreError::new("Hardware exchange is deferred"))?;
+        let pid = self
+            .state
+            .lock()
+            .unwrap()
+            .session
+            .as_ref()
+            .map(|session| session.child.id());
+        let result = self
+            .probe_request(
+                "hardware_exchange",
+                json!({"snapshot":snapshot}),
+                Duration::from_millis(500),
+            )
+            .map_err(|_| CoreError::new("Hardware exchange is deferred"))?;
+        let state = self.state.lock().unwrap();
+        if !state.ready || state.session.as_ref().map(|session| session.child.id()) != pid {
+            return Err(CoreError::new(
+                "Hardware exchange belongs to a disconnected worker",
+            ));
+        }
+        *self.hardware_cache.lock().unwrap() = (Instant::now(), pid, result["state"].clone());
+        Ok(result)
+    }
+    fn probe_request(
+        &self,
+        command: &str,
+        args: Value,
+        timeout: Duration,
+    ) -> Result<Value, &'static str> {
+        // Permit one tiny ephemeral probe at a time. A timeout keeps the gate
+        // closed until that exact reply, so other RPCs cannot accumulate probes.
         if self.health_blocked.load(Ordering::SeqCst) {
-            return Err("worker_timeout");
+            return Err(if self.probe_active_id.load(Ordering::SeqCst) != 0 {
+                "sample_deferred"
+            } else {
+                "worker_timeout"
+            });
         }
         if self.inflight.load(Ordering::SeqCst) > 0 {
             return Err("sample_deferred");
@@ -429,18 +502,34 @@ impl Cooler {
         if self.health_blocked.swap(true, Ordering::SeqCst) {
             return Err("worker_timeout");
         }
+        self.probe_id.store(id, Ordering::SeqCst);
+        self.probe_active_id.store(id, Ordering::SeqCst);
+        struct ActiveProbe<'a>(&'a AtomicU64, u64);
+        impl Drop for ActiveProbe<'_> {
+            fn drop(&mut self) {
+                let _ = self
+                    .0
+                    .compare_exchange(self.1, 0, Ordering::SeqCst, Ordering::SeqCst);
+            }
+        }
+        let _active = ActiveProbe(&self.probe_active_id, id);
         let (send, recv) = mpsc::channel();
         pending.lock().unwrap().insert(id, send);
-        let frame =
-            format!("{{\"v\":1,\"id\":{id},\"command\":\"health_status\",\"args\":{{}}}}\n");
-        let written = input
-            .write_all(frame.as_bytes())
-            .and_then(|_| input.flush());
+        let mut frame = serde_json::to_vec(&json!({"v":1,"id":id,"command":command,"args":args}))
+            .map_err(|_| "invalid_probe")?;
+        if frame.len() > 2_048 {
+            pending.lock().unwrap().remove(&id);
+            self.health_blocked.store(false, Ordering::SeqCst);
+            self.probe_id.store(0, Ordering::SeqCst);
+            return Err("invalid_probe");
+        }
+        frame.push(b'\n');
+        let written = input.write_all(&frame).and_then(|_| input.flush());
         drop(input);
         let result = if written.is_err() {
             Err("worker_disconnected")
         } else {
-            match recv.recv_timeout(Duration::from_secs(2)) {
+            match recv.recv_timeout(timeout) {
                 Ok(Ok(value)) => Ok(value),
                 Ok(Err(_)) => Err("worker_unavailable"),
                 Err(_) => Err("worker_timeout"),
@@ -448,6 +537,15 @@ impl Cooler {
         };
         pending.lock().unwrap().remove(&id);
         result
+    }
+    fn accept_probe_reply(&self, id: u64) {
+        if self
+            .probe_id
+            .compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.health_blocked.store(false, Ordering::SeqCst);
+        }
     }
     fn request(&self, command: &str, args: Value, timeout: Duration) -> CoreResult<Value> {
         self.request_with_transfer(command, args, timeout, None)
@@ -623,7 +721,7 @@ fn read_worker(
         }
         if let Some(id) = value["id"].as_u64() {
             if let Some(owner) = owner.upgrade() {
-                owner.health_blocked.store(false, Ordering::SeqCst);
+                owner.accept_probe_reply(id);
                 owner.state.lock().unwrap().uncertain.remove(&id);
                 if let Some(transfer) = owner.finishing_transfers.lock().unwrap().remove(&id) {
                     let _ = owner.transfers.lock().unwrap().complete(&transfer, true);
@@ -699,6 +797,54 @@ fn read_worker(
 #[cfg(all(test, windows))]
 mod health_tests {
     use super::*;
+    #[test]
+    fn unrelated_replies_cannot_reopen_an_unanswered_hardware_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        manager.probe_id.store(42, Ordering::SeqCst);
+        manager.health_blocked.store(true, Ordering::SeqCst);
+        manager.accept_probe_reply(41);
+        assert!(manager.health_blocked.load(Ordering::SeqCst));
+        manager.accept_probe_reply(42);
+        assert!(!manager.health_blocked.load(Ordering::SeqCst));
+        assert_eq!(manager.probe_id.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn cached_hardware_flags_use_original_expiry_and_keep_actual_counters() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.enabled = true;
+            state.ready = true;
+        }
+        *manager.hardware_cache.lock().unwrap() = (
+            Instant::now(),
+            None,
+            json!({
+                "shared":true,"fresh":true,"cpu_present":true,"ram_present":true,"gpu_fields":255,
+                "expires_at_ms":super::super::scheduler::now_ms()-1,"accepted_sequence":7,
+                "local_polls":3,"local_legacy_polls":1,"local_metric_polls":2
+            }),
+        );
+        let state = manager.status()["hardware"].clone();
+        assert_eq!(state["fresh"], false);
+        assert_eq!(state["gpu_fields"], 0);
+        assert_eq!(state["cpu_present"], false);
+        assert_eq!(state["accepted_sequence"], 7);
+        assert_eq!(state["local_polls"], 3);
+        assert_eq!(state["local_metric_polls"], 2);
+    }
     #[test]
     fn worker_owns_source_definitions_instead_of_inheriting_a_shared_folder() {
         let dir = tempfile::tempdir().unwrap();

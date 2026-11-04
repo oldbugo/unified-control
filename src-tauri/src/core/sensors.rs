@@ -15,6 +15,19 @@ pub struct Readings {
     pub gpu: Option<f32>,
     pub ram: Option<f32>,
 }
+/// Full NVIDIA detail for shared hardware consumers. Failed NVML fields remain
+/// absent; one unsupported field never invents zero or discards other readings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GpuReadings {
+    pub name: String,
+    pub temp_c: Option<f64>,
+    pub load_pct: Option<f64>,
+    pub clock_mhz: Option<f64>,
+    pub mem_used_bytes: Option<u64>,
+    pub mem_total_bytes: Option<u64>,
+    pub power_w: Option<f64>,
+    pub fan_pct: Option<f64>,
+}
 pub trait Source {
     fn cpu_times(&mut self) -> Option<(u64, u64)>;
     fn memory_bytes(&mut self) -> Option<(u64, u64)>;
@@ -119,6 +132,33 @@ pub struct NativeSource {
     #[cfg(windows)]
     retry_at: Option<Duration>,
 }
+impl NativeSource {
+    pub fn gpu_details(&mut self, _now: Duration) -> Option<GpuReadings> {
+        #[cfg(windows)]
+        {
+            if self.gpu.is_none() {
+                if self.retry_at.is_some_and(|at| _now < at) {
+                    return None;
+                }
+                self.gpu = nvidia::Nvml::load();
+                if self.gpu.is_none() {
+                    self.retry_at = Some(_now.saturating_add(Duration::from_secs(30)));
+                    return None;
+                }
+            }
+            let value = self.gpu.as_ref().and_then(|g| g.read());
+            if value.is_none() {
+                self.gpu = None;
+                self.retry_at = Some(_now.saturating_add(Duration::from_secs(30)));
+            }
+            value
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+}
 impl Source for NativeSource {
     fn cpu_times(&mut self) -> Option<(u64, u64)> {
         #[cfg(windows)]
@@ -159,29 +199,9 @@ impl Source for NativeSource {
         }
     }
     fn gpu_percent(&mut self, _now: Duration) -> Option<f32> {
-        #[cfg(windows)]
-        {
-            if self.gpu.is_none() {
-                if self.retry_at.is_some_and(|at| _now < at) {
-                    return None;
-                }
-                self.gpu = nvidia::Nvml::load();
-                if self.gpu.is_none() {
-                    self.retry_at = Some(_now.saturating_add(Duration::from_secs(30)));
-                    return None;
-                }
-            }
-            let value = self.gpu.as_ref().and_then(|g| g.read());
-            if value.is_none() {
-                self.gpu = None;
-                self.retry_at = Some(_now.saturating_add(Duration::from_secs(30)));
-            }
-            value
-        }
-        #[cfg(not(windows))]
-        {
-            None
-        }
+        self.gpu_details(_now)
+            .and_then(|g| g.load_pct)
+            .map(|v| v as f32)
     }
     fn release_gpu(&mut self) {
         #[cfg(windows)]
@@ -194,6 +214,7 @@ impl Source for NativeSource {
 
 #[cfg(windows)]
 mod nvidia {
+    use super::GpuReadings;
     use std::ffi::c_void;
     use windows_sys::Win32::{
         Foundation::{FreeLibrary, HMODULE},
@@ -214,12 +235,28 @@ mod nvidia {
         gpu: u32,
         memory: u32,
     }
+    #[repr(C)]
+    struct MemoryInfo {
+        total: u64,
+        free: u64,
+        used: u64,
+    }
     type UtilFn = unsafe extern "C" fn(*mut c_void, *mut Utilization) -> i32;
     type ShutdownFn = unsafe extern "C" fn() -> i32;
+    type ValueFn = unsafe extern "C" fn(*mut c_void, *mut u32) -> i32;
+    type IndexedFn = unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32;
+    type NameFn = unsafe extern "C" fn(*mut c_void, *mut u8, u32) -> i32;
+    type MemoryFn = unsafe extern "C" fn(*mut c_void, *mut MemoryInfo) -> i32;
     pub struct Nvml {
         _library: Library,
         device: *mut c_void,
-        util: UtilFn,
+        util: Option<UtilFn>,
+        temp: Option<IndexedFn>,
+        clock: Option<IndexedFn>,
+        memory: Option<MemoryFn>,
+        power: Option<ValueFn>,
+        fan: Option<ValueFn>,
+        name: String,
         shutdown: ShutdownFn,
     }
     unsafe impl Send for Nvml {}
@@ -248,10 +285,27 @@ mod nvidia {
                         lib.0,
                         b"nvmlDeviceGetHandleByIndex_v2\0".as_ptr(),
                     )?);
-                let util: UtilFn = std::mem::transmute(GetProcAddress(
-                    lib.0,
-                    b"nvmlDeviceGetUtilizationRates\0".as_ptr(),
-                )?);
+                let util: Option<UtilFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetUtilizationRates\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let temp: Option<IndexedFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetTemperature\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let clock: Option<IndexedFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetClockInfo\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let memory: Option<MemoryFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetMemoryInfo\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let power: Option<ValueFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetPowerUsage\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let fan: Option<ValueFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetFanSpeed\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
+                let get_name: Option<NameFn> =
+                    GetProcAddress(lib.0, b"nvmlDeviceGetName\0".as_ptr())
+                        .map(|p| std::mem::transmute(p));
                 if init() != 0 {
                     return None;
                 }
@@ -260,20 +314,97 @@ mod nvidia {
                     shutdown();
                     return None;
                 }
+                let mut name_bytes = [0u8; 128];
+                let name = if get_name.is_some_and(|f| {
+                    f(device, name_bytes.as_mut_ptr(), name_bytes.len() as u32) == 0
+                }) {
+                    let end = name_bytes
+                        .iter()
+                        .position(|b| *b == 0)
+                        .unwrap_or(name_bytes.len());
+                    String::from_utf8_lossy(&name_bytes[..end])
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(128)
+                        .collect()
+                } else {
+                    String::new()
+                };
                 Some(Self {
                     _library: lib,
                     device,
                     util,
+                    temp,
+                    clock,
+                    memory,
+                    power,
+                    fan,
+                    name,
                     shutdown,
                 })
             }
         }
-        pub fn read(&self) -> Option<f32> {
+        pub fn read(&self) -> Option<GpuReadings> {
             let mut u = Utilization { gpu: 0, memory: 0 };
-            if unsafe { (self.util)(self.device, &mut u) } != 0 || u.gpu > 100 {
-                return None;
+            let load_pct = self.util.and_then(|f| {
+                if unsafe { f(self.device, &mut u) } == 0 && u.gpu <= 100 {
+                    Some(f64::from(u.gpu))
+                } else {
+                    None
+                }
+            });
+            let indexed = |function: Option<IndexedFn>, max: u32| {
+                function.and_then(|f| {
+                    let mut value = 0;
+                    if unsafe { f(self.device, 0, &mut value) } == 0 && value <= max {
+                        Some(f64::from(value))
+                    } else {
+                        None
+                    }
+                })
+            };
+            let plain = |function: Option<ValueFn>, max: u32| {
+                function.and_then(|f| {
+                    let mut value = 0;
+                    if unsafe { f(self.device, &mut value) } == 0 && value <= max {
+                        Some(f64::from(value))
+                    } else {
+                        None
+                    }
+                })
+            };
+            let mut mem = MemoryInfo {
+                total: 0,
+                free: 0,
+                used: 0,
+            };
+            let valid_mem = self
+                .memory
+                .is_some_and(|f| unsafe { f(self.device, &mut mem) } == 0)
+                && mem.total > 0
+                && mem.total <= 1 << 50
+                && mem.used <= mem.total;
+            let result = GpuReadings {
+                name: self.name.clone(),
+                temp_c: indexed(self.temp, 200),
+                load_pct,
+                clock_mhz: indexed(self.clock, 20_000),
+                mem_used_bytes: valid_mem.then_some(mem.used),
+                mem_total_bytes: valid_mem.then_some(mem.total),
+                power_w: plain(self.power, 10_000_000).map(|v| v / 1000.),
+                fan_pct: plain(self.fan, 100),
+            };
+            if result.temp_c.is_none()
+                && result.load_pct.is_none()
+                && result.clock_mhz.is_none()
+                && result.mem_used_bytes.is_none()
+                && result.power_w.is_none()
+                && result.fan_pct.is_none()
+            {
+                None
+            } else {
+                Some(result)
             }
-            Some(u.gpu as f32)
         }
     }
     impl Drop for Nvml {
