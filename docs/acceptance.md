@@ -1,6 +1,6 @@
 # Device acceptance evidence
 
-Current checkpoint: installed0.5.1, cooler data verification and visible continuity pass for the user's setup.
+Current checkpoint: installed0.6.0, supervised dock worker; cooler data verification and prior visible continuity are retained.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
@@ -17,7 +17,13 @@ Validation exposed and corrected preview deadlines across IPC, launch stdio inhe
 handling, profile retry/application order and cached render-busy refusal of tray Quit. Test fixtures now wait for completed
 saves and retry only explicit transient idle-admission refusals; active-action refusal assertions remain unchanged.
 Whole-repository formatting still reports pre-existing unrelated differences; worker modules and diff whitespace pass.
-These are simulated device/account checks, not new physical-action or live-account acceptance. Packaging/install checks follow.
+These are simulated device/account checks, not new physical-action or live-account acceptance.
+The idle-safe update installed clean source0117a5f at07:47:04UTC (18:47:04AEDT), with startup/new host PID10412 and
+separate child PID51196/parent10412. Actual MCP reports0.6.0, dock connected and cooler Live connected/no holds/errors.
+The selected profile/page/all fourteen keys exactly match the immediate pre-install snapshot. The installed request proxy
+matches the built executable after only Tauri's expected three-byte `UNK`→`NSS` marker substitution. Installer SHA256
+`F7145D51190FEAD496782B5F268AE0A206FB0522EDBFAFA03B697F939689B3E1`; proxy SHA256
+`28F27E91FBCBE2609D339A16073171AF7E47BABBDC686934F8CFD1974E7D1491`.
 The cooler workspace entry delay is separately tracked in [its evidence note](cooler-entry-delay.md).
 
 ## 2026-11-04 cooler data migration

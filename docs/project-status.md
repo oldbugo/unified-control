@@ -13,12 +13,12 @@ installation or delete its data as a cleanup step. It remains the rollback copy.
 
 ## Completed checkpoint
 
-Installed UC **0.5.1**, source `b67d9289ae129456bb879012710009eb391c6690`, immutable tag `v0.5.1`.
-The implementation and installation evidence are merged through PR20. Later documentation commits do not change this build.
+Installed UC **0.6.0**, source `0117a5f712ffafed312f9fcfafe41309bfd182d9`, immutable tag `v0.6.0`.
+PR22 contains dock-worker extraction. Later documentation commits do not change this build.
 
 Version0.6.0 implements plan2.4 in a supervised dock process with host-only durable profiles, guarded IPC previews,
-latest-layout recovery without action replay and busy-safe shutdown. Software/native gates are being completed;
-0.5.1 remains installed until the validated update. Shared services are next after this milestone.
+latest-layout recovery without action replay and busy-safe shutdown. Software/native and packaging gates pass;
+the idle-safe update verified startup, MCP, device reconnection and the unchanged fourteen-key page. Shared services are next.
 
 | Area | Current result |
 | --- | --- |
@@ -32,7 +32,7 @@ latest-layout recovery without action replay and busy-safe shutdown. Software/na
 
 Latest0.6.0 software gate:165 core and11 host tests plus62 reader tests pass, with three pre-existing ignored checks;
 relevant headless and quiet native worker/profile/MCP/cooler/lifetime suites pass.
-Touched Rust files are formatted. Whole-repository formatting still has unrelated existing differences.
+Worker Rust modules and diff whitespace pass. Whole-repository formatting still has unrelated existing differences.
 See [acceptance evidence](acceptance.md), [functional follow-ups](function-failures.md) and [migration contract](device-app/cooler-migration.md).
 
 ## Next implementation order
@@ -42,12 +42,11 @@ they do not authorize device tests while the user is away.
 
 | Order | Existing plan | Concrete outcome and completion check |
 | --- | --- | --- |
-| 1 | 2.4 Dock worker | Implemented in0.6.0; finish release/installed verification. Host-only durable profiles, freshness, A/B/input safeguards and quiet two-way worker crash isolation are retained. [Contract](device-app/dock-worker.md). |
-| 2 | 2.6 Shared services | Collect enabled sensor/now-playing/weather/AI readings once and supply only interested workers. Preserve opt-in settings and account/freshness safeguards; no new always-on reader by default. |
-| 3 | 2.7 Cross-device actions | Dock keys select cooler themes, next/previous, Live on/off and brightness through named worker operations. Verify physical result and reflected cooler UI state with the user. |
-| 4 | 2.8 Installer replacement | Data migration is done for the current setup. Define/test installer lineage, rollback and retirement of the separate CoolerScreen install after dependencies are ready. Retain untouched rollback data. |
-| 5 | 2.9 Combined release gate | Both-way worker crash isolation, busy-safe Quit, privacy checks and one-hour CPU/memory soak against the standalone baseline. Sleep/resume stays deferred until the user reauthorizes it. |
-| 6 | Phase3 Dial | Research host-mode switching from documented/captured evidence; never guess commands. Then map physical controls, implement its worker/page and test reconnect. Media-mode fallback has fewer distinct controls and must be explicit. |
+| 1 | 2.6 Shared services | Collect enabled sensor/now-playing/weather/AI readings once and supply only interested workers. Preserve opt-in settings and account/freshness safeguards; no new always-on reader by default. |
+| 2 | 2.7 Cross-device actions | Dock keys select cooler themes, next/previous, Live on/off and brightness through named worker operations. Verify physical result and reflected cooler UI state with the user. |
+| 3 | 2.8 Installer replacement | Data migration is done for the current setup. Define/test installer lineage, rollback and retirement of the separate CoolerScreen install after dependencies are ready. Retain untouched rollback data. |
+| 4 | 2.9 Combined release gate | Retain two-way worker crash isolation/busy-safe Quit checks, finish privacy checks and one-hour CPU/memory soak against the standalone baseline. Sleep/resume stays deferred until the user reauthorizes it. |
+| 5 | Phase3 Dial | Research host-mode switching from documented/captured evidence; never guess commands. Then map physical controls, implement its worker/page and test reconnect. Media-mode fallback has fewer distinct controls and must be explicit. |
 
 Remaining phase2.5 shell work includes the planned update/privacy/diagnostics-export surfaces and further cooler styling.
 Do not treat the installed shell polish as completion of every original General-page item.
