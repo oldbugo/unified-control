@@ -2,10 +2,16 @@
 
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
 the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
-Physical cooler/migration acceptance and remaining dock checks are pending. Rules: `AGENTS.md` and `CLAUDE.md`.
+Physical cooler acceptance and remaining dock checks are tracked separately from data migration. Rules: `AGENTS.md` and `CLAUDE.md`.
 Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0.3.0.md).
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
+
+Prepared 0.5.0 completes the independent cooler copy, including custom source definitions, and adds a cancellable
+host-side migration comparison with a timestamped result in General and cached MCP status. It checks media, active paths,
+settings, companion data and lyrics offsets while preserving UC edits and the original rollback copy.
+[Migration behavior and remaining installer-lineage work](docs/device-app/cooler-migration.md).
+Real installation/data verification is recorded separately in acceptance.md.
 
 Installed0.4.1/sourcebc9a864 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
 the user-confirmed pause/reconnect on each return. Explicit Check/Reconnect and initial checks with Live off remain.

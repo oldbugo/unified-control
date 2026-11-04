@@ -1,5 +1,9 @@
 # Dock follow-up backlog
 
+Prepared 0.5.0 addresses the remaining cooler data migration: custom source definitions become UC-owned; General can
+verify the copied data without touching USB or rescanning on status reads. Original data is retained as rollback.
+Installer-lineage replacement and the broader phase 2 release gates remain separate. [Details](device-app/cooler-migration.md).
+
 2026-11-03: user reports manual cooler Reconnect recovered Live, but physical Live stops when leaving its page.0.4.0
 prepares worker ownership/retirement fixes, General-only device enable switches, enabled-only Home/sidebar/search,
 an unframed cooler pane and overall UI polish. Simulated tests are distinct from installed physical acceptance.

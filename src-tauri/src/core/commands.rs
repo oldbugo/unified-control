@@ -191,6 +191,10 @@ pub async fn cooler_state(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |app| Ok(app.cooler_state())).await
 }
 #[tauri::command]
+pub async fn cooler_migration_verify(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.verify_cooler_migration()).await
+}
+#[tauri::command]
 pub async fn cooler_configure(core: State<'_, Core>, enabled: bool) -> Result<Value, CoreError> {
     run(&core, move |app| app.cooler_configure(enabled)).await
 }

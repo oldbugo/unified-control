@@ -1,5 +1,21 @@
 # Dock acceptance status
 
+## 2026-11-04 cooler data migration
+
+Prepared0.5.0 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
+gallery and lyrics offsets are retained; newer UC edits are never overwritten. General shows a historical verification
+summary and explicit button; MCP exposes only cached counts/flags. Pending receipts invalidate stale success on cancelled,
+failed or interrupted checks. [Contract and rollback limits](device-app/cooler-migration.md).
+
+Software checks:153 core/11 host tests pass (three pre-existing ignored checks), focused streaming cancellation/receipt/
+lyrics/migration cases, headless interface/cooler/settings suites and quiet native migration/cooler/lifetime/MCP checks.
+Native migration exercises the actual General command permission and receipt; the fake worker deliberately uses NoSources,
+so that fixture verifies copied definitions but does not claim actual catalog discovery. A worker launch-contract test
+verifies the explicit owned Sources environment; the pinned engine's real catalog consumes that override.
+Independent review found cancellation and evicted-job status problems; both were corrected and reviewed again.
+Touched Rust files pass rustfmt; whole-repo fmt remains blocked by existing unrelated formatting differences.
+Actual install/data comparison, preserved dock layout and reconnection will be recorded after the idle-safe update.
+
 ## 2026-11-03 cooler workspace return
 
 Installed0.4.0/sourceb18a4a1 passed startup/newPID/MCP0.4/engine4.18.2, expected-only packaged proxy marker change and

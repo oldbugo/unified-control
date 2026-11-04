@@ -155,27 +155,7 @@ impl Cooler {
         }
         Ok(self.status())
     }
-    fn start_if_due(self: &Arc<Self>) {
-        let mut state = self.state.lock().unwrap();
-        if !state.enabled
-            || state.session.is_some()
-            || Instant::now() < state.next_start
-            || self.stopped.load(Ordering::SeqCst)
-        {
-            return;
-        }
-        if !self.executable.is_file() {
-            state.phase = "unavailable";
-            state.message = "The CoolerScreen engine is missing. Reinstall Unified Control.".into();
-            state.next_start = Instant::now() + Duration::from_secs(30);
-            return;
-        }
-        if let Err(_) = std::fs::create_dir_all(&self.home) {
-            state.phase = "error";
-            state.message = "The cooler settings folder could not be opened.".into();
-            state.next_start = Instant::now() + Duration::from_secs(30);
-            return;
-        }
+    fn worker_command(&self) -> Command {
         let mut command = Command::new(&self.executable);
         command
             .stdin(Stdio::piped())
@@ -183,6 +163,7 @@ impl Cooler {
             .stderr(Stdio::null())
             .env("UC_COOLER_WORKER", "1")
             .env("COOLERSCREEN_HOME", &self.home)
+            .env("COOLERSCREEN_SOURCES_DIR", self.home.join("Sources"))
             .env("CS_FFMPEG", self.resources.join("cooler/ffmpeg.exe"))
             .env(
                 "COOLERSCREEN_SCRIPTS",
@@ -208,6 +189,30 @@ impl Cooler {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
+        command
+    }
+    fn start_if_due(self: &Arc<Self>) {
+        let mut state = self.state.lock().unwrap();
+        if !state.enabled
+            || state.session.is_some()
+            || Instant::now() < state.next_start
+            || self.stopped.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        if !self.executable.is_file() {
+            state.phase = "unavailable";
+            state.message = "The CoolerScreen engine is missing. Reinstall Unified Control.".into();
+            state.next_start = Instant::now() + Duration::from_secs(30);
+            return;
+        }
+        if let Err(_) = std::fs::create_dir_all(&self.home) {
+            state.phase = "error";
+            state.message = "The cooler settings folder could not be opened.".into();
+            state.next_start = Instant::now() + Duration::from_secs(30);
+            return;
+        }
+        let mut command = self.worker_command();
         match command.spawn() {
             Ok(mut child) => {
                 // Do not put the engine in the host's kill-on-close job. Parent
@@ -694,6 +699,35 @@ fn read_worker(
 #[cfg(all(test, windows))]
 mod health_tests {
     use super::*;
+    #[test]
+    fn worker_owns_source_definitions_instead_of_inheriting_a_shared_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let manager = Cooler::new(
+            home.clone(),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        let command = manager.worker_command();
+        let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("COOLERSCREEN_HOME")),
+            Some(&Some(home.as_os_str()))
+        );
+        let owned = home.join("Sources");
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("COOLERSCREEN_SOURCES_DIR")),
+            Some(&Some(owned.as_os_str()))
+        );
+        // Explicit Some(path) overrides any inherited value; None would remove it.
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("COOLERSCREEN_FAKE_DEVICE")),
+            Some(&Some(std::ffi::OsStr::new("winusb")))
+        );
+        manager.shutdown().unwrap();
+    }
+
     #[test]
     fn health_timeout_does_not_leave_mutation_or_quit_busy() {
         use std::os::windows::process::CommandExt;
