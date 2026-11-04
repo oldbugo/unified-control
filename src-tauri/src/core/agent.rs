@@ -666,6 +666,7 @@ fn migration_status(value: &Value) -> Value {
                 "identicalFiles",
                 "changedRecords",
                 "changedMediaFiles",
+                "changedPreviews",
                 "originals",
                 "themes",
                 "versions",

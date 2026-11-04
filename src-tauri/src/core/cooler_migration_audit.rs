@@ -338,6 +338,7 @@ struct Counts {
     additional_files: u64,
     identical_files: u64,
     changed_records: u64,
+    changed_previews: u64,
     changed_media_files: u64,
     originals: u64,
     themes: u64,
@@ -435,6 +436,19 @@ fn compare_tree(
             }
         } else if same_bytes(left, right, budget)? {
             counts.identical_files += 1;
+        } else if runtime
+            && relative.components().count() == 2
+            && matches!(
+                relative.file_name().and_then(|name| name.to_str()),
+                Some("theme-card.png" | "theme-preview.png" | "theme-preview-base.png")
+            )
+            && target_json
+                .get(&relative.with_file_name("theme.json"))
+                .is_some_and(|value| value.is_object())
+        {
+            // These direct theme-item children are regenerated from the UC theme.
+            // Nested assets and Gallery media retain exact-byte verification.
+            counts.changed_previews += 1;
         } else {
             counts.changed_media_files += 1;
         }
@@ -810,6 +824,7 @@ fn project_receipt(value: &Value) -> CoreResult<Value> {
         "additionalFiles",
         "identicalFiles",
         "changedRecords",
+        "changedPreviews",
         "changedMediaFiles",
         "originals",
         "themes",
@@ -822,7 +837,8 @@ fn project_receipt(value: &Value) -> CoreResult<Value> {
                 let n = |k: &str| counts[k].as_u64().unwrap();
                 if n("missingFiles") != 0
                     || n("changedMediaFiles") != 0
-                    || n("identicalFiles") + n("changedRecords") != n("sourceFiles")
+                    || n("identicalFiles") + n("changedRecords") + n("changedPreviews")
+                        != n("sourceFiles")
                     || n("sourceFiles") + n("additionalFiles") != n("targetFiles")
                     || n("originals") + n("themes") + n("versions") > n("targetFiles")
                 {
@@ -1257,6 +1273,76 @@ mod tests {
                 .unwrap()
                 .contains("date")
         );
+    }
+    #[test]
+    fn regenerated_direct_theme_previews_are_preserved_and_receipts_validate_counts() {
+        let (d, o, n, g) = fixture();
+        for name in [
+            "theme-card.png",
+            "theme-preview.png",
+            "theme-preview-base.png",
+        ] {
+            put(&o.join("library/item").join(name), b"old preview");
+            put(&n.join("library/item").join(name), b"UC preview");
+        }
+        put(
+            &n.join("library/item/theme.json"),
+            br#"{"widgets":[{"kind":"date"}]}"#,
+        );
+        let value = complete_receipt(&o, &n, &g);
+        assert_eq!(value["verified"], true);
+        assert_eq!(value["library"]["changedPreviews"], 3);
+        assert_eq!(value["library"]["changedMediaFiles"], 0);
+        assert_eq!(value["gallery"]["changedPreviews"], 0);
+        let path = d.path().join("receipt.json");
+        write_receipt(&path, &value).unwrap();
+        assert_eq!(
+            read_receipt(&path).unwrap().unwrap()["library"]["changedPreviews"],
+            3
+        );
+        for bad in [Value::Null, json!(2), json!(MAX_SAFE_COUNT + 1)] {
+            let mut invalid = value.clone();
+            invalid["library"]["changedPreviews"] = bad;
+            assert!(write_receipt(&path, &invalid).is_err());
+        }
+        fs::remove_file(n.join("library/item/theme-preview.png")).unwrap();
+        let missing = audit(&o, &n, &g).unwrap();
+        assert_eq!(missing["verified"], false);
+        assert_eq!(missing["library"]["missingFiles"], 1);
+    }
+    #[test]
+    fn preview_names_do_not_exempt_gallery_nested_assets_or_items_without_valid_theme() {
+        for location in ["gallery", "nested", "no-theme", "invalid-theme"] {
+            let (_d, o, n, g) = fixture();
+            let (old, new) = match location {
+                "gallery" => (
+                    g.join("theme-preview.png"),
+                    n.join("Gallery/theme-preview.png"),
+                ),
+                "nested" => (
+                    o.join("library/item/assets/theme-preview.png"),
+                    n.join("library/item/assets/theme-preview.png"),
+                ),
+                _ => (
+                    o.join("library/media/theme-preview.png"),
+                    n.join("library/media/theme-preview.png"),
+                ),
+            };
+            if location == "invalid-theme" {
+                put(&n.join("library/media/theme.json"), b"[]");
+            }
+            put(&old, b"original media");
+            put(&new, b"changed media");
+            let value = audit(&o, &n, &g).unwrap();
+            assert_eq!(value["verified"], false, "{location}");
+            let section = if location == "gallery" {
+                "gallery"
+            } else {
+                "library"
+            };
+            assert_eq!(value[section]["changedMediaFiles"], 1, "{location}");
+            assert_eq!(value[section]["changedPreviews"], 0, "{location}");
+        }
     }
     #[test]
     fn missing_and_different_media_refuse_verification() {

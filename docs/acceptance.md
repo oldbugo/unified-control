@@ -2,19 +2,26 @@
 
 ## 2026-11-04 cooler data migration
 
-Prepared0.5.0 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
+Prepared0.5.1 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
 gallery and lyrics offsets are retained; newer UC edits are never overwritten. General shows a historical verification
 summary and explicit button; MCP exposes only cached counts/flags. Pending receipts invalidate stale success on cancelled,
 failed or interrupted checks. [Contract and rollback limits](device-app/cooler-migration.md).
 
-Software checks:153 core/11 host tests pass (three pre-existing ignored checks), focused streaming cancellation/receipt/
+Software checks:155 core/11 host tests pass (three pre-existing ignored checks), focused streaming cancellation/receipt/
 lyrics/migration cases, headless interface/cooler/settings suites and quiet native migration/cooler/lifetime/MCP checks.
 Native migration exercises the actual General command permission and receipt; the fake worker deliberately uses NoSources,
 so that fixture verifies copied definitions but does not claim actual catalog discovery. A worker launch-contract test
 verifies the explicit owned Sources environment; the pinned engine's real catalog consumes that override.
 Independent review found cancellation and evicted-job status problems; both were corrected and reviewed again.
 Touched Rust files pass rustfmt; whole-repo fmt remains blocked by existing unrelated formatting differences.
-Actual install/data comparison, preserved dock layout and reconnection will be recorded after the idle-safe update.
+0.5.0/sourcebeb3888 installed through the quiet idle-safe updater; startup/newPID39464 and actualMCP0.5 verified.
+The app-owned comparison found286 library files,22 byte-identical gallery files, no missing files/old-root/missing
+references, unchanged settings/companion and owned empty Sources. It flagged two generated preview images alongside
+one edited UC theme. Engine writes confirm theme-card.png/theme-preview.png are derived.0.5.1 counts exactly these
+three direct theme preview filenames separately, preserving strict Gallery/nested/original media checks. Focused tests,
+independent review and native General recheck with a changed preview pass. No real data is overwritten for a pass.
+Selected profile/page/all14keys and inventory remain unchanged (revision changes on restart). Cooler Live reconnected
+with normal USB/no holds/errors; dock correctly remains blocked while Studio runs. Final0.5.1 install/result follows.
 
 ## 2026-11-03 cooler workspace return
 

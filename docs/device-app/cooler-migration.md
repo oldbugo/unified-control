@@ -1,6 +1,6 @@
 # Cooler data migration
 
-UC 0.5.0 completes the independent cooler data-copy path. Installation and real-data results are recorded separately in acceptance.md.
+UC 0.5.1 completes the independent cooler data-copy path. Installation and real-data results are recorded separately in acceptance.md.
 
 First enable copies settings, companion configuration, library, gallery and optional lyrics offsets into UC's own `devices/cooler` folder. Known active file references are rebased. Existing dock profiles and later UC cooler edits are preserved. The original CoolerScreen data and gallery remain untouched as rollback.
 
@@ -10,7 +10,7 @@ The V2 upgrade also copies custom JSON source definitions once into UC-owned `So
 
 General shows **Cooler data migration** and **Verify imported data**. One automatic host job runs after migration or an incomplete previous check. A successful historical receipt skips repeat scans at startup. The explicit button starts a new check. Status and MCP reads expose a cached finite summary and never scan media.
 
-The host compares file presence and streamed media bytes, settings, companion data, lyrics offsets and known active references. JSON differences may reflect later UC edits and are counted without overwriting them. Historical metadata backups are not active dependencies. Missing media, old-data dependencies, unreadable records, unstable files or incomplete source ownership prevent success. A new setup with no imported settings is labelled separately.
+The host compares file presence and streamed media bytes, settings, companion data, lyrics offsets and known active references. JSON differences may reflect later UC edits and are counted without overwriting them. Historical metadata backups are not active dependencies. The three generated theme preview filenames directly inside an item with valid theme metadata are counted separately when their bytes differ; originals and nested assets remain strict. Missing media, old-data dependencies, unreadable records, unstable files or incomplete source ownership prevent success. A new setup with no imported settings is labelled separately.
 
 This is a bounded, cancellable disk comparison, not a recurring background reader. It uses no USB commands and leaves screen playback running. Quit waits for the visible job; Cancel stops scanning. Host-side receipts contain counts/flags and a timestamp, never record names or paths. They are bounded, validated and atomically published. A pending check invalidates older success across cancellation, write failure and restart.
 

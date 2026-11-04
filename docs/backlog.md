@@ -1,6 +1,6 @@
 # Dock follow-up backlog
 
-Prepared 0.5.0 addresses the remaining cooler data migration: custom source definitions become UC-owned; General can
+Prepared 0.5.1 addresses the remaining cooler data migration: custom source definitions become UC-owned; General can
 verify the copied data without touching USB or rescanning on status reads. Original data is retained as rollback.
 Installer-lineage replacement and the broader phase 2 release gates remain separate. [Details](device-app/cooler-migration.md).
 

@@ -35,6 +35,7 @@ const finite=value=>{
     proxy:null,missing:null,sourceChanged:false
   });
   write(path.join(old,'library','fixture01','theme.json'),{widgets:[{kind:'clock'}]});
+  write(path.join(old,'library','fixture01','theme-card.png'),png);
   const plugin=name=>({format:1,name,allowedHosts:['example.invalid'],list:{url:'https://example.invalid/list',itemsPath:'items',fields:{id:'id',title:'title'}},download:{url:'https://example.invalid/{id}.mp4'}});
   write(path.join(plugins,'owned-only.json'),plugin('Owned fixture'));
   write(path.join(inherited,'inherited-only.json'),plugin('Inherited fixture'));
@@ -60,6 +61,7 @@ const finite=value=>{
     assert.equal(report.verified,true);assert.equal(report.reportVersion,1);assert.equal(report.migrationVersion,2);assert.equal(report.originalKept,true);finite(report);
     assert.equal(report.library.originals,1);assert.equal(report.library.themes,1);assert.equal(report.gallery.targetFiles,1);
     assert.equal(report.library.missingFiles,0);assert.equal(report.gallery.missingFiles,0);assert.equal(report.references.oldDependencies,0);assert.equal(report.references.missing,0);
+    assert.equal(report.library.changedPreviews,0);
     assert.equal(report.sourcePlugins.imported,true);assert.equal(report.sourcePlugins.copiedFilesAtImport,1);
     assert.ok(Number.isFinite(Date.parse(report.checkedAt)));assert.ok(!JSON.stringify(report).includes(home),'Status must not expose fixture paths');
     assert.deepEqual(fs.readFileSync(path.join(target,'Sources','owned-only.json')),fs.readFileSync(path.join(plugins,'owned-only.json')));
@@ -80,9 +82,12 @@ const finite=value=>{
     const button=page.locator('#cooler-migration-verify');await button.waitFor({state:'visible'});
     await poll(()=>button.isEnabled(),'General migration state refresh');
     assert.match(await page.locator('#cooler-migration-status').textContent(),/Last verification/i,'Counts must carry a historical verification label');
+    const regenerated=Buffer.concat([png,Buffer.from('regenerated preview fixture')]);
+    fs.writeFileSync(path.join(target,'library','fixture01','theme-card.png'),regenerated);
     await button.click();
     await poll(async()=>{const current=(await call('cooler_state')).migration;return current.state==='complete'&&current.checkedAt!==report.checkedAt&&(await jobs()).length===2;},'explicit General verification');
-    const checked=(await call('cooler_state')).migration;finite(checked);assert.equal(checked.verified,true);
+    const checked=(await call('cooler_state')).migration;finite(checked);assert.equal(checked.verified,true);assert.equal(checked.library.changedPreviews,1);assert.equal(checked.library.changedMediaFiles,0);
+    assert.deepEqual(fs.readFileSync(path.join(target,'library','fixture01','theme-card.png')),regenerated);
     const saved=JSON.parse(fs.readFileSync(receipt,'utf8'));assert.equal(saved.checkedAt,checked.checkedAt);assert.equal(saved.verified,true);assert.equal(saved.state,'complete');
     assert.deepEqual((await jobs()).filter(job=>!firstJobs.includes(job.id)).length,1,'General click adds one explicit audit');
     unchanged();assert.deepEqual(errors,[]);
