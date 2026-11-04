@@ -20,9 +20,13 @@ Files stream into host-owned transfer IDs in256KiB chunks, up to2GiB. The caller
 
 ## Interface, previews and services
 
+Since0.7.0, UC owns one demand-driven CPU/RAM/full NVIDIA collector. Dock and cooler consume validated, leased snapshots
+through independent private exchanges; replaced local aggregate readers stay off. The standalone cooler keeps local mode.
+Other providers retain their prior ownership pending2.6b. [Shared hardware contract](shared-hardware-protocol.md).
+
 The reviewed CoolerScreen interface is vendored under public/cooler with a dedicated same-origin parent bridge; the engine remains in its own repo. Commands/events are explicitly routed to cooler_call. The bridge uses its own global so native Tauri iframe injection cannot replace it. This trusted bundled iframe is not a sandbox for arbitrary plugins. Theme editing, Live, Embedded, library, sources, settings and preview behaviors reuse existing engine methods. Window restart/Windows startup belong to UC. Screen setup/reconnect use the existing reviewed bundled scripts on explicit user action; fake mode refuses those effects.
 
-The worker's existing tokenized loopback media server retains Range/video/twin support. UC forwards its mediaBase privately, including after recovery. CSP restricts scripts/frames to bundled origin, blocks objects/forms and allows required local media plus configured HTTPS assets. Each engine keeps its own data sources for now; no global always-on AI/sensor reader is added. AI freshness/account provenance gates remain mandatory. Logs contain finite state/error codes, not IPC payloads, media tokens, account identity or user file contents.
+The worker's existing tokenized loopback media server retains Range/video/twin support. UC forwards its mediaBase privately, including after recovery. CSP restricts scripts/frames to bundled origin, blocks objects/forms and allows required local media plus configured HTTPS assets. Hardware uses the demand-driven host collector described above. Other providers retain their existing ownership; no extra always-on account reader is added. AI freshness/account provenance gates remain mandatory. Logs contain finite state/error codes, not IPC payloads, media tokens, account identity or user file contents.
 
 ## Verification and limits
 

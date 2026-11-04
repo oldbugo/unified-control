@@ -11,8 +11,10 @@ Version0.7.0 implements shared hardware readings (plan2.6a). One demand-driven C
 cooler displays, including the cooler's temperature, clock, memory, power and fan details. Demand expires when unused;
 both former cooler aggregate readers and the dock's local reader stay off in shared mode. Readings retain their original
 expiry through worker delivery and rendering. [Contract and software checks](docs/device-app/shared-hardware-protocol.md).
-179 core/11 host/62 reader cases and relevant headless/quiet native suites pass. Release/install verification is in progress;
-installed0.6.0 remains running until the idle-safe update. Other shared providers remain the next slice.
+Installed0.7.0/sourceb5b0140 passed the quiet idle-safe update, startup/newPID, actual MCP, engine4.19.0, device reconnect
+and unchanged fourteen-key layout checks. The real shared collector reports1Hz cooler demand, equal CPU/RAM/GPU reads
+and no source failures.179 core/11 host/62 reader cases and relevant headless/quiet native suites pass.
+Other shared providers remain the next slice.
 
 Version0.6.0 separates the dock into a supervised worker. UC retains durable profile storage and editor/MCP coordination;
 the child owns transport, rendering, A/B/folder runtime, actions and usage readers. Editor previews share that reader.

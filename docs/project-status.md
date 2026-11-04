@@ -1,6 +1,6 @@
 # Project scope and next work
 
-Updated 2026-11-04. The user resumed development and selected dock-worker separation first.
+Updated 2026-11-05. The user selected the existing priority order; dock isolation and shared-hardware slice2.6a are complete.
 This is the current project overview; older dated records remain evidence, not current task lists.
 
 ## Goal and boundaries
@@ -13,12 +13,14 @@ installation or delete its data as a cleanup step. It remains the rollback copy.
 
 ## Completed checkpoint
 
-Installed UC **0.6.0**, source `0117a5f712ffafed312f9fcfafe41309bfd182d9`, immutable tag `v0.6.0`.
-PR22 contains dock-worker extraction. Later documentation commits do not change this build.
+Installed UC **0.7.0**, source `b5b014034baf87597f5dac7202b2393e2249af92`, immutable tag `v0.7.0`.
+PR25 contains shared hardware, pinning engine4.19.0/source88aad7d (CoolerScreen PR4). Later documentation does not change this build.
 
 Version0.6.0 implements plan2.4 in a supervised dock process with host-only durable profiles, guarded IPC previews,
-latest-layout recovery without action replay and busy-safe shutdown. Software/native and packaging gates pass;
-the idle-safe update verified startup, MCP, device reconnection and the unchanged fourteen-key page. Shared services are next.
+latest-layout recovery without action replay and busy-safe shutdown. Version0.7.0 adds one demand-driven shared hardware
+collector and injected dock/cooler readings, suppressing replaced local aggregate readers. Software/native/packaging gates
+and quiet update pass; startup, MCP, engine pin, connections and unchanged fourteen-key page are verified. Initial real
+collector counters show1Hz cooler demand, equal CPU/RAM/GPU reads and no source failures. Shared AI/music/weather remain next.
 
 | Area | Current result |
 | --- | --- |
@@ -26,12 +28,14 @@ the idle-safe update verified startup, MCP, device reconnection and the unchange
 | Dock usability | Immediate physical face edits, persistence/reconnect and Monitor Toggle are user-confirmed. Folder/Back felt responsive in three retest cycles. Preview retention and virtual page-follow fixes are installed; final user confirmation remains open. |
 | AI Usage | Canonical Windows launch defect fixed in0.3.1. Both providers refreshed beyond five minutes; a transient Codex failure recovered automatically. Exact account-panel, logout/switch and physical gauge acceptance remain open. Claude needs the authenticated Desktop Code companion. |
 | MCP | Codex model-client status/read/preview/apply/conflict/undo acceptance passed. Layout edits coordinate with the visible editor. Claude model-client acceptance and physical-action tools remain open. |
-| Cooler | Separate supervised engine4.18.2, embedded themes/library/settings, guarded imports and safe lifecycle are implemented. User confirms Live continues across pages and close-to-tray, and existing themes/settings plus physical Live look right in UC. Reentry avoids redundant automatic USB checks. |
+| Cooler | Separate supervised engine4.19.0, embedded themes/library/settings, guarded imports and safe lifecycle are implemented. Prior user confirmation covers background Live and themes/settings; current source/connection recovery passes. Reentry avoids redundant automatic USB checks. |
+| Shared hardware | One leased CPU/RAM/full NVIDIA collector supplies both workers. Local aggregate duplicates stay off; original expiry survives worker caches and dock delivery. Unused sources stop; independent consumer failure/recovery and actual installed1Hz counters are verified. |
 | Cooler data | App-owned verification passes286 library files,22 gallery files and23 active references. No missing media or old-root dependencies. One UC theme edit/two regenerated previews retained; original rollback data kept. |
 | Shell | Home/status cards, sidebar search, General device switches, enabled-only navigation, unframed cooler pane and overall polish are installed. Remaining visual review is acceptance/refinement work. |
 
-Latest0.6.0 software gate:165 core and11 host tests plus62 reader tests pass, with three pre-existing ignored checks;
-relevant headless and quiet native worker/profile/MCP/cooler/lifetime suites pass.
+Latest0.7.0 software gate:179 core and11 host tests plus62 reader tests pass, with three pre-existing ignored checks;
+seven focused cooler shared tests/four worker tests and relevant headless/native shared/worker/profile/MCP/cooler/lifetime
+suites pass. One isolated cooler renderer helper is invoked by its parent test.
 Worker Rust modules and diff whitespace pass. Whole-repository formatting still has unrelated existing differences.
 See [acceptance evidence](acceptance.md), [functional follow-ups](function-failures.md) and [migration contract](device-app/cooler-migration.md).
 
@@ -42,7 +46,7 @@ they do not authorize device tests while the user is away.
 
 | Order | Existing plan | Concrete outcome and completion check |
 | --- | --- | --- |
-| 1 | 2.6 Shared services | Collect enabled sensor/now-playing/weather/AI readings once and supply only interested workers. Preserve opt-in settings and account/freshness safeguards; no new always-on reader by default. |
+| 1 | 2.6b Remaining shared services | Hardware slice2.6a is installed. Move AI usage, now-playing and weather ownership onto the shared demand model, preserving existing activation, cache, account/freshness and rate policies. Current music/weather remain cooler-only and AI dock-only; do not add new faces as an implicit part of ownership work. |
 | 2 | 2.7 Cross-device actions | Dock keys select cooler themes, next/previous, Live on/off and brightness through named worker operations. Verify physical result and reflected cooler UI state with the user. |
 | 3 | 2.8 Installer replacement | Data migration is done for the current setup. Define/test installer lineage, rollback and retirement of the separate CoolerScreen install after dependencies are ready. Retain untouched rollback data. |
 | 4 | 2.9 Combined release gate | Retain two-way worker crash isolation/busy-safe Quit checks, finish privacy checks and one-hour CPU/memory soak against the standalone baseline. Sleep/resume stays deferred until the user reauthorizes it. |

@@ -1,8 +1,29 @@
 # Device acceptance evidence
 
-Current checkpoint: installed0.6.0, supervised dock worker; cooler data verification and prior visible continuity are retained.
+Current checkpoint: installed0.7.0, shared hardware collector and engine4.19.0; prior dock/cooler continuity is retained.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
+
+## 2026-11-05 shared hardware
+
+Installed0.7.0/sourceb5b0140, pinning engine4.19.0/source88aad7d.179 UC core/11 host/62 reader tests pass (three existing
+ignored UC checks), plus seven focused cooler shared cases/four worker cases. The isolated cooler renderer helper is
+actually invoked by its parent test. Quiet native shared/profile/MCP/worker/cooler/lifetime and browser interface/cooler/
+editor suites pass. Final shared fixture proves one collector, union rates, zero replaced local polls, full GPU fields,
+hidden-page release, provider failure/paused expiry/recovery, independent peer delivery, both-way crashes and safe Quit.
+
+Independent reviews corrected schema bounds/availability parity, snapshot-key capture, generation/PID cache scoping,
+original expiry through cached flags and sensor pixels, actual counter retention, exact-ID probe gates and source-lock
+isolation. Worker/collector formatting and diff whitespace pass; broad formatting retains existing unrelated differences.
+
+The quiet idle-safe update verified a new host and separate dock child, actual MCP0.7.0/engine4.19.0, dock connected and
+cooler Live connected/no holds/errors, with the exact pre-update selected profile/page/all fourteen keys preserved.
+Initial real collector status reports1Hz cooler-only demand,14 CPU/14 RAM/14 GPU reads across14 samples, zero source
+failures and GPU active. Both AI providers verified initially and again339seconds later; collector generation was unchanged and each source advanced from14 to352 reads across352 samples with zero failures. Dock/cooler Live remained connected without holds/errors and the selected fourteen-key layout stayed identical. This bounded sample passes the five-minute freshness cutoff; it does not establish uninterrupted reliability. This is installed source/counter evidence, not physical
+pixel/readability or long-run reliability acceptance. No standalone CoolerScreen app or rollback data was replaced.
+The installed proxy matches the built binary after only the expected three-byte UNK→NSS bundle marker substitution.
+Installer SHA256 `6BEBB727410BE366B5E2593A48CBD6F8A6517F78BE500DE7FA7E32AE0A0DD192`; proxy SHA256
+`49BFEB2AEB5F3519ECB806764EBF74EA62344F98802DC2CC16FD584D922F2360`.
 
 ## 2026-11-04 dock-worker software gate
 
