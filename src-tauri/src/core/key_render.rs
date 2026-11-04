@@ -24,6 +24,8 @@ pub struct RenderInputs {
     pub cpu: Option<f32>,
     pub gpu: Option<f32>,
     pub ram: Option<f32>,
+    /// Original expiry of the snapshot supplying these hardware values.
+    pub hardware_valid_until_ms: Option<u64>,
 }
 
 pub const MAX_PICTURE_BYTES: usize = 4 * 1024 * 1024;
@@ -557,7 +559,11 @@ pub fn render_face(
     if !caption.is_empty() {
         draw_text(&mut rgb, dimensions, font, &caption, 23.0, 165.0, MUTED)?;
     }
-    encode_rgb(&rgb, dimensions, unknown)
+    let mut rendered = encode_rgb(&rgb, dimensions, unknown)?;
+    if matches!(kind, "cpu" | "gpu" | "ram") && !unknown {
+        rendered.valid_until_ms = input.hardware_valid_until_ms;
+    }
+    Ok(rendered)
 }
 
 /// Keeps only the last frame for each physical display; unchanged PNGs are not
@@ -589,6 +595,30 @@ impl FrameCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hardware_pixels_keep_the_original_snapshot_expiry_through_delivery() {
+        let inputs = RenderInputs {
+            cpu: Some(12.),
+            gpu: Some(34.),
+            ram: Some(56.),
+            hardware_valid_until_ms: Some(2_000),
+            ..Default::default()
+        };
+        for kind in ["cpu", "gpu", "ram"] {
+            let mut frame = render_face(kind, "", false, &inputs).unwrap();
+            assert_eq!(frame.valid_until_ms, Some(2_000));
+            frame.guard_delivery(1_999).unwrap();
+            assert!(!frame.unknown);
+            frame.guard_delivery(2_000).unwrap();
+            assert!(frame.unknown);
+        }
+        assert_eq!(
+            render_face("text", "static", false, &inputs)
+                .unwrap()
+                .valid_until_ms,
+            None
+        );
+    }
     #[test]
     fn picture_import_rejects_oversize_unknown_and_broken_images() {
         assert!(PictureAsset::decode(&[]).is_err());

@@ -16,6 +16,8 @@ pub mod dock_runtime;
 pub mod dock_service;
 pub mod dock_worker;
 pub mod error;
+pub mod hardware;
+pub mod hardware_bridge;
 pub mod jobobject;
 pub mod js;
 pub mod key_render;

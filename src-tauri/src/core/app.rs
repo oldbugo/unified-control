@@ -69,6 +69,8 @@ pub struct App {
     pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
     pub dock: OnceLock<Arc<super::dock_worker::Controller>>,
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
+    pub hardware: OnceLock<Arc<super::hardware::Service>>,
+    pub hardware_bridge: OnceLock<Arc<super::hardware_bridge::Bridge>>,
     cooler_config_lock: Mutex<()>,
     cooler_migration_report: Mutex<Value>,
     cooler_migration_job: Mutex<Option<String>>,
@@ -106,6 +108,8 @@ impl App {
             runtime: OnceLock::new(),
             dock: OnceLock::new(),
             cooler: OnceLock::new(),
+            hardware: OnceLock::new(),
+            hardware_bridge: OnceLock::new(),
             cooler_config_lock: Mutex::new(()),
             cooler_migration_report: Mutex::new(migration_report),
             cooler_migration_job: Mutex::new(None),
@@ -143,7 +147,8 @@ impl App {
         );
         let _ = self.cooler.set(cooler.clone());
         // The host keeps assets and read-only discovery resources dormant. Live
-        // rendering, sensors, account readers and actions belong to the child.
+        // rendering, account readers and actions belong to the child. Hardware
+        // collection is shared by the host and delivered to interested workers.
         let resources = super::runtime_resources::RuntimeResources::new(
             &self.base,
             resource_dir.clone(),
@@ -171,6 +176,18 @@ impl App {
             settings.0["dock"]["enabled"].as_bool().unwrap_or(false),
             settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
         );
+        let hardware = super::hardware::Service::new(fake);
+        let bridge = super::hardware_bridge::Bridge::start(
+            hardware.clone(),
+            Arc::downgrade(&controller),
+            Arc::downgrade(&cooler),
+        );
+        self.hardware
+            .set(hardware)
+            .map_err(|_| CoreError::new("Hardware collector is already initialized"))?;
+        self.hardware_bridge
+            .set(bridge)
+            .map_err(|_| CoreError::new("Hardware delivery is already initialized"))?;
         if settings.0["cooler"]["enabled"] == true {
             match self.prepare_cooler_storage() {
                 Ok(()) => {
@@ -428,6 +445,7 @@ impl App {
                 json!(value["usageStatus"]["reader"]["code"] == "ready");
             value["worker"] = dock.worker_status();
             value["busy"] = json!(dock.busy());
+            value["hardware"] = dock.hardware_state();
         }
         if let Some(id) = value["currentProfile"].as_str().map(String::from) {
             if let Ok(profiles) = self.profiles.state() {
@@ -518,6 +536,7 @@ impl App {
             "autostart": super::autostart::is_on(),
             "dock": self.dock_state(),
             "cooler": self.cooler_state(),
+            "hardware": self.hardware.get().map(|hardware| hardware.status()),
         })
     }
 
@@ -567,6 +586,40 @@ impl App {
 
     pub fn activity(&self) -> Value {
         json!({ "deviceBusy": self.sched.device_active(), "jobs": self.sched.activity(120_000) })
+    }
+
+    /// Test hooks never operate real sources or an installed release. Reading
+    /// this fixture state does not send snapshots or renew either demand lease.
+    pub fn hardware_test_control(&self, patch: Value) -> CoreResult<Value> {
+        if !cfg!(debug_assertions) || super::buildinfo::fake_device().is_none() {
+            return Err(CoreError::coded(
+                "test_only",
+                "Hardware test controls require a debug fake instance",
+            ));
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+        enum Control {
+            Read {},
+            ProviderFailure { enabled: bool },
+            PauseDelivery { consumer: String, enabled: bool },
+        }
+        let control: Control = serde_json::from_value(patch)
+            .map_err(|_| CoreError::new("Invalid hardware test control"))?;
+        let service = self.hardware.get()
+            .ok_or_else(|| CoreError::new("Hardware collector is unavailable"))?;
+        let bridge = self.hardware_bridge.get()
+            .ok_or_else(|| CoreError::new("Hardware delivery is unavailable"))?;
+        match control {
+            Control::Read {} => {}
+            Control::ProviderFailure { enabled } => service.set_test_failure(enabled).map_err(CoreError::new)?,
+            Control::PauseDelivery { consumer, enabled } => bridge
+                .pause_delivery(&consumer, enabled)
+                .map_err(CoreError::new)?,
+        }
+        Ok(json!({"collector":service.status(),"snapshot":service.snapshot(),"bridge":bridge.status(),
+            "dock":self.dock.get().map(|dock|dock.hardware_state()).unwrap_or(Value::Null),
+            "cooler":self.cooler.get().map(|cooler|cooler.status()["hardware"].clone()).unwrap_or(Value::Null)}))
     }
 
     pub fn profiles_state(&self) -> CoreResult<Value> {
@@ -682,6 +735,12 @@ impl App {
         let _guard = self.dock_config_lock.lock().unwrap();
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
+        }
+        if let Some(bridge) = self.hardware_bridge.get() {
+            bridge.shutdown();
+        }
+        if let Some(hardware) = self.hardware.get() {
+            hardware.shutdown();
         }
         if let Some(resources) = self.runtime.get() {
             resources.shutdown();
