@@ -12,6 +12,9 @@ keeps a stalled consumer from blocking its peer. Ephemeral probes cannot create 
 
 This is shared-services slice2.6a. AI usage, music, weather and other data sources retain existing ownership for now.
 Cooler workspace entry delay remains separately tracked in issue23.
+Installed clean sourceb5b0140 through the idle-safe updater; startup/newPID, actual MCP0.7.0/engine4.19.0, connected
+devices and unchanged selected fourteen-key page verified. Real cooler demand drives one1Hz collector, with equal
+CPU/RAM/GPU read counts and no source failures. Source/tag and private PR25 identify the release.
 
 ## 0.6.0 — 2026-11-04
 

@@ -1,6 +1,7 @@
 # Current project backlog
 
-Updated2026-11-04. Plan2.4 dock-worker extraction is installed in0.6.0; shared providers and cross-device actions follow.
+Updated2026-11-05. Plan2.4 dock isolation and shared-hardware slice2.6a are installed in0.7.0.
+Remaining shared AI/music/weather ownership (2.6b) and cross-device actions follow.
 [Scope, phase status and ordered next work](project-status.md) is the current
 implementation plan; [handoff](handoff-current.md) is the restart entry point.
 

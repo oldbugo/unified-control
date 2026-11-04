@@ -7,8 +7,9 @@ Plan 2.4, implemented on 2026-11-04. Installation and verification results are r
 
 UC owns the visible window/tray, settings, scheduler, MCP/editor leases and the only durable profile store.
 The same executable runs a separate `--dock-worker` process before any GUI or single-instance initialization.
-That child owns the dock driver, rendering, A/B and folder runtime, keepalive/reconnect, sensors, reviewed native
-actions and the usage reader. Shared providers remain the next milestone; no additional account poller is introduced.
+That child owns the dock driver, rendering, A/B and folder runtime, keepalive/reconnect, reviewed native actions and
+the usage reader. Since0.7.0 it consumes host-collected shared hardware snapshots with their original expiry rather than
+polling CPU/RAM/NVIDIA locally. Shared AI/music/weather ownership remains later2.6b; no extra account poller is introduced.
 The host's dormant rendering resources serve assets, read-only monitor discovery and MCP's explicitly static preview.
 Normal editor previews go to the child.
 
