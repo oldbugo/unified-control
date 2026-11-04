@@ -7,12 +7,14 @@ Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Prepared 0.5.1 completes the independent cooler copy, including custom source definitions, and adds a cancellable
-host-side migration comparison with a timestamped result in General and cached MCP status. It checks media, active paths,
-settings, companion data and lyrics offsets while preserving UC edits and the original rollback copy.
+Installed 0.5.1/sourceb67d928 completes the independent cooler data migration, including UC-owned custom source definitions.
+UC's own comparison verifies286 library files (22 originals,6 themes,27 versions),22 byte-identical gallery files and23
+active references, with no missing media or old-folder dependencies. One UC theme edit and two regenerated previews are
+preserved. Settings/companion match; optional lyrics offsets and custom source definitions are absent in this setup.
+The user confirms existing themes/settings look right and physical Live updates. Quiet install/startup/newPID/MCP,
+packaged proxy, cooler reconnection and unchanged selected dock page/all14keys verified. General offers a timestamped
+verification result and explicit recheck; normal status reads never scan media.
 [Migration behavior and remaining installer-lineage work](docs/device-app/cooler-migration.md).
-0.5.0 installed successfully and found no missing files or old-root dependencies; two regenerated previews prompted the
-0.5.1 classification correction. Final installation/data verification is recorded separately in acceptance.md.
 
 Installed0.4.1/sourcebc9a864 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
 the user-confirmed pause/reconnect on each return. Explicit Check/Reconnect and initial checks with Live off remain.

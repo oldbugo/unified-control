@@ -2,7 +2,7 @@
 
 ## 2026-11-04 cooler data migration
 
-Prepared0.5.1 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
+Installed0.5.1 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
 gallery and lyrics offsets are retained; newer UC edits are never overwritten. General shows a historical verification
 summary and explicit button; MCP exposes only cached counts/flags. Pending receipts invalidate stale success on cancelled,
 failed or interrupted checks. [Contract and rollback limits](device-app/cooler-migration.md).
@@ -21,7 +21,18 @@ one edited UC theme. Engine writes confirm theme-card.png/theme-preview.png are 
 three direct theme preview filenames separately, preserving strict Gallery/nested/original media checks. Focused tests,
 independent review and native General recheck with a changed preview pass. No real data is overwritten for a pass.
 Selected profile/page/all14keys and inventory remain unchanged (revision changes on restart). Cooler Live reconnected
-with normal USB/no holds/errors; dock correctly remains blocked while Studio runs. Final0.5.1 install/result follows.
+with normal USB/no holds/errors; dock correctly remains blocked while Studio runs. Final0.5.1/sourceb67d928 installed through the idle-safe updater; startup/newPID, actualMCP0.5.1 and expected-only
+three-byte NSIS marker difference in the installed request proxy verified. App-owned comparison at2026-11-04T00:50:41.939Z
+passes:286 library files,22 originals,6 themes,27 versions;22 byte-identical gallery files;23 active references; zero
+missing files, changed original media, old-root dependencies, missing references, unreadable records or unstable files.
+It preserves one UC theme record change and two generated preview changes. Settings/companion match, no lyrics offsets
+exist in either copy, and the owned Sources folder has zero imported definitions. The user answered “Yes, everything
+looks right” when asked about existing UC themes/settings and physical Live updating. This is current-setup continuity,
+not every original phase2 release gate. Live reports connected/no holds/no errors and normal USB; selected profile/page/
+all14keys and inventory remain unchanged. Standalone installation/data remain as rollback; installer-lineage replacement,
+broader architecture and release checks remain open. Installer SHA256
+`92BCF727195BDDF66B9D74046CE6F8EB3B94015C1D64A5557B616ADAD466A803`; request proxy SHA256
+`6B8195722D191352FC55A7175C2BB7A10966F4D608D9B5E30D7DA7E289C9A690`.
 
 ## 2026-11-03 cooler workspace return
 
