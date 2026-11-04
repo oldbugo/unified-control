@@ -804,11 +804,12 @@ mod tests {
             dir.path().join("missing-resources"),
             true,
         );
-        let controller = Arc::new(super::super::dock_service::Controller::new(
+        let controller = super::super::dock_worker::Controller::new(
             app.profiles.clone(),
-            runtime.clone(),
+            dir.path().to_path_buf(),
+            dir.path().join("missing-resources"),
             true,
-        ));
+        );
         assert!(app.dock.set(controller.clone()).is_ok());
         let status = app.agent_call("get_status", json!({})).unwrap();
         let timing = &status["dock"]["timing"];

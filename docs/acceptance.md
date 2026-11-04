@@ -4,6 +4,22 @@ Current checkpoint: installed0.5.1, cooler data verification and visible continu
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
+## 2026-11-04 dock-worker software gate
+
+Version0.6.0 implements plan2.4.165 core/11 host tests pass (three pre-existing ignored checks), plus62 reader tests.
+Quiet actual-process fixtures verify distinct host/dock/cooler processes, both-way crash isolation, cooler Live continuity,
+fresh latest-page recovery without action replay, host-only profile files, active-action Quit/disable refusal and stdin-EOF
+draining. Native profile tests retain delivered Folder/Back following, imports, A/B persistence and queued-save/import
+tray Quit. Final native MCP, cooler and background-Live/lifetime suites pass. Browser interface/editor/settings/status/
+search/entry checks pass. Independent source review found no remaining actionable issue in the reviewed scope.
+
+Validation exposed and corrected preview deadlines across IPC, launch stdio inheritance, stale/uncertain/generation
+handling, profile retry/application order and cached render-busy refusal of tray Quit. Test fixtures now wait for completed
+saves and retry only explicit transient idle-admission refusals; active-action refusal assertions remain unchanged.
+Whole-repository formatting still reports pre-existing unrelated differences; worker modules and diff whitespace pass.
+These are simulated device/account checks, not new physical-action or live-account acceptance. Packaging/install checks follow.
+The cooler workspace entry delay is separately tracked in [its evidence note](cooler-entry-delay.md).
+
 ## 2026-11-04 cooler data migration
 
 Installed0.5.1 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,

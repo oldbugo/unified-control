@@ -17,6 +17,15 @@ use uc_core::core::App;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The supervised child has no window, tray, MCP server or durable profile
+    // writer. Dispatch before every GUI/single-instance path.
+    if args.iter().any(|a| a == "--dock-worker") {
+        std::process::exit(if uc_core::core::dock_worker::worker_main().is_ok() {
+            0
+        } else {
+            1
+        });
+    }
     // MCP's request-only bridge must never create or focus an application.
     if args.iter().any(|a| a == "--agent-request") {
         std::process::exit(agent_transport::run_request());

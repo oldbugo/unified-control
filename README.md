@@ -3,11 +3,18 @@
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
 the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
 Physical cooler acceptance and remaining dock checks are tracked separately from data migration. Rules: `AGENTS.md` and `CLAUDE.md`.
-Development paused by the user on2026-11-04. [Current handoff](docs/handoff-current.md) · [Scope, goals and ordered next work](docs/project-status.md).
+Development resumed by the user on2026-11-04. [Current handoff](docs/handoff-current.md) · [Scope, goals and ordered next work](docs/project-status.md).
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
-Installed 0.5.1/sourceb67d928 completes the independent cooler data migration, including UC-owned custom source definitions.
+Version0.6.0 separates the dock into a supervised worker. UC retains durable profile storage and editor/MCP coordination;
+the child owns transport, rendering, A/B/folder runtime, actions and usage readers. Editor previews share that reader.
+Crash recovery uses the latest saved layout without replaying actions. Expiry guards cross IPC, and quiescence preserves
+active action recovery during disable/Quit. [Worker contract](docs/device-app/dock-worker.md).
+The separately reported [cooler workspace entry delay](docs/cooler-entry-delay.md) remains open; no retention timer was added.
+Installed0.5.1 remains running until the0.6.0 software/packaging gates finish and the idle-safe update is verified.
+
+Version0.5.1/sourceb67d928 completes the independent cooler data migration, including UC-owned custom source definitions.
 UC's own comparison verifies286 library files (22 originals,6 themes,27 versions),22 byte-identical gallery files and23
 active references, with no missing media or old-folder dependencies. One UC theme edit and two regenerated previews are
 preserved. Settings/companion match; optional lyrics offsets and custom source definitions are absent in this setup.

@@ -67,7 +67,7 @@ pub struct App {
     pub settings: Arc<SettingsStore>,
     pub profiles: Arc<super::profiles::ProfileStore>,
     pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
-    pub dock: OnceLock<Arc<super::dock_service::Controller>>,
+    pub dock: OnceLock<Arc<super::dock_worker::Controller>>,
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
     cooler_config_lock: Mutex<()>,
     cooler_migration_report: Mutex<Value>,
@@ -142,31 +142,35 @@ impl App {
             Arc::new(move |event, payload| cooler_events.cooler(event, payload)),
         );
         let _ = self.cooler.set(cooler.clone());
-        let resources =
-            super::runtime_resources::RuntimeResources::new(&self.base, resource_dir, fake);
-        let controller = Arc::new(super::dock_service::Controller::new(
-            self.profiles.clone(),
-            resources.clone(),
+        // The host keeps assets and read-only discovery resources dormant. Live
+        // rendering, sensors, account readers and actions belong to the child.
+        let resources = super::runtime_resources::RuntimeResources::new(
+            &self.base,
+            resource_dir.clone(),
             fake,
-        ));
+        );
+        let controller = super::dock_worker::Controller::new(
+            self.profiles.clone(),
+            self.base.clone(),
+            resource_dir,
+            fake,
+        );
         let settings = self.settings.load();
         cooler.set_diagnostics(
             settings.0["cooler"]["diagnostics"]
                 .as_bool()
                 .unwrap_or(true),
         );
-        controller
-            .set_brightness(settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8)
-            .map_err(CoreError::new)?;
         self.runtime
             .set(resources)
             .map_err(|_| CoreError::new("Runtime is already initialized"))?;
         self.dock
             .set(controller.clone())
             .map_err(|_| CoreError::new("Dock is already initialized"))?;
-        controller
-            .set_enabled(settings.0["dock"]["enabled"].as_bool().unwrap_or(false))
-            .map_err(CoreError::new)?;
+        controller.start_configured(
+            settings.0["dock"]["enabled"].as_bool().unwrap_or(false),
+            settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
+        );
         if settings.0["cooler"]["enabled"] == true {
             match self.prepare_cooler_storage() {
                 Ok(()) => {
@@ -418,12 +422,12 @@ impl App {
     pub fn dock_state(&self) -> Value {
         let mut value=self.dock.get().map(|dock|serde_json::to_value(dock.status()).unwrap_or_default()).unwrap_or_else(||json!({"state":"disabled","message":"Dock is disabled","enabled":false,"fake":super::buildinfo::fake_device().is_some()}));
         value["brightness"] = self.settings.load().0["dock"]["brightness"].clone();
-        value["usageReaderRunning"] = json!(self
-            .runtime
-            .get()
-            .is_some_and(|runtime| runtime.usage.is_running()));
-        if let Some(runtime) = self.runtime.get() {
-            value["usageStatus"] = runtime.usage_status();
+        if let Some(dock) = self.dock.get() {
+            value["usageStatus"] = dock.usage_status();
+            value["usageReaderRunning"] =
+                json!(value["usageStatus"]["reader"]["code"] == "ready");
+            value["worker"] = dock.worker_status();
+            value["busy"] = json!(dock.busy());
         }
         if let Some(id) = value["currentProfile"].as_str().map(String::from) {
             if let Ok(profiles) = self.profiles.state() {
@@ -443,6 +447,9 @@ impl App {
     }
     pub fn dock_configure(&self, patch: &Value) -> CoreResult<Value> {
         let _guard = self.dock_config_lock.lock().unwrap();
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
         let controller = self
             .dock
             .get()
@@ -454,6 +461,7 @@ impl App {
         {
             return Err(CoreError::new("Invalid dock setting"));
         }
+        let previous = self.settings.load().0["dock"].clone();
         let saved = self
             .settings
             .update(|state| {
@@ -465,12 +473,16 @@ impl App {
                 }
             })
             .map_err(CoreError::from)?;
-        controller
-            .set_brightness(saved.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8)
-            .map_err(CoreError::new)?;
-        controller
-            .set_enabled(saved.0["dock"]["enabled"].as_bool().unwrap_or(false))
-            .map_err(CoreError::new)?;
+        let configured = controller.configure(
+            saved.0["dock"]["enabled"].as_bool().unwrap_or(false),
+            saved.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
+        );
+        if let Err(error) = configured {
+            self.settings
+                .update(|state| state["dock"] = previous.clone())
+                .map_err(CoreError::from)?;
+            return Err(CoreError::new(error));
+        }
         if !saved.0["dock"]["enabled"].as_bool().unwrap_or(false) {
             if let Some(runtime) = self.runtime.get() {
                 runtime.shutdown();
@@ -625,13 +637,23 @@ impl App {
     /// the host and dock usable; a failed helper can restore the cooler engine.
     pub fn prepare_cooler_exit(&self) -> CoreResult<()> {
         let _guard = self.cooler_config_lock.lock().unwrap();
+        let _dock_guard = self.dock_config_lock.lock().unwrap();
         if self.sched.any_visible_job() {
             return Err(CoreError::new("Wait for active jobs before quitting."));
         }
         self.agent_begin_close()?;
         self.closing.store(true, Ordering::SeqCst);
+        if let Some(dock) = self.dock.get() {
+            if let Err(error) = dock.prepare_exit() {
+                self.closing.store(false, Ordering::SeqCst);
+                return Err(CoreError::new(error));
+            }
+        }
         if let Some(cooler) = self.cooler.get() {
             if let Err(error) = cooler.configure(false) {
+                if let Some(dock) = self.dock.get() {
+                    dock.cancel_exit();
+                }
                 self.closing.store(false, Ordering::SeqCst);
                 return Err(error);
             }
@@ -641,6 +663,9 @@ impl App {
     pub fn cancel_cooler_exit(&self) {
         let _guard = self.cooler_config_lock.lock().unwrap();
         self.closing.store(false, Ordering::SeqCst);
+        if let Some(dock) = self.dock.get() {
+            dock.cancel_exit();
+        }
         if self.settings.load().0["cooler"]["enabled"] == true {
             if let Some(cooler) = self.cooler.get() {
                 let _ = cooler.configure(true);

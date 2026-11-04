@@ -168,18 +168,13 @@ pub async fn key_previews(
         return Err(CoreError::new("A dock page has exactly 14 displays"));
     }
     run(&core, move |app| {
-        use super::dock_service::DockHooks;
-        let runtime=app.runtime.get().ok_or_else(||CoreError::new("The app runtime is unavailable"))?;
-        let mut inputs=runtime.inputs();inputs.clock=Some(clock);
-        let mut rendered = Vec::with_capacity(14);
-        for (index, face) in faces.iter().enumerate() {
-            let frame = runtime.render_one(face,index,&inputs).map_err(CoreError::new)?;
-            rendered.push(frame);
-        }
-        let mut frames=Vec::with_capacity(14);let now=super::scheduler::now_ms();
-        for(index,mut frame) in rendered.into_iter().enumerate(){frame.guard_delivery(now).map_err(CoreError::new)?;frames.push(json!({"index":index,"width":frame.width,"height":frame.height,"png":frame.png,"unknown":frame.unknown}));}
-        Ok(Value::Array(frames))
-    }).await
+        app.dock
+            .get()
+            .ok_or_else(|| CoreError::new("The dock worker is unavailable"))?
+            .previews(faces, clock)
+            .map_err(CoreError::new)
+    })
+    .await
 }
 
 #[tauri::command]

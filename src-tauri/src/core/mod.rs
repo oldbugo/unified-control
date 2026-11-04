@@ -14,6 +14,7 @@ pub mod cooler_migration_audit;
 pub mod cooler_transfer;
 pub mod dock_runtime;
 pub mod dock_service;
+pub mod dock_worker;
 pub mod error;
 pub mod jobobject;
 pub mod js;

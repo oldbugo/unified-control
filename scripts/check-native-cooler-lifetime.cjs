@@ -11,6 +11,7 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const env={...process.env,UC_HOME:home,UC_TEST_QUIET:'1',UC_MULTI:'1',UC_FAKE_DEVICE:'1',UC_COOLER_WORKER_EXE:worker,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
   const child=spawn(exe,[],{env,windowsHide:true,stdio:'ignore'}),exit=new Promise(resolve=>child.once('exit',resolve));
   const requestQuit=()=>new Promise((resolve,reject)=>{const request=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});request.once('error',reject);request.once('exit',resolve);});
+  const idleQuit=async()=>{const end=Date.now()+8000;let code;do{code=await requestQuit();if(code!==2)return code;await delay(75);}while(Date.now()<end);return code;};
   let browser,page;
   try{
     for(let i=0;i<100;i++){try{if((await fetch(`http://127.0.0.1:${port}/json/version`)).ok)break;}catch{}await delay(100);}
@@ -64,11 +65,11 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     await cooler('live_set',{patch:{inApp:false}});
     assert.equal((await cooler('app_state')).live.status.running,false,'explicit Live off still stops playback');
     await call('cooler_configure',{enabled:false});
-    assert.equal(await requestQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
+    assert.equal(await idleQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
     console.log('PASS: native fake cooler ownership transfer from editor twin to saved Live; actual section navigation removes iframe while Live survives its watchdog; close-to-tray preserves Live and settings; explicit Live off, device disable and clean Quit still work.');
     console.log(`Isolated evidence: ${home}`);
   }finally{
-    if(child.exitCode===null){await requestQuit();await Promise.race([exit,delay(10000)]);}
+    if(child.exitCode===null){await idleQuit();await Promise.race([exit,delay(10000)]);}
     if(browser)await browser.close();
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});

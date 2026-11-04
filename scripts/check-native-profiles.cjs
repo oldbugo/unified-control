@@ -108,6 +108,10 @@ async function run() {
     await page.locator('#action-kind').selectOption('folder');
     await page.locator('#action-value').selectOption('1');
     await waitForAsync(page,async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.profiles[0].pages.length===2&&state.profiles[0].pages[0].keys[12].value===state.profiles[0].pages[1].id&&state.profiles[0].pages[1].keys[0].action==='back';});
+    // Durable files can be observed before the save job's worker synchronization
+    // and the editor's queued saves finish. Inject input only after that work.
+    await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
+    await waitForAsync(page,async()=>!(await window.__TAURI_INTERNALS__.invoke('activity')).jobs.some(job=>job.kind==='profiles-save'&&['waiting','running'].includes(job.status)));
     assert.equal(await page.locator('#follow-physical-page').isChecked(),true);
     const mainPage=await page.evaluate(async()=>{const {state}=await window.__TAURI_INTERNALS__.invoke('profiles_state');return state.currentPage;});
     await waitForAsync(page,async id=>(await window.__TAURI_INTERNALS__.invoke('dock_state')).currentPage===id,mainPage);
@@ -122,7 +126,10 @@ async function run() {
     await page.waitForFunction(()=>document.getElementById('follow-physical-page')?.checked===false);
     await page.locator('#follow-physical-page').check();
     await waitForAsync(page,async()=>(await window.__TAURI_INTERNALS__.invoke('app_state')).followPhysicalPage===true);
-    await page.evaluate(()=>window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}}));
+    await waitForAsync(page,async()=>{
+      try{await window.__TAURI_INTERNALS__.invoke('dock_configure',{patch:{enabled:false}});return true;}
+      catch(error){if(error.message!=='Dock is busy; try again when idle')throw error;return false;}
+    },undefined,7000);
     await waitForAsync(page,async()=>{const state=await window.__TAURI_INTERNALS__.invoke('dock_state');return state.state==='disabled';});
     await page.locator('[data-page="dock"]').waitFor({state:'hidden'});
     await page.locator('[data-page="general"]').click();
@@ -183,10 +190,18 @@ async function run() {
     assert.ok(fs.existsSync(path.join(home,'assets',`${finalProfile.pages[0].keys[0].b.asset}.png`)));
     console.log('PASS: quiet native WebView; actual IPC/files; picture imports; A/B reload; 14 PNGs; Studio block/reconnect; deduplicated fake presses; delivered physical folder/Back follow without save-back; persisted follow preference; inactive account readers; disable; tray Quit preserves queued edits and pending import. No physical device opened.');
     console.log(`Isolated test data: ${home}`);
+  } catch(error) {
+    console.error('Native profiles primary failure:',error);
+    throw error;
   } finally {
     if(child.exitCode===null) {
-      const quit=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});
-      await new Promise(resolve=>quit.once('exit',resolve));
+      const end=Date.now()+6000;
+      do {
+        const quit=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});
+        const code=await new Promise(resolve=>quit.once('exit',resolve));
+        if(code!==2)break;
+        await delay(75);
+      } while(Date.now()<end);
     }
     const result=await Promise.race([exited,delay(6000).then(()=>null)]);
     fs.writeFileSync(path.join(home,'test-output.log'),logs);

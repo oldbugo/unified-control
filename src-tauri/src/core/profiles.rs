@@ -342,6 +342,7 @@ impl Default for Memory {
 pub struct ProfileStore {
     dir: PathBuf,
     memory: Mutex<Memory>,
+    replica: bool,
 }
 
 impl ProfileStore {
@@ -350,7 +351,30 @@ impl ProfileStore {
         Self {
             dir: base.into().join("profiles"),
             memory: Mutex::new(Memory::default()),
+            replica: false,
         }
+    }
+    /// Worker-only validated snapshot. It never reads or writes profile files.
+    pub fn replica(state: ProfileState) -> Result<Self> {
+        state.validate()?;
+        Ok(Self {
+            dir: PathBuf::new(),
+            memory: Mutex::new(Memory {
+                state: Some(state),
+                ..Memory::default()
+            }),
+            replica: true,
+        })
+    }
+    pub fn replace_replica(&self, state: ProfileState) -> Result<()> {
+        if !self.replica {
+            return Err(invalid("Only a worker replica can be replaced"));
+        }
+        state.validate()?;
+        let mut memory = self.memory.lock().unwrap();
+        memory.state = Some(state);
+        memory.revision = new_id("revision");
+        Ok(())
     }
     pub fn directory(&self) -> &Path {
         &self.dir
@@ -390,6 +414,9 @@ impl ProfileStore {
         state: &ProfileState,
         expected: Option<&str>,
     ) -> Result<(ProfileState, String)> {
+        if self.replica {
+            return Err(invalid("Worker profiles are read-only"));
+        }
         state.validate()?;
         let mut memory = self.memory.lock().unwrap();
         self.load_locked(&mut memory)?; // establish a valid startup backup before the first edit
@@ -676,6 +703,22 @@ pub fn import_preview(value: &Value) -> Result<ProfileState> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_replica_is_validated_read_only_and_file_free() {
+        let first = super::ProfileState::default();
+        let replica = super::ProfileStore::replica(first.clone()).unwrap();
+        assert_eq!(replica.state().unwrap(), first);
+        assert!(replica.directory().as_os_str().is_empty());
+        assert!(replica.save(&first).is_err());
+        let mut replacement = first.clone();
+        replacement.profiles[0].name = "Changed in host".into();
+        replica.replace_replica(replacement.clone()).unwrap();
+        assert_eq!(replica.state().unwrap(), replacement);
+        let mut invalid = first;
+        invalid.version = 99;
+        assert!(replica.replace_replica(invalid).is_err());
+        assert_eq!(replica.state().unwrap(), replacement);
+    }
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
