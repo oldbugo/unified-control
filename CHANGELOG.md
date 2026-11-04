@@ -7,6 +7,9 @@ UC remains the only durable profile writer; the child uses validated memory-only
 with the latest saved layout and never replays button actions. Editor previews share the child reader and preserve
 freshness deadlines through IPC. Quiesce/acknowledgement coordinates busy-safe disable, Quit and updates.
 The cooler worker remains independent. Shared providers and cross-device actions follow in later milestones.
+Installed clean source0117a5f through the idle-safe updater. Startup/newPID, separate dock child, actual MCP0.6.0,
+device reconnection, expected-only proxy marker substitution and unchanged selected fourteen-key page verified.
+165 core/11 host/62 reader tests and relevant headless/quiet native checks pass. PR22 is merged; v0.6.0 pins the build source.
 
 Record the separately reported cooler workspace entry delay. The engine already stays running; repeated interface
 hydration is a possible cost to measure. No warm timer or cooler-entry performance fix is claimed in this release.

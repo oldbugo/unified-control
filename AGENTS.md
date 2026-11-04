@@ -13,7 +13,7 @@ Start with its advertised `uc_get_status` and `uc_get_layout` tools. Use MCP for
 computer use for visual review or a capability gap. Do not claim a tool connection that is not exposed in the current session.
 If the tools are absent, check the registered connection and reload MCP/start a fresh client session as needed.
 
-UC must remain running in its visible tray. Installed0.5.1/sourceb67d928 verifies independent cooler data/Sources migration while preserving UC edits and the original rollback copy. It retains page-entry and background
+UC must remain running in its visible tray. Installed0.6.0/source0117a5f adds a supervised dock worker with host-only durable profiles, latest-layout recovery without action replay and busy-safe quiescence. It retains verified cooler data/Sources migration while preserving UC edits and the original rollback copy, page-entry and background
 Live ownership, General device toggles, enabled-only navigation and UI polish. The user granted standing permission on2026-11-03 to install tested UC
 updates without repeated questions; use the idle-safe updater, defer while busy and verify after the quiet restart.
 Local agent access was enabled by the user and actual Codex model-client read/configuration/undo access was
@@ -26,7 +26,7 @@ AppData profile files directly. No physical action, USB reset or firmware comman
 
 ## Resume safely
 
-Development is paused at the user's 2026-11-04 request. Completed work is consolidated on `main`; immutable release tags identify their original build sources.
+The user resumed development on2026-11-04. Plan2.4 dock-worker extraction is complete; shared services are next. Completed work is consolidated on `main`; immutable release tags identify their original build sources.
 Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall an app
 for documentation changes. Keep the repositories private and user profiles/authentication/local diagnostics out of Git.
 Follow `CLAUDE.md` for quiet simulated testing, idle-safe installation and hardware limits.

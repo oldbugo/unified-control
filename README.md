@@ -12,7 +12,9 @@ the child owns transport, rendering, A/B/folder runtime, actions and usage reade
 Crash recovery uses the latest saved layout without replaying actions. Expiry guards cross IPC, and quiescence preserves
 active action recovery during disable/Quit. [Worker contract](docs/device-app/dock-worker.md).
 The separately reported [cooler workspace entry delay](docs/cooler-entry-delay.md) remains open; no retention timer was added.
-Installed0.5.1 remains running until the0.6.0 software/packaging gates finish and the idle-safe update is verified.
+Installed0.6.0/source0117a5f passed the quiet idle-safe update, startup/newPID, actual MCP, expected-only packaged proxy
+marker change and device reconnection checks. The selected page/all fourteen keys are preserved.165 core/11 host,
+62 reader tests, relevant browser checks and quiet native profile/MCP/dock-worker/cooler/lifetime suites pass.
 
 Version0.5.1/sourceb67d928 completes the independent cooler data migration, including UC-owned custom source definitions.
 UC's own comparison verifies286 library files (22 originals,6 themes,27 versions),22 byte-identical gallery files and23

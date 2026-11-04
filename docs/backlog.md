@@ -1,7 +1,7 @@
 # Current project backlog
 
-Updated2026-11-04. The user resumed development and selected plan2.4 dock-worker extraction first, followed by shared
-providers and cross-device actions. [Scope, phase status and ordered next work](project-status.md) is the current
+Updated2026-11-04. Plan2.4 dock-worker extraction is installed in0.6.0; shared providers and cross-device actions follow.
+[Scope, phase status and ordered next work](project-status.md) is the current
 implementation plan; [handoff](handoff-current.md) is the restart entry point.
 
 ## Installed fixes with remaining acceptance
@@ -16,7 +16,7 @@ implementation plan; [handoff](handoff-current.md) is the restart entry point.
 
 ## Cooler and interface status
 
-- **Open: cooler page entry delay (user-reported2026-11-04).** Returning to the cooler workspace can feel slow, including
+- **Open: [#23 Cooler page entry delay](https://github.com/oldbugo/unified-control/issues/23) (user-reported2026-11-04).** Returning to the cooler workspace can feel slow, including
 rapid navigation. The enabled engine/Live already stays running; the interface is recreated and rehydrates on each entry.
 This is separate from dock-worker extraction. Capture installed entry-stage timings before choosing a fix; a fifteen-minute
 engine-retention timer does not address the identified interface work. [Evidence and next steps](cooler-entry-delay.md).
