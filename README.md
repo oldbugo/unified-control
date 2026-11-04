@@ -3,7 +3,7 @@
 One Windows tray app for the user's devices: the Ulanzi D200H stream dock first, later the CoolerScreen (Lovingcool SC70) and
 the Ulanzi Dial. Private. Combined dock/cooler integration preview with independent enable controls.
 Physical cooler acceptance and remaining dock checks are tracked separately from data migration. Rules: `AGENTS.md` and `CLAUDE.md`.
-Current stand-down and next-session instructions: [0.3.0 handoff](docs/handoff-0.3.0.md).
+Development paused by the user on2026-11-04. [Current handoff](docs/handoff-current.md) · [Scope, goals and ordered next work](docs/project-status.md).
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
@@ -15,6 +15,8 @@ The user confirms existing themes/settings look right and physical Live updates.
 packaged proxy, cooler reconnection and unchanged selected dock page/all14keys verified. General offers a timestamped
 verification result and explicit recheck; normal status reads never scan media.
 [Migration behavior and remaining installer-lineage work](docs/device-app/cooler-migration.md).
+
+## Earlier checkpoints (historical)
 
 Installed0.4.1/sourcebc9a864 removes the automatic firmware check on cooler workspace entry while Live owns the connection, avoiding
 the user-confirmed pause/reconnect on each return. Explicit Check/Reconnect and initial checks with Live off remain.
@@ -66,7 +68,7 @@ Scheduling is unchanged; physical latency and any speedup remain unmeasured.
 
 Headless keyboard/Tab/context checks cover three widths; native profile and MCP integration checks pass with fake devices.
 
-## Current direction (2026-10-30)
+## Earlier direction and implementation history
 
 User direction on 2026-11-02: add an agent-agnostic MCP interface. The 0.3.0 checkpoint provides seven tools for status,
 scoped layouts, monitor discovery, preview, revision-checked apply, last-agent-write undo and job status. It uses the running

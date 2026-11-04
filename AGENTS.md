@@ -4,7 +4,7 @@ This repository is the combined device app. The separate Ulanzi Toolkit reposito
 
 1. Read `C:/Users/pc/Documents/knowledge-vault/Start here.md` in full and perform its safe remote-refresh check.
 2. Read `CLAUDE.md` and `README.md` in full. Their standing user instructions apply to this repository.
-3. Read `docs/handoff-0.3.0.md` for the current checkpoint and unresolved work.
+3. Read `docs/handoff-current.md` and `docs/project-status.md` for the current pause checkpoint and ordered next work.
 
 ## Use the running app through MCP
 
@@ -26,7 +26,7 @@ AppData profile files directly. No physical action, USB reset or firmware comman
 
 ## Resume safely
 
-The completed 0.3.0 work is consolidated on `main`; immutable release tags identify their original build sources.
-Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall 0.3.0
+Development is paused at the user's 2026-11-04 request. Completed work is consolidated on `main`; immutable release tags identify their original build sources.
+Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall an app
 for documentation changes. Keep the repositories private and user profiles/authentication/local diagnostics out of Git.
 Follow `CLAUDE.md` for quiet simulated testing, idle-safe installation and hardware limits.

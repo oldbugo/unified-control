@@ -1,4 +1,8 @@
-# Dock acceptance status
+# Device acceptance evidence
+
+Current checkpoint: installed0.5.1, cooler data verification and visible continuity pass for the user's setup.
+[Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
+and older unresolved/approval-pending statements are superseded by later results.
 
 ## 2026-11-04 cooler data migration
 
@@ -79,7 +83,7 @@ cooler workspace screenshot was inspected. Release build/package passed from cle
 remains0.3.5. Physical feel remains separate acceptance. Whole-repository Rust formatting has pre-existing unrelated
 differences (UC core/autostart.rs; cooler benches/media_bench.rs); diff and JavaScript syntax checks pass.
 
-## Previous installed checkpoint
+## Historical installed checkpoint:0.3.5
 
 Updated2026-11-02. Installed/running0.3.5, code source89fbe5d. User approved the idle-safe update; new startup/PID,
 actual MCP version, packaged proxy identity, dock reconnection and unchanged selected profile/page/all14keys verified.
@@ -120,7 +124,10 @@ the89fbe5d commit. No source-code modification occurred during the build.
 | Sleep/resume | Deferred at the user's request; cannot do this now. Remains pending and will be revisited later. |
 | Editor usability/scaling | Headless checks at three widths and native profile/MCP checks pass. Installed0.3.2 retains keyboard focus and selected-display context on Undo; removed-page/disabled-control/outside-focus safeguards tested. Full user review pending. Minor preview flicker tracked below. |
 
-## Cooler integration preview
+## Historical cooler integration preview:0.2.x
+
+The following incident describes2026-11-01. Later manual recovery, physical Live confirmation and0.5.1 real-data
+verification are recorded above; this is not the current USB or migration state.
 
 Current recurring-failure incident: initial normal USB nodes had problem0 while writes timed out before any successful Live connection in the retained UC session. One exact user-approved USB port cycle was accepted but failed recovery; post-reset Windows reports matched descriptor failure43. User cannot access the screen USB cable now, so physical reconnect is deferred. 0.2.1 background diagnostics are installed and verified producing non-simulated local records. No initiating cause or recovery pass is claimed. [Evidence and monitoring](cooler-connection-health.md), [issue9](https://github.com/oldbugo/unified-control/issues/9).
 
