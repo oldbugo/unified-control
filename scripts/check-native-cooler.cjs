@@ -12,6 +12,8 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
   const child=spawn(exe,[],{env,windowsHide:true,stdio:'ignore'});let browser,page;
   const exit=new Promise(resolve=>child.once('exit',resolve));
   const requestQuit=()=>new Promise((resolve,reject)=>{const p=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});p.once('error',reject);p.once('exit',resolve);});
+  // Cached idle status is not a shutdown lease: a dock render can start next.
+  const idleQuit=async()=>{const end=Date.now()+8000;let code;do{code=await requestQuit();if(code!==2)return code;await delay(75);}while(Date.now()<end);return code;};
   try{
     for(let n=0;n<100;n++){try{if((await fetch(`http://127.0.0.1:${port}/json/version`)).ok)break;}catch{}await delay(150);}
     browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
@@ -90,7 +92,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     await waitNative(async()=>!(await window.__TAURI_INTERNALS__.invoke('cooler_state')).busy);
     await call('cooler_configure',{enabled:false});
     assert.equal((await call('cooler_state')).enabled,false);
-    assert.equal(await requestQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
+    assert.equal(await idleQuit(),0);assert.equal(await Promise.race([exit,delay(10000).then(()=>{throw Error('Quiet host did not quit');})]),0);
     const healthLog=path.join(home,'devices','cooler','connection-health.jsonl');assert.ok(fs.existsSync(healthLog));assert.ok(fs.readFileSync(healthLog,'utf8').trim().split('\n').every(line=>JSON.parse(line).health));
     console.log('PASS: quiet native UC/worker IPC; embedded themes UI; background health while window closed; diagnostics opt-out; chunked file import; staged-import Quit refusal; saved Live settings; worker crash/restart leaves dock connected; sidebar Home/dock navigation while preview cleanup is held; early cooler exit removes frame; disable/clean Quit. Fake devices only.');
     console.log(`Isolated evidence: ${home}`);
@@ -102,7 +104,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
       if(window.__nativeCoolerReceive)CoolerPanel.prototype.receive=window.__nativeCoolerReceive;
       await Promise.allSettled((window.__heldCoolerCleanup||[]).splice(0).map(release=>release()));
     }).catch(()=>{});
-    if(child.exitCode===null){await requestQuit();await Promise.race([exit,delay(10000)]);}
+    if(child.exitCode===null){await idleQuit();await Promise.race([exit,delay(10000)]);}
     if(browser)await browser.close();
   }
 })().catch(e=>{console.error(e);process.exitCode=1;});

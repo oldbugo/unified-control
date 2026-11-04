@@ -1,6 +1,6 @@
 # Project scope and next work
 
-Updated 2026-11-04. Development is paused at the user's request. Resume only when asked.
+Updated 2026-11-04. The user resumed development and selected dock-worker separation first.
 This is the current project overview; older dated records remain evidence, not current task lists.
 
 ## Goal and boundaries
@@ -16,6 +16,10 @@ installation or delete its data as a cleanup step. It remains the rollback copy.
 Installed UC **0.5.1**, source `b67d9289ae129456bb879012710009eb391c6690`, immutable tag `v0.5.1`.
 The implementation and installation evidence are merged through PR20. Later documentation commits do not change this build.
 
+Version0.6.0 implements plan2.4 in a supervised dock process with host-only durable profiles, guarded IPC previews,
+latest-layout recovery without action replay and busy-safe shutdown. Software/native gates are being completed;
+0.5.1 remains installed until the validated update. Shared services are next after this milestone.
+
 | Area | Current result |
 | --- | --- |
 | Dock software | Profiles/pages, fourteen displays, strict two-face A/B, editing/autosave/undo, action adapters, keepalive/reconnect and Studio ownership protection are implemented. |
@@ -26,7 +30,8 @@ The implementation and installation evidence are merged through PR20. Later docu
 | Cooler data | App-owned verification passes286 library files,22 gallery files and23 active references. No missing media or old-root dependencies. One UC theme edit/two regenerated previews retained; original rollback data kept. |
 | Shell | Home/status cards, sidebar search, General device switches, enabled-only navigation, unframed cooler pane and overall polish are installed. Remaining visual review is acceptance/refinement work. |
 
-Latest software gate:155 core and11 host tests pass, with three pre-existing ignored checks; relevant headless and quiet native suites pass.
+Latest0.6.0 software gate:165 core and11 host tests plus62 reader tests pass, with three pre-existing ignored checks;
+relevant headless and quiet native worker/profile/MCP/cooler/lifetime suites pass.
 Touched Rust files are formatted. Whole-repository formatting still has unrelated existing differences.
 See [acceptance evidence](acceptance.md), [functional follow-ups](function-failures.md) and [migration contract](device-app/cooler-migration.md).
 
@@ -37,7 +42,7 @@ they do not authorize device tests while the user is away.
 
 | Order | Existing plan | Concrete outcome and completion check |
 | --- | --- | --- |
-| 1 | 2.4 Dock worker | Move dock driver/rendering/profile runtime/actions behind a supervised worker boundary. Preserve profile storage, MCP/editor coordination, usage freshness, input deduplication and busy-safe Quit. Quiet crash/restart tests must show cooler Live and host remain usable. This is the next coding task. |
+| 1 | 2.4 Dock worker | Implemented in0.6.0; finish release/installed verification. Host-only durable profiles, freshness, A/B/input safeguards and quiet two-way worker crash isolation are retained. [Contract](device-app/dock-worker.md). |
 | 2 | 2.6 Shared services | Collect enabled sensor/now-playing/weather/AI readings once and supply only interested workers. Preserve opt-in settings and account/freshness safeguards; no new always-on reader by default. |
 | 3 | 2.7 Cross-device actions | Dock keys select cooler themes, next/previous, Live on/off and brightness through named worker operations. Verify physical result and reflected cooler UI state with the user. |
 | 4 | 2.8 Installer replacement | Data migration is done for the current setup. Define/test installer lineage, rollback and retirement of the separate CoolerScreen install after dependencies are ready. Retain untouched rollback data. |

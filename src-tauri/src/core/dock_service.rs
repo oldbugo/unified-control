@@ -6,13 +6,13 @@ use super::{
     key_render::{render_face, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState, ProfileStore},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     io,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -34,7 +34,7 @@ pub trait DockHooks: Send + Sync {
     fn active_profile(&self, state: &ProfileState, enabled: bool);
     fn execute(&self, action: &PendingAction) -> Result<(), String>;
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockStatus {
     pub state: String,
@@ -53,7 +53,7 @@ pub struct DockStatus {
 }
 /// Fixed-size numerical diagnostics only. Receipt starts at the host's completed
 /// poll, not at the physical press; preceding events are not a queue-depth claim.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockTimings {
     pub polls: u64,
@@ -68,7 +68,7 @@ pub struct DockTimings {
     pub last_render: RenderTimings,
     pub last_navigation: Option<NavigationTiming>,
 }
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NavigationTiming {
     pub receipt_to_delivery_us: u64,
@@ -90,6 +90,7 @@ struct Shared {
     enabled: AtomicBool,
     brightness: AtomicU8,
     revision: AtomicU64,
+    applied_revision: AtomicU64,
     stop: AtomicBool,
     fake_studio: AtomicBool,
     writing: AtomicBool,
@@ -97,6 +98,8 @@ struct Shared {
     queued_actions: AtomicUsize,
     action_epoch: AtomicU64,
     fake: bool,
+    admission: RwLock<()>,
+    quiesced: AtomicBool,
 }
 impl Shared {
     fn status(&self) -> DockStatus {
@@ -119,7 +122,10 @@ impl Shared {
         }
     }
     fn safe_to_act(&self) -> bool {
-        if self.stop.load(Ordering::SeqCst) || !self.enabled.load(Ordering::SeqCst) {
+        if self.stop.load(Ordering::SeqCst)
+            || self.quiesced.load(Ordering::SeqCst)
+            || !self.enabled.load(Ordering::SeqCst)
+        {
             return false;
         }
         // Re-read admission after the potentially slower process snapshot.
@@ -178,6 +184,7 @@ impl Controller {
             enabled: AtomicBool::new(false),
             brightness: AtomicU8::new(50),
             revision: AtomicU64::new(0),
+            applied_revision: AtomicU64::new(u64::MAX),
             stop: AtomicBool::new(false),
             fake_studio: AtomicBool::new(false),
             writing: AtomicBool::new(false),
@@ -185,6 +192,8 @@ impl Controller {
             queued_actions: AtomicUsize::new(0),
             action_epoch: AtomicU64::new(0),
             fake,
+            admission: RwLock::new(()),
+            quiesced: AtomicBool::new(false),
         });
         let (tx, rx) = mpsc::sync_channel(32);
         let (actions, action_rx) = mpsc::sync_channel(16);
@@ -227,6 +236,32 @@ impl Controller {
         self.shared.revision.fetch_add(1, Ordering::SeqCst);
         let _ = self.tx.try_send(Control::Wake);
     }
+    /// A worker RPC acknowledges a profile update only after the active runtime
+    /// consumes it. Disabled/blocked engines have no admitted input to race.
+    pub fn sync_profiles_changed(&self) -> Result<(), String> {
+        let revision = self
+            .shared
+            .revision
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        let _ = self.tx.try_send(Control::Wake);
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            if self.shared.applied_revision.load(Ordering::SeqCst) == revision
+                || !self.shared.enabled.load(Ordering::SeqCst)
+                || matches!(self.status().state.as_str(), "blocked" | "error")
+            {
+                return Ok(());
+            }
+            if self.shared.stop.load(Ordering::SeqCst) {
+                return Err("Dock worker is stopping".into());
+            }
+            if Instant::now() >= until {
+                return Err("Dock layout is saved but runtime synchronization is pending".into());
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
     pub fn status(&self) -> DockStatus {
         self.shared.status()
     }
@@ -235,7 +270,38 @@ impl Controller {
             || self.shared.action_busy.load(Ordering::SeqCst)
             || self.shared.queued_actions.load(Ordering::SeqCst) > 0
     }
+    /// Close admission under the same lock used by render/transfer and actions.
+    /// A busy refusal leaves admission unchanged; no active work is truncated.
+    pub fn prepare_exit(&self) -> Result<(), String> {
+        let until = Instant::now() + Duration::from_millis(500);
+        loop {
+            if self.shared.action_busy.load(Ordering::SeqCst)
+                || self.shared.queued_actions.load(Ordering::SeqCst) > 0
+            {
+                return Err("Dock is busy; try again when idle".into());
+            }
+            if let Ok(_admission) = self.shared.admission.try_write() {
+                if self.shared.action_busy.load(Ordering::SeqCst)
+                    || self.shared.queued_actions.load(Ordering::SeqCst) > 0
+                {
+                    return Err("Dock is busy; try again when idle".into());
+                }
+                self.shared.quiesced.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+            if Instant::now() >= until {
+                return Err("Dock is busy; try again when idle".into());
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    pub fn cancel_exit(&self) {
+        self.shared.quiesced.store(false, Ordering::SeqCst);
+    }
     pub fn simulate_button(&self, index: usize, pressed: bool) -> Result<(), String> {
+        if self.shared.quiesced.load(Ordering::SeqCst) || self.shared.stop.load(Ordering::SeqCst) {
+            return Err("Dock action admission is closed".into());
+        }
         if !self.shared.fake {
             return Err("Simulated buttons are available only with a fake dock".into());
         }
@@ -285,11 +351,20 @@ fn action_loop(
     completed: SyncSender<Completion>,
 ) {
     while let Ok(job) = rx.recv() {
+        let _admission = shared.admission.read().unwrap();
         shared.action_busy.store(true, Ordering::SeqCst);
         shared.queued_actions.fetch_sub(1, Ordering::SeqCst);
         let executed = shared.action_epoch.load(Ordering::SeqCst) == job.epoch
             && shared.safe_to_act()
             && shared.action_epoch.load(Ordering::SeqCst) == job.epoch;
+        if executed && cfg!(debug_assertions) && shared.fake {
+            let delay = std::env::var("UC_DOCK_TEST_ACTION_DELAY_MS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(10_000);
+            thread::sleep(Duration::from_millis(delay));
+        }
         let failed = executed && hooks.execute(&job.action).is_err();
         // Do not log action values or errors supplied by integrations.
         let _ = completed.try_send(Completion {
@@ -587,6 +662,9 @@ impl Worker {
                 self.abort_navigation();
                 self.shared.action_epoch.fetch_add(1, Ordering::SeqCst);
                 self.revision = revision;
+                self.shared
+                    .applied_revision
+                    .store(revision, Ordering::SeqCst);
                 self.next_render = now;
                 self.flash = [None; 14];
                 self.activity(self.dock.is_some());
@@ -599,6 +677,11 @@ impl Worker {
         }
     }
     fn step(&mut self, now: Instant) {
+        let shared = self.shared.clone();
+        let _admission = shared.admission.read().unwrap();
+        if shared.quiesced.load(Ordering::SeqCst) {
+            return;
+        }
         self.step_inner(now);
         self.shared.status.lock().unwrap().timing = self.timing.clone();
     }
@@ -1057,6 +1140,42 @@ mod native {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prepared_exit_waits_for_transient_render_then_closes_admission() {
+        let (_dir, store, hooks) = setup();
+        hooks.hold_render.store(true, Ordering::SeqCst);
+        let c = Controller::new(store, hooks.clone(), true);
+        c.set_enabled(true).unwrap();
+        wait(|| hooks.renders.load(Ordering::SeqCst) > 0);
+        let release = hooks.clone();
+        let released = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(80));
+            release.hold_render.store(false, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let result = c.prepare_exit();
+        released.join().unwrap();
+        result.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        assert!(c.simulate_button(0, true).is_err());
+        assert_eq!(hooks.calls.load(Ordering::SeqCst), 0);
+        c.shutdown();
+    }
+    #[test]
+    fn prepared_exit_closes_action_admission_and_cancel_restores_it() {
+        let (_dir, store, hooks) = setup();
+        let c = Controller::new(store, hooks.clone(), true);
+        c.set_enabled(true).unwrap();
+        wait(|| c.status().pages_sent == 1);
+        wait(|| c.prepare_exit().is_ok());
+        assert!(c.status().enabled);
+        assert!(c.simulate_button(0, true).is_err());
+        assert_eq!(hooks.calls.load(Ordering::SeqCst), 0);
+        c.cancel_exit();
+        c.simulate_button(0, true).unwrap();
+        wait(|| hooks.calls.load(Ordering::SeqCst) == 1);
+        c.shutdown();
+    }
     use super::*;
     struct Hooks {
         calls: AtomicUsize,
@@ -1170,6 +1289,7 @@ mod tests {
             enabled: AtomicBool::new(true),
             brightness: AtomicU8::new(50),
             revision: AtomicU64::new(0),
+            applied_revision: AtomicU64::new(u64::MAX),
             stop: AtomicBool::new(false),
             fake_studio: AtomicBool::new(false),
             writing: AtomicBool::new(false),
@@ -1177,6 +1297,8 @@ mod tests {
             queued_actions: AtomicUsize::new(0),
             action_epoch: AtomicU64::new(0),
             fake: true,
+            admission: RwLock::new(()),
+            quiesced: AtomicBool::new(false),
         });
         let (actions, _action_rx) = mpsc::sync_channel(16);
         let (_completed, complete_rx) = mpsc::sync_channel(16);
@@ -1565,6 +1687,8 @@ mod tests {
         c.simulate_button(0, true).unwrap();
         wait(|| hooks.calls.load(Ordering::SeqCst) == 1);
         assert!(c.busy());
+        assert!(c.prepare_exit().is_err());
+        assert!(c.status().enabled);
         c.simulate_button(0, false).unwrap();
         c.simulate_button(0, true).unwrap();
         wait(|| c.shared.queued_actions.load(Ordering::SeqCst) > 0);

@@ -1,8 +1,8 @@
 # Current project backlog
 
-Updated2026-11-04. Development is paused. [Scope, phase status and ordered next work](project-status.md) is the current
-implementation plan; [handoff](handoff-current.md) is the restart entry point. The next coding task is plan2.4 dock-worker
-extraction, followed by shared providers and cross-device actions. No feature work starts during this cleanup checkpoint.
+Updated2026-11-04. The user resumed development and selected plan2.4 dock-worker extraction first, followed by shared
+providers and cross-device actions. [Scope, phase status and ordered next work](project-status.md) is the current
+implementation plan; [handoff](handoff-current.md) is the restart entry point.
 
 ## Installed fixes with remaining acceptance
 
@@ -15,6 +15,11 @@ extraction, followed by shared providers and cross-device actions. No feature wo
 | [#7 Monitor Toggle](https://github.com/oldbugo/unified-control/issues/7) | Installed0.2.3 path fix, user-confirmed working on the selected Dell target. Broader action/monitor/audio combinations remain acceptance work. This is not an unimplemented feature. |
 
 ## Cooler and interface status
+
+- **Open: cooler page entry delay (user-reported2026-11-04).** Returning to the cooler workspace can feel slow, including
+rapid navigation. The enabled engine/Live already stays running; the interface is recreated and rehydrates on each entry.
+This is separate from dock-worker extraction. Capture installed entry-stage timings before choosing a fix; a fifteen-minute
+engine-retention timer does not address the identified interface work. [Evidence and next steps](cooler-entry-delay.md).
 
 - 0.3.5 permits leaving an unavailable/loading cooler without waiting for transient preview cleanup. Saves/imports and
 full disable/Quit cleanup remain guarded. Software/native held-cleanup tests pass; unavailable-device navigation feel

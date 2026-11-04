@@ -596,6 +596,11 @@ impl ActionPlatform for WindowsPlatform<'_> {
             // Direct CreateProcess through std; no shell and no UAC elevation verb.
             std::process::Command::new(&spec.path)
                 .args(&spec.args)
+                // User applications must not inherit the dock worker's private
+                // command/reply pipes or keep them alive after worker exit.
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
                 .map_err(|_| "The selected app could not be started as the current user")?;
             Ok(())

@@ -13,7 +13,7 @@ use ulanzi_dock::{
 
 /// Bounded stage durations for the most recent render pass. The transfer stage
 /// includes ZIP construction and all transport writes; it is not USB latency.
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderTimings {
     pub faces_rendered: u64,

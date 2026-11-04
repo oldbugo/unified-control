@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-11-04
+
+Move the dock driver, renderer, profile runtime, native actions and account reader into a supervised process.
+UC remains the only durable profile writer; the child uses validated memory-only snapshots. A replacement starts
+with the latest saved layout and never replays button actions. Editor previews share the child reader and preserve
+freshness deadlines through IPC. Quiesce/acknowledgement coordinates busy-safe disable, Quit and updates.
+The cooler worker remains independent. Shared providers and cross-device actions follow in later milestones.
+
+Record the separately reported cooler workspace entry delay. The engine already stays running; repeated interface
+hydration is a possible cost to measure. No warm timer or cooler-entry performance fix is claimed in this release.
+
 ## 0.5.1 — 2026-11-04
 
 Complete cooler data migration verification while preserving UC edits and original rollback data. UC-owned custom source
