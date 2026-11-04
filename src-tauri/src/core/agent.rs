@@ -603,7 +603,102 @@ impl App {
 fn cooler_status(cooler: &Value) -> Value {
     json!({"enabled":cooler["enabled"],"state":cooler["state"],"busy":cooler["busy"],"engineVersion":cooler["engineVersion"],
         "diagnosticsEnabled":cooler["diagnosticsEnabled"]==true,
-        "lastHealthSample":super::cooler_health::agent_health(&cooler["health"])})
+        "lastHealthSample":super::cooler_health::agent_health(&cooler["health"]),
+        "migration":migration_status(&cooler["migration"])})
+}
+
+fn migration_status(value: &Value) -> Value {
+    let state = value["state"]
+        .as_str()
+        .filter(|v| {
+            [
+                "complete",
+                "attention",
+                "checking",
+                "not_checked",
+                "not_required",
+            ]
+            .contains(v)
+        })
+        .unwrap_or("not_checked");
+    let code = value["code"]
+        .as_str()
+        .filter(|v| {
+            [
+                "verified",
+                "incomplete",
+                "changed_during_audit",
+                "source_missing",
+                "audit_failed",
+                "receipt_write_failed",
+                "migration_setup_failed",
+                "new_setup",
+                "sources_pending",
+                "verification_cancelled",
+            ]
+            .contains(v)
+        })
+        .unwrap_or("not_checked");
+    let mut result = json!({"state":state,"code":code,"verified":state=="complete"&&value["verified"]==true,
+        "migrationVersion":value["migrationVersion"].as_u64().unwrap_or(0),"originalKept":value["originalKept"]==true});
+    if let Some(timestamp) = value["checkedAt"].as_str().filter(|s| {
+        s.len() == 24
+            && s.is_ascii()
+            && s.as_bytes()[4] == b'-'
+            && s.as_bytes()[7] == b'-'
+            && s.as_bytes()[10] == b'T'
+            && s.ends_with('Z')
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || b"-T:.Z".contains(&b))
+    }) {
+        result["checkedAt"] = json!(timestamp);
+    }
+    for section in ["library", "gallery"] {
+        if value[section].is_object() {
+            let mut counts = json!({});
+            for key in [
+                "sourceFiles",
+                "targetFiles",
+                "sourceBytes",
+                "targetBytes",
+                "missingFiles",
+                "additionalFiles",
+                "identicalFiles",
+                "changedRecords",
+                "changedMediaFiles",
+                "changedPreviews",
+                "originals",
+                "themes",
+                "versions",
+            ] {
+                counts[key] = json!(value[section][key].as_u64().unwrap_or(0));
+            }
+            result[section] = counts;
+        }
+    }
+    if value["references"].is_object() {
+        for key in ["checked", "oldDependencies", "missing", "external"] {
+            result["references"][key] = json!(value["references"][key].as_u64().unwrap_or(0));
+        }
+    }
+    for key in ["unreadableRecords", "unstableFiles"] {
+        if let Some(count) = value[key].as_u64() {
+            result[key] = json!(count);
+        }
+    }
+    if value["settings"].is_object() {
+        result["settings"] = json!({"sourcePresent":value["settings"]["sourcePresent"]==true,"targetPresent":value["settings"]["targetPresent"]==true,"changedSections":value["settings"]["changedSections"].as_u64().unwrap_or(0)});
+    }
+    if value["lyricsOffsets"].is_object() {
+        result["lyricsOffsets"] = json!({"sourcePresent":value["lyricsOffsets"]["sourcePresent"]==true,"targetPresent":value["lyricsOffsets"]["targetPresent"]==true,"changed":value["lyricsOffsets"]["changed"].as_u64().unwrap_or(0)});
+    }
+    if let Some(count) = value["companionChanged"].as_u64() {
+        result["companionChanged"] = json!(count);
+    }
+    if value["sourcePlugins"].is_object() {
+        result["sourcePlugins"] = json!({"imported":value["sourcePlugins"]["imported"]==true,"folderPresent":value["sourcePlugins"]["folderPresent"]==true,"copiedFilesAtImport":value["sourcePlugins"]["copiedFilesAtImport"].as_u64().unwrap_or(0)});
+    }
+    result
 }
 
 #[cfg(test)]
@@ -641,6 +736,27 @@ mod tests {
         assert!(app
             .agent_call("get_status", json!({"unknown":true}))
             .is_err());
+    }
+
+    #[test]
+    fn migration_status_only_exposes_finite_cached_counts() {
+        let value = json!({"state":"complete","verified":true,"code":"verified","migrationVersion":2,
+            "originalKept":true,"checkedAt":"2026-11-03T11:00:00.000Z","privatePath":"secret",
+            "library":{"sourceFiles":286,"targetFiles":286,"raw":"secret"},
+            "references":{"oldDependencies":0,"details":"secret"},
+            "sourcePlugins":{"imported":true,"folderPresent":true,"copiedFilesAtImport":0,"path":"secret"}});
+        let public = migration_status(&value);
+        assert_eq!(public["verified"], true);
+        assert_eq!(public["library"]["sourceFiles"], 286);
+        assert!(!public.to_string().contains("secret"));
+        assert_eq!(
+            migration_status(&json!({"state":"secret","verified":true,"checkedAt":"secret"}))
+                ["verified"],
+            false
+        );
+        assert!(migration_status(&json!({"checkedAt":"secret"}))
+            .get("checkedAt")
+            .is_none());
     }
     #[test]
     fn cooler_status_keeps_current_worker_separate_from_cached_health_and_read_is_inert() {

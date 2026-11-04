@@ -60,6 +60,7 @@ fn main() {
         "editor_quit_ready",
         "dock_state",
         "cooler_state",
+        "cooler_migration_verify",
         "cooler_configure",
         "cooler_call",
         "dock_configure",

@@ -70,6 +70,8 @@ pub struct App {
     pub dock: OnceLock<Arc<super::dock_service::Controller>>,
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
     cooler_config_lock: Mutex<()>,
+    cooler_migration_report: Mutex<Value>,
+    cooler_migration_job: Mutex<Option<String>>,
     pub(crate) closing: AtomicBool,
     dock_config_lock: Mutex<()>,
     pub sched: Scheduler,
@@ -91,6 +93,12 @@ impl App {
             Policy::default(),
             Arc::new(SinkAdapter(events.clone())),
         );
+        let migration_report = super::cooler_migration_audit::read_receipt(
+            &base.join("cooler-migration-verification.json"),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| json!({"state":"not_checked","verified":false}));
         let app = Arc::new(App {
             agent: super::agent::AgentState::default(),
             settings: settings.clone(),
@@ -99,6 +107,8 @@ impl App {
             dock: OnceLock::new(),
             cooler: OnceLock::new(),
             cooler_config_lock: Mutex::new(()),
+            cooler_migration_report: Mutex::new(migration_report),
+            cooler_migration_job: Mutex::new(None),
             closing: AtomicBool::new(false),
             dock_config_lock: Mutex::new(()),
             sched,
@@ -157,15 +167,207 @@ impl App {
         controller
             .set_enabled(settings.0["dock"]["enabled"].as_bool().unwrap_or(false))
             .map_err(CoreError::new)?;
-        if settings.0["cooler"]["enabled"] == true
-            && self.base.join("devices/cooler/migration.json").is_file()
-        {
-            let _ = cooler.configure(true);
+        if settings.0["cooler"]["enabled"] == true {
+            match self.prepare_cooler_storage() {
+                Ok(()) => {
+                    let _ = cooler.configure(true);
+                    if !self.migration_verified_before() {
+                        let _ = self.verify_cooler_migration();
+                    }
+                }
+                Err(_) => {
+                    *self.cooler_migration_report.lock().unwrap() = json!({"state":"attention","verified":false,"code":"migration_setup_failed"});
+                }
+            }
         }
         Ok(())
     }
     pub fn cooler_state(&self) -> Value {
-        self.cooler.get().map(|cooler|cooler.status()).unwrap_or_else(||json!({"enabled":false,"state":"disabled","message":"Cooler screen is disabled","busy":false}))
+        let mut state = self.cooler.get().map(|cooler|cooler.status()).unwrap_or_else(||json!({"enabled":false,"state":"disabled","message":"Cooler screen is disabled","busy":false}));
+        // Scheduler state only: status never reopens or scans migration files.
+        let current = self.cooler_migration_job.lock().unwrap();
+        let mut cached = self.cooler_migration_report.lock().unwrap();
+        if cached["state"] == "checking"
+            && current.as_ref().is_some_and(|id| {
+                self.sched
+                    .job(id)
+                    .map(|job| job.state.finished())
+                    .unwrap_or(true)
+            })
+        {
+            *cached = json!({"state":"attention","verified":false,"code":"verification_cancelled","checkedAt":crate::device::log::iso_now()});
+        }
+        let migration = cached.clone();
+        drop(cached);
+        drop(current);
+        if migration["code"] == "migration_setup_failed"
+            && self.settings.load().0["cooler"]["enabled"] == true
+            && state["enabled"] == false
+        {
+            state["enabled"] = json!(true);
+            state["state"] = json!("blocked");
+            state["message"] =
+                json!("The cooler import needs attention. Existing files were preserved.");
+        }
+        state["migration"] = migration;
+        state
+    }
+
+    fn cooler_storage_paths(&self) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        if super::buildinfo::fake_device().is_some() {
+            return (
+                self.base.join("test-empty-cooler-source"),
+                self.base.join("devices/cooler"),
+                self.base.join("test-empty-gallery"),
+                self.base.join("test-empty-sources"),
+            );
+        }
+        let documents = dirs::document_dir().unwrap_or_else(|| self.base.clone());
+        (
+            self.base
+                .parent()
+                .unwrap_or(&self.base)
+                .join("CoolerScreen"),
+            self.base.join("devices/cooler"),
+            documents.join("CoolerScreen/Gallery"),
+            documents.join("CoolerScreen/Sources"),
+        )
+    }
+
+    fn prepare_cooler_storage(&self) -> CoreResult<()> {
+        let (source, target, gallery, plugins) = self.cooler_storage_paths();
+        if !super::buildinfo::fake_device().is_some() && super::cooler::other_app_running() {
+            return Err(CoreError::coded(
+                "cooler_owned",
+                "Close CoolerScreen from its tray before importing its data.",
+            ));
+        }
+        self.run_task(
+            TaskSpec::new(
+                "cooler-import",
+                "Preparing cooler settings and library",
+                super::scheduler::Resources::one(super::scheduler::Res::Io),
+            )
+            .visible(),
+            move |_| {
+                super::cooler_migration::prepare(&source, &target, &gallery)?;
+                super::cooler_migration::upgrade_sources(&plugins, &target)?;
+                Ok(json!({"ok":true}))
+            },
+        )?;
+        Ok(())
+    }
+
+    fn migration_verified_before(&self) -> bool {
+        let report = self.cooler_migration_report.lock().unwrap();
+        report["reportVersion"] == 1
+            && report["migrationVersion"] == 2
+            && ((report["state"] == "complete" && report["verified"] == true)
+                || report["state"] == "not_required")
+    }
+
+    /// Compare in the host's own data namespace. Status reads only expose the
+    /// cached receipt; this explicit job never opens a physical device.
+    pub fn verify_cooler_migration(&self) -> CoreResult<Value> {
+        let (source, target, gallery, _) = self.cooler_storage_paths();
+        self.verify_cooler_migration_paths(source, target, gallery)
+    }
+    fn verify_cooler_migration_paths(
+        &self,
+        source: PathBuf,
+        target: PathBuf,
+        gallery: PathBuf,
+    ) -> CoreResult<Value> {
+        let _admission = self.cooler_config_lock.lock().unwrap();
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let mut current = self.cooler_migration_job.lock().unwrap();
+        if let Some(id) = current.as_ref() {
+            if self.sched.job(id).is_some_and(|job| !job.state.finished()) {
+                return Ok(json!({"jobId":id}));
+            }
+        }
+        let receipt = self.base.join("cooler-migration-verification.json");
+        // Invalidate any previous success before admission. Pending survives
+        // cancellation or a failed receipt write, including across restarts.
+        super::cooler_migration_audit::begin_receipt(&receipt)?;
+        *self.cooler_migration_report.lock().unwrap() =
+            json!({"state":"checking","verified":false});
+        let app = self.arc();
+        let job = self.sched.submit(
+            TaskSpec::new(
+                "cooler-migration-check",
+                "Verifying cooler migration",
+                super::scheduler::Resources::one(super::scheduler::Res::Io),
+            )
+            .visible(),
+            move |ctx| {
+                for _ in 0..300 {
+                    if !app.cooler.get().is_some_and(|cooler| cooler.busy()) {
+                        break;
+                    }
+                    ctx.sleep(Duration::from_millis(100))?;
+                }
+                ctx.check()?;
+                let import = super::cooler_migration::migration_summary(&target).ok();
+                let ready = import.as_ref().is_some_and(|v| {
+                    v["version"] == 2
+                        && v["sourcePlugins"]["imported"] == true
+                        && v["sourcePlugins"]["folderPresent"] == true
+                });
+                let mut report = if !ready {
+                    json!({"verified":false,"code":"sources_pending"})
+                } else if import
+                    .as_ref()
+                    .is_some_and(|v| v["copiedExisting"] == false)
+                {
+                    json!({"verified":false,"code":"new_setup","state":"not_required"})
+                } else if app.cooler.get().is_some_and(|cooler| cooler.busy()) {
+                    json!({"verified":false,"code":"audit_failed"})
+                } else {
+                    match super::cooler_migration_audit::audit_with_cancel(
+                        &source,
+                        &target,
+                        &gallery,
+                        || ctx.check(),
+                    ) {
+                        Ok(report) => report,
+                        Err(error) if error.is_cancelled() => return Err(error),
+                        Err(_) => json!({"verified":false,"code":"audit_failed"}),
+                    }
+                };
+                ctx.check()?;
+                report["reportVersion"] = json!(1);
+                if report["state"] != "not_required" {
+                    report["state"] = json!(if report["verified"] == true {
+                        "complete"
+                    } else {
+                        "attention"
+                    });
+                }
+                report["checkedAt"] = json!(crate::device::log::iso_now());
+                report["migrationVersion"] = json!(import
+                    .as_ref()
+                    .and_then(|v| v["version"].as_u64())
+                    .unwrap_or(0));
+                report["originalKept"] =
+                    json!(import.as_ref().is_some_and(|v| v["originalKept"] == true));
+                if let Some(import) = import {
+                    report["sourcePlugins"] = import["sourcePlugins"].clone();
+                }
+                if super::cooler_migration_audit::write_receipt(&receipt, &report).is_err() {
+                    report["verified"] = json!(false);
+                    report["state"] = json!("attention");
+                    report["code"] = json!("receipt_write_failed");
+                }
+                *app.cooler_migration_report.lock().unwrap() = report.clone();
+                app.events.app_changed();
+                Ok(report)
+            },
+        );
+        *current = Some(job.id.clone());
+        Ok(json!({"jobId":job.id}))
     }
     pub fn cooler_configure(&self, enabled: bool) -> CoreResult<Value> {
         if self.closing.load(Ordering::SeqCst) {
@@ -180,38 +382,8 @@ impl App {
             .get()
             .ok_or_else(|| CoreError::new("Cooler engine is unavailable"))?
             .clone();
-        if enabled && !self.base.join("devices/cooler/migration.json").is_file() {
-            if !super::buildinfo::fake_device().is_some() && super::cooler::other_app_running() {
-                return Err(CoreError::coded("cooler_owned","Close CoolerScreen from its tray before enabling its engine in Unified Control."));
-            }
-            let source = if super::buildinfo::fake_device().is_some() {
-                self.base.join("test-empty-cooler-source")
-            } else {
-                self.base
-                    .parent()
-                    .unwrap_or(&self.base)
-                    .join("CoolerScreen")
-            };
-            let target = self.base.join("devices/cooler");
-            let gallery = if super::buildinfo::fake_device().is_some() {
-                self.base.join("test-empty-gallery")
-            } else {
-                dirs::document_dir()
-                    .unwrap_or_else(|| self.base.clone())
-                    .join("CoolerScreen/Gallery")
-            };
-            self.run_task(
-                TaskSpec::new(
-                    "cooler-import",
-                    "Preparing cooler settings and library",
-                    super::scheduler::Resources::one(super::scheduler::Res::Io),
-                )
-                .visible(),
-                move |_| {
-                    super::cooler_migration::prepare(&source, &target, &gallery)?;
-                    Ok(json!({"ok":true}))
-                },
-            )?;
+        if enabled {
+            self.prepare_cooler_storage()?;
         }
         let old = self.settings.load().0["cooler"]["enabled"]
             .as_bool()
@@ -219,8 +391,8 @@ impl App {
         self.settings
             .update(|s| s["cooler"]["enabled"] = json!(enabled))
             .map_err(CoreError::from)?;
-        let state = match cooler.configure(enabled) {
-            Ok(state) => state,
+        match cooler.configure(enabled) {
+            Ok(_) => {}
             Err(error) => {
                 self.settings
                     .update(|s| s["cooler"]["enabled"] = json!(old))
@@ -228,7 +400,11 @@ impl App {
                 return Err(error);
             }
         };
-        Ok(state)
+        drop(_guard);
+        if enabled && !self.migration_verified_before() {
+            let _ = self.verify_cooler_migration();
+        }
+        Ok(self.cooler_state())
     }
     pub fn cooler_call(&self, command: &str, args: Value) -> CoreResult<Value> {
         if self.closing.load(Ordering::SeqCst) {
@@ -448,8 +624,11 @@ impl App {
     /// Stop cooler admission before preparing a relaunch helper. Refusal leaves
     /// the host and dock usable; a failed helper can restore the cooler engine.
     pub fn prepare_cooler_exit(&self) -> CoreResult<()> {
-        self.agent_begin_close()?;
         let _guard = self.cooler_config_lock.lock().unwrap();
+        if self.sched.any_visible_job() {
+            return Err(CoreError::new("Wait for active jobs before quitting."));
+        }
+        self.agent_begin_close()?;
         self.closing.store(true, Ordering::SeqCst);
         if let Some(cooler) = self.cooler.get() {
             if let Err(error) = cooler.configure(false) {
@@ -507,6 +686,165 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = App::new(dir.path(), Arc::new(NoEvents), "0.0.0");
         (dir, a)
+    }
+
+    #[test]
+    fn migration_verification_job_preserves_data_and_caches_its_receipt() {
+        let (dir, app) = app();
+        let old = dir.path().join("old");
+        let gallery = dir.path().join("old-gallery");
+        let target = app.base.join("devices/cooler");
+        std::fs::create_dir_all(old.join("library/item")).unwrap();
+        std::fs::create_dir_all(&gallery).unwrap();
+        std::fs::write(gallery.join("clip.bin"), b"original media").unwrap();
+        std::fs::write(
+            old.join("settings.json"),
+            serde_json::to_vec(&json!({"galleryDir":gallery})).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            old.join("library/item/original.json"),
+            serde_json::to_vec(&json!({"file":gallery.join("clip.bin")})).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(old.join("library/item/theme.json"), b"{\"widgets\":[]}").unwrap();
+        super::super::cooler_migration::prepare(&old, &target, &gallery).unwrap();
+        super::super::cooler_migration::upgrade_sources(&dir.path().join("no-plugins"), &target)
+            .unwrap();
+        let edited = b"{\"widgets\":[{\"kind\":\"clock\"}]}";
+        std::fs::write(target.join("library/item/theme.json"), edited).unwrap();
+        let source_before = std::fs::read(old.join("settings.json")).unwrap();
+        let job = app
+            .verify_cooler_migration_paths(old.clone(), target.clone(), gallery)
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app
+            .sched
+            .job(job["jobId"].as_str().unwrap())
+            .is_some_and(|job| !job.state.finished())
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let report = app.cooler_state()["migration"].clone();
+        assert_eq!(report["verified"], true, "{report}");
+        assert_eq!(report["library"]["changedRecords"], 1);
+        assert_eq!(
+            std::fs::read(target.join("library/item/theme.json")).unwrap(),
+            edited
+        );
+        assert_eq!(
+            std::fs::read(old.join("settings.json")).unwrap(),
+            source_before
+        );
+        let reopened = App::new(&app.base, Arc::new(NoEvents), "test");
+        assert_eq!(reopened.cooler_state()["migration"], report);
+        assert!(
+            !reopened.sched.any_visible_job(),
+            "reading the receipt never launches verification"
+        );
+    }
+
+    #[test]
+    fn migration_requires_owned_sources_and_persists_failed_recheck() {
+        let (dir, app) = app();
+        let old = dir.path().join("old");
+        let gallery = dir.path().join("gallery");
+        let target = app.base.join("devices/cooler");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("settings.json"), b"{}").unwrap();
+        super::super::cooler_migration::prepare(&old, &target, &gallery).unwrap();
+        let wait = |value: Value| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !app
+                .sched
+                .job(value["jobId"].as_str().unwrap())
+                .unwrap()
+                .state
+                .finished()
+            {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait(
+            app.verify_cooler_migration_paths(old.clone(), target.clone(), gallery.clone())
+                .unwrap(),
+        );
+        assert_eq!(app.cooler_state()["migration"]["code"], "sources_pending");
+        super::super::cooler_migration::upgrade_sources(&dir.path().join("no-sources"), &target)
+            .unwrap();
+        wait(
+            app.verify_cooler_migration_paths(old.clone(), target.clone(), gallery.clone())
+                .unwrap(),
+        );
+        assert_eq!(app.cooler_state()["migration"]["verified"], true);
+        std::fs::remove_file(target.join("settings.json")).unwrap();
+        wait(
+            app.verify_cooler_migration_paths(old, target, gallery)
+                .unwrap(),
+        );
+        assert_eq!(app.cooler_state()["migration"]["verified"], false);
+        let reopened = App::new(&app.base, Arc::new(NoEvents), "test");
+        assert_eq!(reopened.cooler_state()["migration"]["verified"], false);
+        assert!(!reopened.migration_verified_before());
+    }
+
+    #[test]
+    fn migration_cancelled_while_queued_is_retryable_and_blocks_exit_admission() {
+        let (dir, app) = app();
+        let gate = app.sched.submit(
+            TaskSpec::new("io-gate", "fixture", Resources::none().with(Res::Io, 8)),
+            |ctx| loop {
+                ctx.sleep(Duration::from_millis(10))?;
+            },
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.sched.job(&gate.id).unwrap().state != super::super::scheduler::JobState::Running {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let target = app.base.join("devices/cooler");
+        let old = dir.path().join("no-old");
+        let gallery = dir.path().join("no-gallery");
+        super::super::cooler_migration::prepare(&old, &target, &gallery).unwrap();
+        super::super::cooler_migration::upgrade_sources(&dir.path().join("no-sources"), &target)
+            .unwrap();
+        let value = app
+            .verify_cooler_migration_paths(old.clone(), target.clone(), gallery.clone())
+            .unwrap();
+        let id = value["jobId"].as_str().unwrap();
+        assert_eq!(
+            app.sched.job(id).unwrap().state,
+            super::super::scheduler::JobState::Queued
+        );
+        assert!(app.prepare_cooler_exit().is_err());
+        assert!(!app.closing.load(Ordering::SeqCst));
+        assert!(app.sched.cancel(id));
+        assert_eq!(
+            app.cooler_state()["migration"]["code"],
+            "verification_cancelled"
+        );
+        let reopened = App::new(&app.base, Arc::new(NoEvents), "test");
+        assert_eq!(reopened.cooler_state()["migration"]["state"], "not_checked");
+        assert!(app.sched.cancel(&gate.id));
+        gate.wait().unwrap_err();
+        let retry = app
+            .verify_cooler_migration_paths(old, target, gallery)
+            .unwrap();
+        while !app
+            .sched
+            .job(retry["jobId"].as_str().unwrap())
+            .unwrap()
+            .state
+            .finished()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.cooler_state()["migration"]["state"], "not_required");
+        app.prepare_cooler_exit().unwrap();
+        assert!(app.verify_cooler_migration().is_err());
     }
 
     #[test]

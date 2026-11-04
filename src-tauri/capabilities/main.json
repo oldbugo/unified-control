@@ -27,6 +27,7 @@
     "allow-editor-quit-ready",
     "allow-dock-state",
     "allow-cooler-state",
+    "allow-cooler-migration-verify",
     "allow-cooler-configure",
     "allow-cooler-call",
     "allow-dock-configure",

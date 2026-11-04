@@ -101,6 +101,7 @@ fn main() {
             cc::key_previews,
             cc::dock_state,
             cc::cooler_state,
+            cc::cooler_migration_verify,
             cc::cooler_configure,
             cc::cooler_call,
             cc::dock_configure,

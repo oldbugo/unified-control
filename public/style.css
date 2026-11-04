@@ -213,6 +213,11 @@ h2 { letter-spacing:-.02em; }
 .device-setting-copy .setting-status { color:#91a6c0;font-size:11px; }
 .device-setting-control { display:flex;align-items:center;flex:none; }
 .device-advanced { padding:0 24px;background:#131b25; }
+.cooler-migration { display:flex;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid var(--border); }
+.cooler-migration > div { flex:1;min-width:0; }
+.cooler-migration strong { font-size:12px;font-weight:600; }
+.cooler-migration p { margin-top:5px;line-height:18px; }
+@media(max-width:650px){.cooler-migration{flex-wrap:wrap;padding:18px 20px}.cooler-migration>div{min-width:180px}}
 .device-advanced > summary { cursor:pointer;color:#aabbd0;font-size:12px;padding:14px 0; }
 .device-advanced .dock-controls { border:0;padding:0 0 18px;margin:0; }
 .settings-note { font-size:12px;margin-top:12px; }

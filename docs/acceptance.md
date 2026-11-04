@@ -1,5 +1,39 @@
 # Dock acceptance status
 
+## 2026-11-04 cooler data migration
+
+Installed0.5.1 adds V2 source-definition ownership and a host-side cancellable comparison. Original settings, library,
+gallery and lyrics offsets are retained; newer UC edits are never overwritten. General shows a historical verification
+summary and explicit button; MCP exposes only cached counts/flags. Pending receipts invalidate stale success on cancelled,
+failed or interrupted checks. [Contract and rollback limits](device-app/cooler-migration.md).
+
+Software checks:155 core/11 host tests pass (three pre-existing ignored checks), focused streaming cancellation/receipt/
+lyrics/migration cases, headless interface/cooler/settings suites and quiet native migration/cooler/lifetime/MCP checks.
+Native migration exercises the actual General command permission and receipt; the fake worker deliberately uses NoSources,
+so that fixture verifies copied definitions but does not claim actual catalog discovery. A worker launch-contract test
+verifies the explicit owned Sources environment; the pinned engine's real catalog consumes that override.
+Independent review found cancellation and evicted-job status problems; both were corrected and reviewed again.
+Touched Rust files pass rustfmt; whole-repo fmt remains blocked by existing unrelated formatting differences.
+0.5.0/sourcebeb3888 installed through the quiet idle-safe updater; startup/newPID39464 and actualMCP0.5 verified.
+The app-owned comparison found286 library files,22 byte-identical gallery files, no missing files/old-root/missing
+references, unchanged settings/companion and owned empty Sources. It flagged two generated preview images alongside
+one edited UC theme. Engine writes confirm theme-card.png/theme-preview.png are derived.0.5.1 counts exactly these
+three direct theme preview filenames separately, preserving strict Gallery/nested/original media checks. Focused tests,
+independent review and native General recheck with a changed preview pass. No real data is overwritten for a pass.
+Selected profile/page/all14keys and inventory remain unchanged (revision changes on restart). Cooler Live reconnected
+with normal USB/no holds/errors; dock correctly remains blocked while Studio runs. Final0.5.1/sourceb67d928 installed through the idle-safe updater; startup/newPID, actualMCP0.5.1 and expected-only
+three-byte NSIS marker difference in the installed request proxy verified. App-owned comparison at2026-11-04T00:50:41.939Z
+passes:286 library files,22 originals,6 themes,27 versions;22 byte-identical gallery files;23 active references; zero
+missing files, changed original media, old-root dependencies, missing references, unreadable records or unstable files.
+It preserves one UC theme record change and two generated preview changes. Settings/companion match, no lyrics offsets
+exist in either copy, and the owned Sources folder has zero imported definitions. The user answered “Yes, everything
+looks right” when asked about existing UC themes/settings and physical Live updating. This is current-setup continuity,
+not every original phase2 release gate. Live reports connected/no holds/no errors and normal USB; selected profile/page/
+all14keys and inventory remain unchanged. Standalone installation/data remain as rollback; installer-lineage replacement,
+broader architecture and release checks remain open. Installer SHA256
+`92BCF727195BDDF66B9D74046CE6F8EB3B94015C1D64A5557B616ADAD466A803`; request proxy SHA256
+`6B8195722D191352FC55A7175C2BB7A10966F4D608D9B5E30D7DA7E289C9A690`.
+
 ## 2026-11-03 cooler workspace return
 
 Installed0.4.0/sourceb18a4a1 passed startup/newPID/MCP0.4/engine4.18.2, expected-only packaged proxy marker change and
