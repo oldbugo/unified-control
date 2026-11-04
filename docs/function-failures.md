@@ -1,8 +1,10 @@
 # Reported dock function failures
 
-User-reported 2026-11-01: AI Usage and Monitor Toggle did not work. User direction 2026-11-02 prioritizes Monitor Toggle for immediate use. AI Usage remains unresolved; UI refinement follows integration.
+Current status at the2026-11-04 pause: Monitor Toggle is user-confirmed working after0.2.3. The AI Usage reader launch defect is fixed in0.3.1, with both providers verified beyond the freshness cutoff and observed transient recovery. Remaining usage work is physical/account-state acceptance and reliability follow-up, not an unimplemented reader. See [ordered project work](project-status.md).
 
-Private follow-ups: [AI Usage #6](https://github.com/oldbugo/unified-control/issues/6) remains unresolved. [Monitor Toggle #7](https://github.com/oldbugo/unified-control/issues/7) is now user-confirmed working after the 0.2.3 path fix.
+Historical report,2026-11-01: AI Usage and Monitor Toggle did not work. The diagnosis and fixes below retain their dates.
+
+Private follow-ups: [AI Usage #6](https://github.com/oldbugo/unified-control/issues/6) retains physical/account-state acceptance and reliability follow-up. [Monitor Toggle #7](https://github.com/oldbugo/unified-control/issues/7) is now user-confirmed working after the 0.2.3 path fix.
 
 ## Monitor Toggle
 

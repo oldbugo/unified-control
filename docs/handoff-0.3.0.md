@@ -1,5 +1,7 @@
 # UC 0.3.0 stand-down and next-session handoff
 
+**Historical only.** Use [the current handoff](handoff-current.md) and [project status](project-status.md) for resuming.
+
 Checkpoint: 2026-11-02 (Australia/Sydney). Feature development is stood down at 0.3.0. The installed app stays running.
 
 **Superseded checkpoint:** Work resumed later on 2026-11-02. Actual Codex model-client MCP read/preview/apply/undo checks

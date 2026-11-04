@@ -1,52 +1,46 @@
-# Dock follow-up backlog
+# Current project backlog
 
-Installed 0.5.1 verifies the remaining cooler data migration: custom source definitions become UC-owned; General can
-verify the copied data without touching USB or rescanning on status reads. Actual286 library/22 gallery files pass;
-the user confirms theme/settings continuity and physical Live. Original data is retained as rollback.
-Installer-lineage replacement and the broader phase 2 release gates remain separate. [Details](device-app/cooler-migration.md).
+Updated2026-11-04. Development is paused. [Scope, phase status and ordered next work](project-status.md) is the current
+implementation plan; [handoff](handoff-current.md) is the restart entry point. The next coding task is plan2.4 dock-worker
+extraction, followed by shared providers and cross-device actions. No feature work starts during this cleanup checkpoint.
 
-2026-11-03: user reports manual cooler Reconnect recovered Live, but physical Live stops when leaving its page.0.4.0
-prepares worker ownership/retirement fixes, General-only device enable switches, enabled-only Home/sidebar/search,
-an unframed cooler pane and overall UI polish. Simulated tests are distinct from installed physical acceptance.
+## Installed fixes with remaining acceptance
 
-Cooler navigation regression reported2026-11-02 on0.3.4: entering an unavailable cooler could delay switching sections.
-Fix installed in0.3.5: do not await transient USB preview cleanup on section navigation; retain saves/imports and full
-shutdown guards, leave still-loading frames, remove the iframe on exit and avoid idle cleanup request flooding.
-Startup/version, dock/provider reconnection and preserved layout verified; user feel remains pending. [Evidence/background cost](cooler-connection-health.md).
-
-Planned phase2.5 sidebar search is installed in0.3.4. It filters page names and fixed related terms without saving or
-navigating; Enter uses the existing guarded page activation. Three-width/compact keyboard, focus and filtering checks,
-plus native Search-to-General/cooler/dock navigation, pass. Closing compact search restores every page; active filters stay
-visible across compact resizing. User review remains separate from these software checks.
-
-User feedback on 0.1.4, 2026-10-31. Folder and Back are confirmed functional. Updated 2026-11-01: preview fixes and virtual page following are built and software-tested for 0.1.5; user-visible verification remains pending.
-
-| Item | Priority and next check |
+| Item | Current result and next check |
 | --- | --- |
-| [#3: preview flashes during polling and text entry](https://github.com/oldbugo/unified-control/issues/3) | Nonblocking bug. Polling fix is prepared in source: keep unchanged decoded images and decode replacements before swapping. Text input also rebuilds the entire dock into an HTML fallback, which can flash at a different apparent scale; extend the native typing path to retain decoded key nodes. Regress latest text persistence/render requests and delayed decoding, then verify the next installed build. |
-| [#5: virtual view follows physical page changes](https://github.com/oldbugo/unified-control/issues/5) | Requested behavior. Physical Test/folder and Back must update the virtual page, page strip and previews without a manual editor click. Preserve pending edits and avoid status-follow/save feedback loops. Current status updates only the On dock header; the preview uses the editor-selected page. Account for the difference between logical navigation and completed physical image delivery. |
-| [#4: improve Folder/Back response time](https://github.com/oldbugo/unified-control/issues/4) | Performance investigation. User estimates about one second; improvement if practical. No deliberate one-second navigation wait exists. Measure input receipt, handling, provider acquisition/rendering, all fourteen PNGs, ZIP creation and final transfer before optimizing. Compare static/usage pages and editor open/closed. Record only timings/counts. Preserve freshness/provenance checks, response probes, keepalive and input deduplication. No hardware latency target has been established. |
+| [#3 Preview flicker](https://github.com/oldbugo/unified-control/issues/3) | Fixed/installed in0.1.5: retain unchanged decoded images, decode replacements before swapping, and keep preview nodes during typing. Browser/native tests pass. Remaining: user confirmation of installed preview/typing feel; investigate only a reproduced remaining fault. |
+| [#5 Physical page following](https://github.com/oldbugo/unified-control/issues/5) | Implemented/installed in0.1.5, using successfully delivered physical page IDs, saved opt-out and pending-edit/import/save safeguards. Native fake Folder/Back/persistence checks pass. Remaining: explicit user confirmation that the virtual dock follows physical navigation correctly. |
+| [#4 Folder/Back response](https://github.com/oldbugo/unified-control/issues/4) | Watch item. User reports three Test/Back cycles feel responsive on0.3.2. Numerical timing and held-render/ACK-burst fixtures are installed; no scheduling optimization or measured speedup is claimed. Reopen investigation on a reproduced delay with a fresh baseline. |
+| [#6 AI Usage](https://github.com/oldbugo/unified-control/issues/6) | Reader launch fixed/installed in0.3.1; both providers refreshed beyond five minutes, and a transient Codex failure recovered. Remaining: physical gauges, exact account-panel comparison, account-switch/logout and reliability follow-up. Unknown/stale/unverified readings must suppress numbers. |
+| [#7 Monitor Toggle](https://github.com/oldbugo/unified-control/issues/7) | Installed0.2.3 path fix, user-confirmed working on the selected Dell target. Broader action/monitor/audio combinations remain acceptance work. This is not an unimplemented feature. |
 
-The renderer runs before input polling and builds all fourteen faces before transferring a navigated page; shared usage helper calls can block. These are identified code paths, not a measured cause of the physical delay. Reuse frames only with the existing freshness/account safeguards intact.
+## Cooler and interface status
 
-Physical retest on0.3.2,2026-11-02: the user reports three Test/Back cycles feel responsive. Live MCP recorded six completed
-navigations, zero aborted and a latest host-receipt-to-transfer duration of72.44ms. Earlier durations are unavailable;
-the bounded capture missed the presses. No code scheduling change or measured speedup is attributed to this result.
-Keep the older delay report as a watch item; this sample does not call for a speculative performance change.
+- 0.3.5 permits leaving an unavailable/loading cooler without waiting for transient preview cleanup. Saves/imports and
+full disable/Quit cleanup remain guarded. Software/native held-cleanup tests pass; unavailable-device navigation feel
+is not automatically established by a later healthy-screen check.
+- 0.4.0 installs background Live ownership, General device toggles, enabled-only Home/sidebar/search, an unframed cooler
+workspace and shell polish. User confirms physical Live survives leaving the page and closing UC to the tray.
+- 0.4.1 skips repeat automatic firmware checks while Live owns the screen. Repeated-entry software/native checks pass;
+explicit user confirmation of smooth reentry remains separate from the general theme/settings/Live check.
+- 0.5.1 verifies independent cooler data/Sources migration while preserving UC edits and the original rollback copy.
+Actual286 library/22 gallery files and23 active references pass. The user confirms existing themes/settings and physical Live.
 
-Read-only follow-up on 2026-11-02: the worker consumes one inbound event per loop after rendering, so queued ACK/heartbeat
-messages are another plausible delay. A Folder/Back event schedules rendering immediately. The next measurement batch
-should record bounded durations/counts for polling, provider input, face rendering, ZIP creation and transfer, then compare
-static/usage pages with the editor open/closed. Add fake held-render and ACK-burst fixtures before changing scheduling.
-Preserve post-render admission, expiry-at-delivery, strict A/B/input deduplication, folder history, keepalive/probes,
-fresh reconnect rendering and page-status publication only after successful delivery. No timings or speedup are claimed.
+Remaining interface work: installed scaling/usability review, further cooler styling, and the original General update,
+privacy and diagnostics-export surfaces. Keep these separate from already-delivered shell/search/device-switch work.
+Broader Live/Embedded transitions and combined recovery remain acceptance/release work. Installer-lineage replacement
+is still open; original CoolerScreen installation/data remain rollback. [Migration contract](device-app/cooler-migration.md).
 
-Version 0.3.2 adds fixed-size numerical timing diagnostics to dock state and MCP status: input preparation,
-face rendering (including any usage-helper wait), delivery preparation, combined ZIP creation/transport writes, poll gaps
-and non-button event counts. The last completed navigation spans host receipt to successful delivery; it cannot measure
-physical press-to-host delay. Counts before a button are not measured queue depth. A cadence-limited log retains the same
-summary without profile names, IDs, action values or account data. Fake held-render, FIFO ACK/heartbeat burst and abort
-fixtures check attribution without changing scheduling. These diagnostics are installed in 0.3.2; hardware timing and
-any optimization remain pending. [Capture guide](navigation-timing.md).
+## Navigation evidence and boundaries
 
-Issues #3 and #5 are implemented for 0.1.5. Native text input retains decoded nodes until the latest requested frame is decoded. Virtual page following uses successfully delivered page IDs, has a saved opt-out, waits for active edits/imports/saves and never saves observational navigation back. Browser checks cover these guards; quiet native fake IPC verifies Folder/Back following and preference persistence. Physical confirmation remains pending. Issue #4 remains an investigation; no navigation speedup is claimed. Sleep/resume is deferred at the user's request.
+The older roughly-one-second Folder/Back report is historical. The0.3.2 retest records six completed navigations, zero
+aborted, with only the latest72.44ms host-receipt-to-transfer sample retained. The capture missed those presses, so there
+is no average, measured improvement or physical pixel latency. Input preparation/provider waits, face rendering,
+delivery preparation, combined ZIP/transfer work, poll gaps and non-button events are now instrumented.
+
+If a delay recurs, compare static/usage pages with the editor open/closed using bounded durations/counts. Preserve
+account/freshness/expiry-at-delivery gates, strict A/B/input deduplication, folder history, keepalive/probes, fresh reconnect
+rendering and page publication after successful delivery. [Capture guide](navigation-timing.md).
+
+Sleep/resume is explicitly deferred. Real dock checks need the user to quit Studio; UC must not close it for them.
+Claude model-client MCP acceptance, physical-action MCP tools and Dial remain open as listed in the project status.

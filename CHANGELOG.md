@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1 — 2026-11-04
+
+Complete cooler data migration verification while preserving UC edits and original rollback data. UC-owned custom source
+definitions replace the old default-folder dependency. General offers a cancellable app-owned comparison and historical
+summary; MCP reads cached finite counts without scanning. Atomic bounded receipts invalidate older success during interruption.
+Generated theme previews are counted separately from original media; missing media and stale active paths still fail.
+Installed sourceb67d928, startup/MCP/proxy/reconnection/layout verified. Actual286 library/22 gallery files and23 references
+pass; user confirms themes/settings and physical Live.155 core/11 host and relevant headless/native checks pass.
+
+## 0.5.0 — 2026-11-04
+
+Introduce copy-once V2 source-definition migration and host-side data comparison. The real-data check conservatively
+flags two changed generated previews, corrected in0.5.1. Original files and UC edits are preserved throughout.
+
+
 ## 0.4.1 — 2026-11-03
 
 Opening the cooler workspace no longer interrupts an active Live stream with another automatic firmware check.
