@@ -27,6 +27,7 @@
     "allow-editor-quit-ready",
     "allow-dock-state",
     "allow-hardware-test-control",
+    "allow-services-test-control",
     "allow-cooler-state",
     "allow-cooler-migration-verify",
     "allow-cooler-configure",

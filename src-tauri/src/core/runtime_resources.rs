@@ -77,19 +77,32 @@ pub struct RuntimeResources {
     shared_hardware: bool,
     hardware: Mutex<super::hardware::Receiver>,
     local_sensor_polls: std::sync::atomic::AtomicU64,
+    shared_usage: bool,
+    usage_receiver: Mutex<super::shared_usage::Receiver>,
+    usage_physical: Mutex<Vec<super::shared_usage::RenderSpec>>,
+    usage_recent: Mutex<Vec<(super::shared_usage::RenderSpec, Instant)>>,
 }
 impl RuntimeResources {
     pub fn new(home: &Path, resource_dir: PathBuf, fake: bool) -> Arc<Self> {
-        Self::with_hardware_mode(home, resource_dir, fake, false)
+        Self::with_hardware_mode(home, resource_dir, fake, false, false)
     }
     pub fn new_shared(home: &Path, resource_dir: PathBuf, fake: bool) -> Arc<Self> {
-        Self::with_hardware_mode(home, resource_dir, fake, true)
+        Self::with_hardware_mode(home, resource_dir, fake, true, false)
+    }
+    pub fn new_shared_services(
+        home: &Path,
+        resource_dir: PathBuf,
+        fake: bool,
+        shared_usage: bool,
+    ) -> Arc<Self> {
+        Self::with_hardware_mode(home, resource_dir, fake, true, shared_usage)
     }
     fn with_hardware_mode(
         home: &Path,
         resource_dir: PathBuf,
         fake: bool,
         shared_hardware: bool,
+        shared_usage: bool,
     ) -> Arc<Self> {
         let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let resources = if cfg!(debug_assertions) {
@@ -130,7 +143,59 @@ impl RuntimeResources {
             shared_hardware,
             hardware: Mutex::new(super::hardware::Receiver::default()),
             local_sensor_polls: std::sync::atomic::AtomicU64::new(0),
+            shared_usage,
+            usage_receiver: Mutex::new(super::shared_usage::Receiver::default()),
+            usage_physical: Mutex::new(Vec::new()),
+            usage_recent: Mutex::new(Vec::new()),
         })
+    }
+    pub fn usage_exchange(
+        &self,
+        batch: Option<super::shared_usage::Batch>,
+    ) -> Result<Value, String> {
+        if !self.shared_usage {
+            return Err("Shared usage mode is disabled".into());
+        }
+        if let Some(batch) = batch {
+            self.usage_receiver
+                .lock()
+                .unwrap()
+                .accept(batch, super::scheduler::now_ms())?;
+        }
+        Ok(json!({"demand":self.usage_demand(),"state":self.usage_state()}))
+    }
+    pub fn usage_demand(&self) -> super::shared_usage::Demand {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return super::shared_usage::Demand::default();
+        }
+        let providers = self.providers.lock().unwrap().clone();
+        let mut renders = self.usage_physical.lock().unwrap().clone();
+        let mut recent = self.usage_recent.lock().unwrap();
+        recent
+            .retain(|(_, at)| at.elapsed() < Duration::from_millis(super::shared_usage::LEASE_MS));
+        for (spec, _) in recent.iter().rev() {
+            if renders.len() >= super::shared_usage::MAX_SPECS {
+                break;
+            }
+            if !renders.contains(spec) {
+                renders.push(spec.clone());
+            }
+        }
+        renders.retain(|spec| {
+            providers
+                .iter()
+                .any(|p| p.provider == spec.provider && (spec.view != "tokens" || p.token_history))
+        });
+        super::shared_usage::Demand { providers, renders }
+    }
+    pub fn usage_state(&self) -> Value {
+        let mut state = self
+            .usage_receiver
+            .lock()
+            .unwrap()
+            .status(&self.providers.lock().unwrap(), super::scheduler::now_ms());
+        state["shared"] = json!(self.shared_usage);
+        state
     }
     pub fn hardware_exchange(
         &self,
@@ -173,6 +238,9 @@ impl RuntimeResources {
         self.enabled.store(false, Ordering::SeqCst);
         self.providers.lock().unwrap().clear();
         self.usage.shutdown();
+        self.usage_receiver.lock().unwrap().clear();
+        self.usage_physical.lock().unwrap().clear();
+        self.usage_recent.lock().unwrap().clear();
         *self.usage_diagnostics.lock().unwrap() = UsageDiagnostics::default();
         self.sampler
             .lock()
@@ -182,6 +250,9 @@ impl RuntimeResources {
     /// Sanitized diagnostics only; inspecting this never activates a source or
     /// returns quota numbers, account identifiers, filesystem paths or raw errors.
     pub fn usage_status(&self) -> Value {
+        if self.shared_usage {
+            return self.usage_state();
+        }
         let diagnostics = self.usage_diagnostics.lock().unwrap();
         json!({"reader":{"code":diagnostics.reader_code,"message":diagnostics.reader_message},"providers":diagnostics.providers})
     }
@@ -208,7 +279,7 @@ impl RuntimeResources {
         }
     }
     fn ensure_reader(&self) {
-        if self.fake || !self.enabled.load(Ordering::SeqCst) {
+        if self.shared_usage || self.fake || !self.enabled.load(Ordering::SeqCst) {
             return;
         }
         let _activation = self.activation.lock().unwrap();
@@ -253,6 +324,39 @@ impl RuntimeResources {
             _ => None,
         };
         if let Some(provider) = provider {
+            if self.shared_usage {
+                if self.enabled.load(Ordering::SeqCst) {
+                    if let Some(spec) = super::shared_usage::RenderSpec::from_face(face, index) {
+                        let selected = self.providers.lock().unwrap().iter().any(|p| {
+                            p.provider == provider && (spec.view != "tokens" || p.token_history)
+                        });
+                        if selected {
+                            let mut recent = self.usage_recent.lock().unwrap();
+                            recent.retain(|(_, at)| {
+                                at.elapsed() < Duration::from_millis(super::shared_usage::LEASE_MS)
+                            });
+                            if let Some((_, at)) = recent.iter_mut().find(|(s, _)| *s == spec) {
+                                *at = Instant::now();
+                            } else {
+                                if recent.len() >= super::shared_usage::MAX_SPECS {
+                                    recent.remove(0);
+                                }
+                                recent.push((spec.clone(), Instant::now()));
+                            }
+                            drop(recent);
+                            if let Some(frame) = self
+                                .usage_receiver
+                                .lock()
+                                .unwrap()
+                                .render(&spec, super::scheduler::now_ms())
+                            {
+                                return Ok(frame);
+                            }
+                        }
+                    }
+                }
+                return render_face(&face.kind, "", index == 13, input);
+            }
             if self.enabled.load(Ordering::SeqCst) && !self.fake {
                 let view = match face.kind.as_str() {
                     "reset" => "resets",
@@ -290,32 +394,7 @@ impl RuntimeResources {
                 if let Ok(result) = result {
                     let snapshot = &result.snapshot;
                     let unknown = snapshot.status != super::usage::UsageStatus::Ok;
-                    let mut valid_until_ms = if unknown {
-                        None
-                    } else {
-                        snapshot.observed_at.map(|at| at.saturating_add(300_000))
-                    };
-                    for window in [&snapshot.five_hour, &snapshot.weekly]
-                        .into_iter()
-                        .flatten()
-                    {
-                        if let Some(at) = window.resets_at {
-                            valid_until_ms = Some(
-                                valid_until_ms
-                                    .unwrap_or(u64::MAX)
-                                    .min(at.saturating_mul(1000)),
-                            );
-                        }
-                    }
-                    if view == "tokens" {
-                        if let Some(at) = snapshot.token_history_observed_at {
-                            valid_until_ms = Some(
-                                valid_until_ms
-                                    .unwrap_or(u64::MAX)
-                                    .min(at.saturating_add(7_200_000)),
-                            );
-                        }
-                    }
+                    let valid_until_ms = snapshot.valid_until_ms(view);
                     return Ok(RenderedFace {
                         width,
                         height,
@@ -427,7 +506,7 @@ impl DockHooks for RuntimeResources {
                     .iter_mut()
                     .find(|item| item.provider == provider)
                     .unwrap();
-                let selected = selected && enabled && !self.fake;
+                let selected = selected && enabled && (!self.fake || self.shared_usage);
                 if diagnostic.selected != selected {
                     *diagnostic = UsageDiagnostic::inactive(provider);
                     diagnostic.selected = selected;
@@ -438,13 +517,13 @@ impl DockHooks for RuntimeResources {
                     }
                 }
             }
-            if !enabled || (!claude && !codex) || self.fake {
+            if !enabled || (!claude && !codex) || self.fake && !self.shared_usage {
                 diagnostics.reader_code = "inactive";
                 diagnostics.reader_message = "AI usage reader is inactive.";
             }
         }
         let mut providers = Vec::new();
-        if enabled && !self.fake {
+        if enabled && (!self.fake || self.shared_usage) {
             if claude {
                 providers.push(ActiveProvider {
                     provider: Provider::Claude,
@@ -457,6 +536,30 @@ impl DockHooks for RuntimeResources {
                     token_history: tokens,
                 });
             }
+        }
+        if self.shared_usage {
+            let mut physical = Vec::new();
+            if enabled {
+                if let Some(page) = state.active_page() {
+                    for (index, key) in page.keys.iter().enumerate() {
+                        for face in [&key.a, &key.b] {
+                            if let Some(spec) =
+                                super::shared_usage::RenderSpec::from_face(face, index)
+                            {
+                                if !physical.contains(&spec) {
+                                    physical.push(spec);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            *self.usage_physical.lock().unwrap() = physical;
+            *self.providers.lock().unwrap() = providers;
+            if !enabled {
+                self.usage_recent.lock().unwrap().clear();
+            }
+            return;
         }
         let mut previous = self.providers.lock().unwrap();
         if *previous != providers || !providers.is_empty() && !self.usage.is_running() {
@@ -520,6 +623,65 @@ pub fn local_time() -> RenderInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_usage_prefetches_both_faces_preserves_profile_policy_and_never_starts_local_reader() {
+        let home = tempfile::tempdir().unwrap();
+        let r = RuntimeResources::new_shared_services(
+            home.path(),
+            home.path().join("resources"),
+            true,
+            true,
+        );
+        let mut state = ProfileState::default();
+        state.profiles[0].pages[0].keys[0].a.kind = "claude".into();
+        state.profiles[0].pages[0].keys[0].b.kind = "codex".into();
+        state.profiles[0].pages[0].keys[0].b.usage_view = Some("tokens".into());
+        r.active_profile(&state, true);
+        let demand = r.usage_demand();
+        demand.validate().unwrap();
+        assert_eq!(demand.providers.len(), 2);
+        assert_eq!(demand.renders.len(), 2);
+        assert!(demand
+            .providers
+            .iter()
+            .any(|p| p.provider == Provider::Codex && p.token_history));
+        assert!(!r.usage.is_running());
+        let empty = super::super::profiles::Page::new("No AI faces");
+        state.current_page = empty.id.clone();
+        state.profiles[0].pages.push(empty);
+        r.active_profile(&state, true);
+        assert_eq!(r.usage_demand().providers.len(), 2);
+        assert!(r.usage_demand().renders.is_empty());
+        r.active_profile(&state, false);
+        assert!(r.usage_demand().providers.is_empty());
+        assert!(!r.usage.is_running());
+    }
+    #[test]
+    fn unselected_preview_cannot_activate_a_shared_account_provider() {
+        let home = tempfile::tempdir().unwrap();
+        let r = RuntimeResources::new_shared_services(
+            home.path(),
+            home.path().join("resources"),
+            true,
+            true,
+        );
+        let state = ProfileState::default();
+        r.active_profile(&state, true);
+        let frame = r
+            .render_one(
+                &Face {
+                    kind: "codex".into(),
+                    ..Default::default()
+                },
+                0,
+                &RenderInputs::default(),
+            )
+            .unwrap();
+        assert!(frame.unknown);
+        assert!(r.usage_demand().providers.is_empty());
+        assert!(r.usage_demand().renders.is_empty());
+        assert!(!r.usage.is_running());
+    }
     #[test]
     fn hardware_demand_stops_on_pages_without_sensor_faces() {
         let home = tempfile::tempdir().unwrap();

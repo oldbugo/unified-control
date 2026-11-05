@@ -110,6 +110,7 @@ fn main() {
             cc::key_previews,
             cc::dock_state,
             cc::hardware_test_control,
+            cc::services_test_control,
             cc::cooler_state,
             cc::cooler_migration_verify,
             cc::cooler_configure,

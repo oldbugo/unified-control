@@ -60,6 +60,7 @@ fn main() {
         "editor_quit_ready",
         "dock_state",
         "hardware_test_control",
+        "services_test_control",
         "cooler_state",
         "cooler_migration_verify",
         "cooler_configure",

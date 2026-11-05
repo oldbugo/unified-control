@@ -186,6 +186,13 @@ pub async fn hardware_test_control(core: State<'_, Core>, patch: Value) -> Resul
     run(&core, move |app| app.hardware_test_control(patch)).await
 }
 #[tauri::command]
+pub async fn services_test_control(
+    core: State<'_, Core>,
+    patch: Value,
+) -> Result<Value, CoreError> {
+    run(&core, move |app| app.services_test_control(patch)).await
+}
+#[tauri::command]
 pub async fn cooler_state(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |app| Ok(app.cooler_state())).await
 }
