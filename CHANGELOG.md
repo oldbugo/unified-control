@@ -14,6 +14,7 @@ cache while stopping source interests, avoiding extra requests on quick widget c
 Failure, expiry, replay, worker replacement and configuration changes cannot relabel old values as current. This completes
 shared-services slice2.6b; cross-device controls remain next and cooler workspace issue23 remains separate. No standalone
 CoolerScreen installation/data, device opt-ins or authentication settings are replaced.
+Installed source5dfec54 passed quiet startup, actual MCP0.8.0/engine4.20.0, one account-reader/one provider child, device reconnection and unchanged fourteen-key layout checks.
 
 
 ## 0.7.0 — 2026-11-05

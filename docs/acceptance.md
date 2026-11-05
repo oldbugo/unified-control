@@ -1,12 +1,12 @@
 # Device acceptance evidence
 
-Current checkpoint: installed0.7.0, shared hardware collector and engine4.19.0; prior dock/cooler continuity is retained.
+Current checkpoint: installed0.8.0, shared hardware/AI/music/weather and engine4.20.0; prior dock/cooler continuity is retained.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
 ## 2026-11-05 remaining shared services: software gate
 
-Prepared0.8.0 pins cooler engine4.20.0/source947aad3.193 UC core/11 host/62 reader tests pass, with three existing ignored
+Installed0.8.0/source5dfec54 pins cooler engine4.20.0/source947aad3.193 UC core/11 host/62 reader tests pass, with three existing ignored
 UC checks. Five cooler shared receiver cases (isolated renderer helper invoked), seven music, four weather and nine
 worker/source cases pass. Headless interface/cooler and native profile/MCP/shared-services fixtures pass.
 The native shared-services fixture proves two selected account providers/five deduplicated A/B views with no local account
@@ -20,7 +20,11 @@ binding, metadata bounds, strong artwork identity, restarted ID uniqueness, exac
 fail-closed source retirement and inactive weather-cache retention. Native transport stalls use bounded ephemeral writes;
 mutation admission refuses a held pipe without durable uncertainty. Private source exchanges reject editor injection.
 New modules/worker formatting and diff whitespace pass. Whole-repository formatting retains existing unrelated differences.
-The original hardware/dock-worker/cooler native checks also pass. One lifecycle app-state poll failed with an opaque error; the unchanged-binary retry passed, so the cause remains unconfirmed. The fixture now preserves finite error detail. Normal pipe admission separately waits through brief contention for at most250ms, with short-contention and stalled-writer regressions. Final affected shared-services/lifecycle reruns pass. Packaging/install checks remain pending; the installed0.7.0 app is retained until the tested idle-safe update.
+The original hardware/dock-worker/cooler native checks also pass. One lifecycle app-state poll failed with an opaque error; the unchanged-binary retry passed, so the cause remains unconfirmed. The fixture now preserves finite error detail. Normal pipe admission separately waits through brief contention for at most250ms, with short-contention and stalled-writer regressions. Final affected shared-services/lifecycle reruns pass. Quiet idle-safe install verified new startup/process tree, actual MCP0.8.0/engine4.20.0, connected dock/cooler Live without holds/errors and the exact selected fourteen-key layout. One actual Node account helper and one provider-only process are parented by the host. Initial status: two verified AI providers, one reader start/source epoch, one provider process/music watcher, one weather fetch, no source failures. Hardware reads17 per family at1Hz. No actual source demand was activated for verification; existing configured widgets supplied demand.
+The installed proxy differs from the built binary only by the expected three-byte UNK→NSS bundle marker; both are5543424bytes.
+Installer SHA256 `456DF885F95091E592A5A968FB6A82080570FC9D5E5677B10492A5D09244811A`; proxy SHA256
+`E726752B37C6C31772B4E03C418B959D5847FCDE57AC8575A1E5E75EEA156E40`. Standalone installation/data untouched.
+At331seconds after the initial installed sample, both AI providers remain verified, readerStarts/sourceEpochs/processStarts/musicStarts remain1, weatherFetches remains1, and no source failures are reported. The same owner/process generations remain; AI renders36to676, provider exchanges17to330, hardware reads17to347 per family. Dock/cooler Live remain connected without holds/errors, and the selected fourteen-key layout is unchanged. This is bounded refresh evidence beyond the five-minute cutoff, not uninterrupted reliability or physical readability acceptance.
 
 ## 2026-11-05 shared hardware
 

@@ -11,8 +11,7 @@ Version0.8.0 implements the remaining shared providers (plan2.6b). One host-owne
 interested dock profiles. A host-supervised provider-only process supplies music/weather to interested cooler widgets,
 with replaced local readers disabled. Existing opt-ins, account barriers, quota/token history, source rates, explicit
 weather places and playback timing remain. Idle provider processes can retain the bounded weather cache without reads.
-[Contract](docs/device-app/shared-services-protocol.md).193 core/11 host/62 reader tests and relevant headless/native suites pass. Installed acceptance is recorded separately;
-installed0.7.0 remains running until the tested idle-safe update. Cross-device actions are the next implementation task.
+[Contract](docs/device-app/shared-services-protocol.md).193 core/11 host/62 reader tests and relevant headless/native suites pass. Installed0.8.0/source5dfec54 passed quiet startup/new-process, actual MCP/engine pin, connection and unchanged fourteen-key layout checks. One actual host account reader and one provider-only process are verified; both AI providers report verified readings. Cross-device actions are the next implementation task.
 
 Version0.7.0 implements shared hardware readings (plan2.6a). One demand-driven CPU/RAM/NVIDIA collector serves dock and
 cooler displays, including the cooler's temperature, clock, memory, power and fan details. Demand expires when unused;
@@ -21,7 +20,7 @@ expiry through worker delivery and rendering. [Contract and software checks](doc
 Installed0.7.0/sourceb5b0140 passed the quiet idle-safe update, startup/newPID, actual MCP, engine4.19.0, device reconnect
 and unchanged fourteen-key layout checks. The real shared collector reports1Hz cooler demand, equal CPU/RAM/GPU reads
 and no source failures.179 core/11 host/62 reader cases and relevant headless/quiet native suites pass.
-Other shared providers remain the next slice.
+The remaining shared providers are included in0.8.0 above.
 
 Version0.6.0 separates the dock into a supervised worker. UC retains durable profile storage and editor/MCP coordination;
 the child owns transport, rendering, A/B/folder runtime, actions and usage readers. Editor previews share that reader.
