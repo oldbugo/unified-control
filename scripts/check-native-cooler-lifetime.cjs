@@ -18,7 +18,7 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     for(let i=0;i<80;i++){page=browser.contexts().flatMap(context=>context.pages()).find(candidate=>/tauri/.test(candidate.url()));if(page)break;await delay(100);}assert.ok(page);
     await page.waitForFunction(()=>document.querySelector('#storage-status')?.textContent==='Changes saved in Unified Control');
-    const call=(command,args={})=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});
+    const call=(command,args={})=>page.evaluate(async({command,args})=>{try{return await window.__TAURI_INTERNALS__.invoke(command,args);}catch(error){throw Error(JSON.stringify(error));}},{command,args});
     const poll=async(predicate,timeout=30000)=>{const deadline=Date.now()+timeout;while(Date.now()<deadline){if(await predicate())return;await delay(100);}throw Error('Expected native condition was not reached');};
     const cooler=(command,args={})=>call('cooler_call',{command,args});
     await call('cooler_configure',{enabled:true});

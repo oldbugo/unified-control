@@ -71,6 +71,8 @@ pub struct App {
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
     pub hardware: OnceLock<Arc<super::hardware::Service>>,
     pub hardware_bridge: OnceLock<Arc<super::hardware_bridge::Bridge>>,
+    pub shared_usage: OnceLock<Arc<super::shared_usage::Service>>,
+    pub shared_sources: OnceLock<Arc<super::shared_sources::Service>>,
     cooler_config_lock: Mutex<()>,
     cooler_migration_report: Mutex<Value>,
     cooler_migration_job: Mutex<Option<String>>,
@@ -110,6 +112,8 @@ impl App {
             cooler: OnceLock::new(),
             hardware: OnceLock::new(),
             hardware_bridge: OnceLock::new(),
+            shared_usage: OnceLock::new(),
+            shared_sources: OnceLock::new(),
             cooler_config_lock: Mutex::new(()),
             cooler_migration_report: Mutex::new(migration_report),
             cooler_migration_job: Mutex::new(None),
@@ -147,8 +151,8 @@ impl App {
         );
         let _ = self.cooler.set(cooler.clone());
         // The host keeps assets and read-only discovery resources dormant. Live
-        // rendering, account readers and actions belong to the child. Hardware
-        // collection is shared by the host and delivered to interested workers.
+        // rendering and actions belong to the child. Shared provider ownership
+        // belongs to host-supervised services and interested workers receive data.
         let resources = super::runtime_resources::RuntimeResources::new(
             &self.base,
             resource_dir.clone(),
@@ -157,7 +161,7 @@ impl App {
         let controller = super::dock_worker::Controller::new(
             self.profiles.clone(),
             self.base.clone(),
-            resource_dir,
+            resource_dir.clone(),
             fake,
         );
         let settings = self.settings.load();
@@ -188,6 +192,22 @@ impl App {
         self.hardware_bridge
             .set(bridge)
             .map_err(|_| CoreError::new("Hardware delivery is already initialized"))?;
+        self.shared_usage
+            .set(super::shared_usage::Service::start(
+                self.base.clone(),
+                resource_dir.clone(),
+                fake,
+                Arc::downgrade(&controller),
+            ))
+            .map_err(|_| CoreError::new("Shared usage is already initialized"))?;
+        self.shared_sources
+            .set(super::shared_sources::Service::start(
+                self.base.join("shared-sources"),
+                resource_dir,
+                fake,
+                Arc::downgrade(&cooler),
+            ))
+            .map_err(|_| CoreError::new("Shared sources are already initialized"))?;
         if settings.0["cooler"]["enabled"] == true {
             match self.prepare_cooler_storage() {
                 Ok(()) => {
@@ -537,6 +557,8 @@ impl App {
             "dock": self.dock_state(),
             "cooler": self.cooler_state(),
             "hardware": self.hardware.get().map(|hardware| hardware.status()),
+            "sharedUsage": self.shared_usage.get().map(|service| service.status()),
+            "sharedSources": self.shared_sources.get().map(|service| service.status()),
         })
     }
 
@@ -620,6 +642,45 @@ impl App {
         Ok(json!({"collector":service.status(),"snapshot":service.snapshot(),"bridge":bridge.status(),
             "dock":self.dock.get().map(|dock|dock.hardware_state()).unwrap_or(Value::Null),
             "cooler":self.cooler.get().map(|cooler|cooler.status()["hardware"].clone()).unwrap_or(Value::Null)}))
+    }
+
+    /// Synthetic-only fixture controls. Reads are inert and never renew leases.
+    pub fn services_test_control(&self, patch: Value) -> CoreResult<Value> {
+        if !cfg!(debug_assertions) || super::buildinfo::fake_device().is_none() {
+            return Err(CoreError::coded(
+                "test_only",
+                "Shared services test controls require a debug fake instance",
+            ));
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+        enum Control {
+            Read {},
+            Usage { mode: String, paused: bool },
+            Sources { failure: bool, paused: bool },
+        }
+        let control: Control = serde_json::from_value(patch)
+            .map_err(|_| CoreError::new("Invalid shared services test control"))?;
+        let usage = self
+            .shared_usage
+            .get()
+            .ok_or_else(|| CoreError::new("Shared usage is unavailable"))?;
+        let sources = self
+            .shared_sources
+            .get()
+            .ok_or_else(|| CoreError::new("Shared sources are unavailable"))?;
+        match control {
+            Control::Read {} => {}
+            Control::Usage { mode, paused } => {
+                usage.test_control(&mode, paused).map_err(CoreError::new)?;
+            }
+            Control::Sources { failure, paused } => sources
+                .set_test_control(failure, paused)
+                .map_err(CoreError::new)?,
+        }
+        Ok(json!({"usage":usage.status(),"sources":sources.status(),
+            "dock":self.dock.get().map(|dock|dock.usage_state()).unwrap_or(Value::Null),
+            "cooler":self.cooler.get().map(|cooler|cooler.services_state()).unwrap_or(Value::Null)}))
     }
 
     pub fn profiles_state(&self) -> CoreResult<Value> {
@@ -741,6 +802,12 @@ impl App {
         }
         if let Some(hardware) = self.hardware.get() {
             hardware.shutdown();
+        }
+        if let Some(service) = self.shared_usage.get() {
+            service.shutdown();
+        }
+        if let Some(service) = self.shared_sources.get() {
+            let _ = service.shutdown();
         }
         if let Some(resources) = self.runtime.get() {
             resources.shutdown();

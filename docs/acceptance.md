@@ -4,6 +4,24 @@ Current checkpoint: installed0.7.0, shared hardware collector and engine4.19.0; 
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
+## 2026-11-05 remaining shared services: software gate
+
+Prepared0.8.0 pins cooler engine4.20.0/source947aad3.193 UC core/11 host/62 reader tests pass, with three existing ignored
+UC checks. Five cooler shared receiver cases (isolated renderer helper invoked), seven music, four weather and nine
+worker/source cases pass. Headless interface/cooler and native profile/MCP/shared-services fixtures pass.
+The native shared-services fixture proves two selected account providers/five deduplicated A/B views with no local account
+reader; no cold/no-widget/no-place source work; one provider-only process; idle native/HTTP counters unchanged and same-place
+weather cache reuse. Error/stale/logout/unverified modes produce unknown AI pixels. Separate delivery pauses expire each
+consumer, source/worker crashes retain peer ownership, matching-place weather is explicitly stale on failure and changed
+places cannot inherit old data. Quit ends owned helpers. Synthetic sources and fake devices only.
+
+Independent review corrected mixed-account frame coherence, original source/transport deadlines, preferred-player epoch
+binding, metadata bounds, strong artwork identity, restarted ID uniqueness, exact DTO parity, bounded helper backoff,
+fail-closed source retirement and inactive weather-cache retention. Native transport stalls use bounded ephemeral writes;
+mutation admission refuses a held pipe without durable uncertainty. Private source exchanges reject editor injection.
+New modules/worker formatting and diff whitespace pass. Whole-repository formatting retains existing unrelated differences.
+The original hardware/dock-worker/cooler native checks also pass. One lifecycle app-state poll failed with an opaque error; the unchanged-binary retry passed, so the cause remains unconfirmed. The fixture now preserves finite error detail. Normal pipe admission separately waits through brief contention for at most250ms, with short-contention and stalled-writer regressions. Final affected shared-services/lifecycle reruns pass. Packaging/install checks remain pending; the installed0.7.0 app is retained until the tested idle-safe update.
+
 ## 2026-11-05 shared hardware
 
 Installed0.7.0/sourceb5b0140, pinning engine4.19.0/source88aad7d.179 UC core/11 host/62 reader tests pass (three existing

@@ -52,6 +52,28 @@ pub struct Cooler {
     probe_id: AtomicU64,
     probe_active_id: AtomicU64,
     hardware_cache: Mutex<(Instant, Option<u32>, Value)>,
+    services_cache: Mutex<(Instant, Option<u32>, Value)>,
+}
+
+/// Normal commands may briefly share the pipe with an ephemeral snapshot.
+/// Wait through ordinary scheduling contention, but never wait indefinitely on
+/// a stalled writer. Refusal happens before any durable operation is admitted.
+fn acquire_command_pipe<T>(pipe: &Mutex<T>) -> CoreResult<std::sync::MutexGuard<'_, T>> {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        match pipe.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(1))
+            }
+            _ => {
+                return Err(CoreError::coded(
+                    "busy",
+                    "The cooler engine pipe is busy; retry when it responds.",
+                ))
+            }
+        }
+    }
 }
 
 impl Cooler {
@@ -92,6 +114,7 @@ impl Cooler {
             probe_id: AtomicU64::new(0),
             probe_active_id: AtomicU64::new(0),
             hardware_cache: Mutex::new((Instant::now(), None, Value::Null)),
+            services_cache: Mutex::new((Instant::now(), None, Value::Null)),
             executable,
             home,
             resources,
@@ -188,6 +211,7 @@ impl Cooler {
             .stderr(Stdio::null())
             .env("UC_COOLER_WORKER", "1")
             .env("UC_SHARED_HARDWARE", "1")
+            .env("UC_SHARED_SERVICES", "1")
             .env("COOLERSCREEN_HOME", &self.home)
             .env("COOLERSCREEN_SOURCES_DIR", self.home.join("Sources"))
             .env("CS_FFMPEG", self.resources.join("cooler/ffmpeg.exe"))
@@ -324,7 +348,10 @@ impl Cooler {
         if !args.is_object()
             || command.len() > 64
             || !command.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
-            || matches!(command, "shutdown" | "ready")
+            || matches!(
+                command,
+                "shutdown" | "ready" | "hardware_exchange" | "services_exchange"
+            )
         {
             return Err(CoreError::new("Invalid cooler command"));
         }
@@ -455,6 +482,58 @@ impl Cooler {
         *self.hardware_cache.lock().unwrap() = (Instant::now(), pid, result["state"].clone());
         Ok(result)
     }
+    /// Shared music/weather updates are ephemeral, independently scoped to the
+    /// current cooler process. Inspection never sends a request or renews demand.
+    pub fn services_state(&self) -> Value {
+        let state = self.state.lock().unwrap();
+        let cache = self.services_cache.lock().unwrap();
+        let mut value = cache.2.clone();
+        if cache.1 != state.session.as_ref().map(|session| session.child.id()) || !value.is_object()
+        {
+            return json!({"shared":true,"fresh":false,"music_present":false,"weather_present":false,
+                "accepted_sequence":0,"expires_at_ms":null,"local_music_starts":null,"local_weather_fetches":null});
+        }
+        if !state.enabled
+            || !state.ready
+            || cache.0.elapsed() > Duration::from_secs(3)
+            || value["expires_at_ms"]
+                .as_u64()
+                .is_none_or(|at| at <= super::scheduler::now_ms())
+        {
+            value["fresh"] = json!(false);
+            value["music_present"] = json!(false);
+            value["weather_present"] = json!(false);
+        }
+        value
+    }
+    pub fn services_exchange(&self, snapshot: Option<Value>) -> CoreResult<Value> {
+        let _operation = self
+            .operation
+            .try_read()
+            .map_err(|_| CoreError::new("Services exchange is deferred"))?;
+        let pid = self
+            .state
+            .lock()
+            .unwrap()
+            .session
+            .as_ref()
+            .map(|session| session.child.id());
+        let result = self
+            .probe_request(
+                "services_exchange",
+                json!({"snapshot":snapshot}),
+                Duration::from_millis(500),
+            )
+            .map_err(|_| CoreError::new("Services exchange is deferred"))?;
+        let state = self.state.lock().unwrap();
+        if !state.ready || state.session.as_ref().map(|session| session.child.id()) != pid {
+            return Err(CoreError::new(
+                "Services exchange belongs to a disconnected worker",
+            ));
+        }
+        *self.services_cache.lock().unwrap() = (Instant::now(), pid, result["state"].clone());
+        Ok(result)
+    }
     fn probe_request(
         &self,
         command: &str,
@@ -490,7 +569,7 @@ impl Cooler {
             };
             (input, session.pending.clone())
         };
-        let Ok(mut input) = input.try_lock() else {
+        let Ok(input_guard) = input.try_lock() else {
             return Err("sample_deferred");
         };
         if self.inflight.load(Ordering::SeqCst) > 0
@@ -517,23 +596,40 @@ impl Cooler {
         pending.lock().unwrap().insert(id, send);
         let mut frame = serde_json::to_vec(&json!({"v":1,"id":id,"command":command,"args":args}))
             .map_err(|_| "invalid_probe")?;
-        if frame.len() > 2_048 {
+        let limit = if command == "services_exchange" {
+            8 * 1024 * 1024
+        } else {
+            2_048
+        };
+        if frame.len() > limit {
             pending.lock().unwrap().remove(&id);
             self.health_blocked.store(false, Ordering::SeqCst);
             self.probe_id.store(0, Ordering::SeqCst);
             return Err("invalid_probe");
         }
         frame.push(b'\n');
-        let written = input.write_all(&frame).and_then(|_| input.flush());
-        drop(input);
-        let result = if written.is_err() {
-            Err("worker_disconnected")
-        } else {
-            match recv.recv_timeout(timeout) {
-                Ok(Ok(value)) => Ok(value),
-                Ok(Err(_)) => Err("worker_unavailable"),
-                Err(_) => Err("worker_timeout"),
+        // A stalled consumer must not make a larger cover transfer block this
+        // caller before its timeout starts. The exact-ID gate permits only one
+        // writer until reply or process replacement; mutation busy is untouched.
+        drop(input_guard);
+        let pending_write = pending.clone();
+        std::thread::spawn(move || {
+            let written = input.lock().map_err(|_| ()).and_then(|mut writer| {
+                writer
+                    .write_all(&frame)
+                    .and_then(|_| writer.flush())
+                    .map_err(|_| ())
+            });
+            if written.is_err() {
+                if let Some(send) = pending_write.lock().unwrap().remove(&id) {
+                    let _ = send.send(Err(CoreError::new("Worker pipe disconnected")));
+                }
             }
+        });
+        let result = match recv.recv_timeout(timeout) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) => Err("worker_unavailable"),
+            Err(_) => Err("worker_timeout"),
         };
         pending.lock().unwrap().remove(&id);
         result
@@ -587,6 +683,9 @@ impl Cooler {
             ));
         }
         frame.push(b'\n');
+        // A bounded ephemeral writer may still be waiting on a stalled pipe.
+        // Refuse before mutation admission instead of waiting on its mutex.
+        let mut input = acquire_command_pipe(&input)?;
         pending.lock().unwrap().insert(id, send);
         if let Some(transfer) = transfer {
             self.finishing_transfers
@@ -596,10 +695,8 @@ impl Cooler {
         }
         self.state.lock().unwrap().uncertain.insert(id);
         self.inflight.fetch_add(1, Ordering::SeqCst);
-        let written = {
-            let mut input = input.lock().unwrap();
-            input.write_all(&frame).and_then(|_| input.flush())
-        };
+        let written = input.write_all(&frame).and_then(|_| input.flush());
+        drop(input);
         let result = if written.is_ok() {
             recv.recv_timeout(timeout).unwrap_or_else(|_| {
                 Err(CoreError::coded(
@@ -846,6 +943,49 @@ mod health_tests {
         assert_eq!(state["local_metric_polls"], 2);
     }
     #[test]
+    fn editor_cannot_inject_private_provider_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        for command in ["hardware_exchange", "services_exchange"] {
+            let error = manager.call(command, json!({"snapshot":null})).unwrap_err();
+            assert_eq!(error.message, "Invalid cooler command");
+        }
+    }
+    #[test]
+    fn cached_services_expire_without_resetting_actual_source_counters() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.enabled = true;
+            state.ready = true;
+        }
+        *manager.services_cache.lock().unwrap() = (
+            Instant::now(),
+            None,
+            json!({"shared":true,"fresh":true,"music_present":true,"weather_present":true,
+                "accepted_sequence":9,"expires_at_ms":super::super::scheduler::now_ms()-1,
+                "local_music_starts":0,"local_weather_fetches":0}),
+        );
+        let state = manager.services_state();
+        assert_eq!(state["fresh"], false);
+        assert_eq!(state["music_present"], false);
+        assert_eq!(state["weather_present"], false);
+        assert_eq!(state["accepted_sequence"], 9);
+        assert_eq!(state["local_music_starts"], 0);
+        assert_eq!(state["local_weather_fetches"], 0);
+    }
+    #[test]
     fn worker_owns_source_definitions_instead_of_inheriting_a_shared_folder() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
@@ -874,6 +1014,87 @@ mod health_tests {
         manager.shutdown().unwrap();
     }
 
+    #[test]
+    fn command_admission_waits_for_short_contention_and_bounds_a_stalled_writer() {
+        let pipe = Arc::new(Mutex::new(()));
+        let holder = pipe.clone();
+        let (ready, waiting) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _guard = holder.lock().unwrap();
+            ready.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        });
+        waiting.recv().unwrap();
+        assert!(acquire_command_pipe(&pipe).is_ok());
+        thread.join().unwrap();
+        let _held = pipe.lock().unwrap();
+        let start = Instant::now();
+        assert!(acquire_command_pipe(&pipe).is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+    #[test]
+    fn large_ephemeral_write_has_a_bounded_timeout_without_mutation_admission() {
+        use std::os::windows::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        let mut child = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let input = Arc::new(Mutex::new(child.stdin.take().unwrap()));
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.enabled = true;
+            state.ready = true;
+            state.phase = "running";
+            state.session = Some(Session {
+                child,
+                input: Some(input.clone()),
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                alive: Arc::new(AtomicBool::new(true)),
+            });
+        }
+        let start = Instant::now();
+        assert!(manager
+            .services_exchange(Some(json!({"padding":"x".repeat(1024*1024)})))
+            .is_err());
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(!manager.busy());
+        assert!(manager.state.lock().unwrap().uncertain.is_empty());
+        let writing_deadline = Instant::now() + Duration::from_secs(2);
+        while input.try_lock().is_ok() && Instant::now() < writing_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            input.try_lock().is_err(),
+            "fixture writer must be stalled on the non-reading helper"
+        );
+        let admission = Instant::now();
+        assert!(manager
+            .request("shutdown", json!({}), Duration::from_millis(100))
+            .is_err());
+        assert!(admission.elapsed() < Duration::from_secs(1));
+        assert!(manager.state.lock().unwrap().uncertain.is_empty());
+        manager.stopped.store(true, Ordering::SeqCst);
+        let mut session = manager.state.lock().unwrap().session.take().unwrap();
+        // Only this hidden non-device test helper is terminated; no app is touched.
+        session.child.kill().unwrap();
+        session.child.wait().unwrap();
+    }
     #[test]
     fn health_timeout_does_not_leave_mutation_or_quit_busy() {
         use std::os::windows::process::CommandExt;

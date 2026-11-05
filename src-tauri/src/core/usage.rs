@@ -95,6 +95,29 @@ pub struct UsageSnapshot {
     pub message: String,
 }
 impl UsageSnapshot {
+    /// Original deadlines only. Moving a render between processes never grants
+    /// a new observation lease; reset/token expiry can be earlier than quota age.
+    pub fn valid_until_ms(&self, view: &str) -> Option<u64> {
+        if self.status != UsageStatus::Ok {
+            return None;
+        }
+        let mut deadline = self.observed_at.map(|at| at.saturating_add(FRESH_MS));
+        for window in [&self.five_hour, &self.weekly].into_iter().flatten() {
+            if let Some(at) = window.resets_at {
+                deadline = Some(deadline.unwrap_or(u64::MAX).min(at.saturating_mul(1000)));
+            }
+        }
+        if view == "tokens" {
+            if let Some(at) = self.token_history_observed_at {
+                deadline = Some(
+                    deadline
+                        .unwrap_or(u64::MAX)
+                        .min(at.saturating_add(7_200_000)),
+                );
+            }
+        }
+        deadline
+    }
     pub fn unknown(provider: Provider, status: UsageStatus) -> Self {
         Self {
             provider,
@@ -435,7 +458,7 @@ impl Drop for UsageService {
         self.shutdown();
     }
 }
-fn valid_png(data: &[u8], width: u32, height: u32) -> bool {
+pub(crate) fn valid_png(data: &[u8], width: u32, height: u32) -> bool {
     if data.len() < 33 || data.len() > 512 * 1024 {
         return false;
     }
@@ -460,7 +483,7 @@ fn valid_png(data: &[u8], width: u32, height: u32) -> bool {
     let mut pixels = vec![0; size];
     reader.next_frame(&mut pixels).is_ok() && reader.finish().is_ok()
 }
-fn guard_delivery(before: UsageSnapshot, now: u64) -> Result<UsageSnapshot> {
+pub(crate) fn guard_delivery(before: UsageSnapshot, now: u64) -> Result<UsageSnapshot> {
     let guarded = before.clone().guarded(now);
     // Freshness/reset/token data can expire independently while the child draws.
     // Reject the existing PNG if ANY numerical field was removed, even when the

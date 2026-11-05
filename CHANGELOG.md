@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 — 2026-11-05
+
+Move AI reading/rasterization into one host-owned service, preserving existing account, provenance, freshness, history
+and activation policies. Workers receive bounded typed frames with original numerical and transport expiry; shared dock
+mode never starts a local account reader. Repeated helper failure uses bounded restart backoff.
+
+Supervise a separate source-only cooler worker for music/weather, with no device or media-server startup. Cooler widgets
+consume validated observations and disable replaced local readers. Preserve artwork, position, pause age and original
+weather times; forecasts/retries are keyed by place. An already-started idle provider keeps the bounded in-memory weather
+cache while stopping source interests, avoiding extra requests on quick widget changes. No cold empty-demand process starts.
+
+Failure, expiry, replay, worker replacement and configuration changes cannot relabel old values as current. This completes
+shared-services slice2.6b; cross-device controls remain next and cooler workspace issue23 remains separate. No standalone
+CoolerScreen installation/data, device opt-ins or authentication settings are replaced.
+
+
 ## 0.7.0 — 2026-11-05
 
 Collect CPU, RAM and full NVIDIA GPU readings once for interested dock/cooler displays. Expiring per-consumer demand

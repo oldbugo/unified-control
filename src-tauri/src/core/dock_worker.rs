@@ -32,6 +32,8 @@ enum Op {
         fake: bool,
         #[serde(default)]
         shared_hardware: bool,
+        #[serde(default)]
+        shared_usage: bool,
     },
     Profiles {
         state: ProfileState,
@@ -59,6 +61,9 @@ enum Op {
     },
     Hardware {
         snapshot: Option<super::hardware::Snapshot>,
+    },
+    Usage {
+        batch: Option<super::shared_usage::Batch>,
     },
     Shutdown {},
     Quiesce {},
@@ -420,6 +425,7 @@ impl Controller {
                 resources: self.resources.clone(),
                 fake: self.fake,
                 shared_hardware: true,
+                shared_usage: true,
             })?;
             self.cache.lock().unwrap().profile_revision = Some(snapshot_revision);
             self.rpc_inner(Op::Configure {
@@ -436,7 +442,7 @@ impl Controller {
         initialized
     }
     fn rpc_inner(&self, request: Op) -> Result<Value, String> {
-        let ephemeral = matches!(request, Op::Hardware { .. });
+        let ephemeral = matches!(request, Op::Hardware { .. } | Op::Usage { .. });
         if !matches!(request, Op::Shutdown {}) {
             let c = self.cache.lock().unwrap();
             if c.uncertain || c.retiring || c.last_status.elapsed() > Duration::from_secs(3) {
@@ -606,11 +612,35 @@ impl Controller {
     }
     pub fn usage_status(&self) -> Value {
         let c = self.cache.lock().unwrap();
-        if !c.alive || c.uncertain || c.last_status.elapsed() > Duration::from_secs(3) {
-            inactive_usage()
-        } else {
-            c.usage.clone()
+        let mut usage = c.usage.clone();
+        if !c.alive
+            || c.uncertain
+            || c.last_status.elapsed() > Duration::from_secs(3)
+            || usage["shared"] == true
+                && usage["expires_at_ms"]
+                    .as_u64()
+                    .is_none_or(|at| at <= super::scheduler::now_ms())
+        {
+            if !usage.is_object() {
+                return inactive_usage();
+            }
+            usage["reader"] = inactive_usage()["reader"].clone();
+            usage["fresh"] = json!(false);
+            if let Some(providers) = usage["providers"].as_array_mut() {
+                for provider in providers {
+                    if provider["selected"] == true {
+                        provider["status"] = json!("unavailable");
+                        provider["code"] = json!("unverified-or-unavailable");
+                        provider["message"] =
+                            json!(super::usage::UsageStatus::Unavailable.message());
+                    }
+                }
+            }
         }
+        usage
+    }
+    pub fn usage_state(&self) -> Value {
+        self.usage_status()
     }
     pub fn worker_status(&self) -> Value {
         let c = self.cache.lock().unwrap();
@@ -655,6 +685,22 @@ impl Controller {
             return Err("Hardware exchange is waiting for a reply".into());
         }
         self.rpc_inner(Op::Hardware { snapshot })
+    }
+    pub fn usage_exchange(
+        &self,
+        batch: Option<super::shared_usage::Batch>,
+    ) -> Result<Value, String> {
+        let _operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| "Dock worker is busy")?;
+        if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
+            return Err("Dock worker admission is closed".into());
+        }
+        if self.cache.lock().unwrap().hardware_pending.is_some() {
+            return Err("Shared reading exchange is waiting for a reply".into());
+        }
+        self.rpc_inner(Op::Usage { batch })
     }
     pub fn busy(&self) -> bool {
         let cache_busy = {
@@ -781,6 +827,7 @@ pub fn worker_main() -> Result<(), String> {
         resources,
         fake,
         shared_hardware,
+        shared_usage,
     } = first.request
     else {
         return Err("Dock worker init must be first".into());
@@ -790,7 +837,7 @@ pub fn worker_main() -> Result<(), String> {
     }
     let profiles = Arc::new(ProfileStore::replica(state).map_err(|e| e.to_string())?);
     let resources = if shared_hardware {
-        RuntimeResources::new_shared(&home, resources, fake)
+        RuntimeResources::new_shared_services(&home, resources, fake, shared_usage)
     } else {
         RuntimeResources::new(&home, resources, fake)
     };
@@ -924,6 +971,7 @@ fn dispatch(
         Op::Button { index, pressed } => controller.simulate_button(index, pressed)?,
         Op::Studio { running } => controller.set_fake_studio(running)?,
         Op::Hardware { snapshot } => return resources.hardware_exchange(snapshot),
+        Op::Usage { batch } => return resources.usage_exchange(batch),
         Op::Shutdown {} => {
             controller.shutdown();
             resources.shutdown();

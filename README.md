@@ -7,6 +7,13 @@ Development resumed by the user on2026-11-04. [Current handoff](docs/handoff-cur
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Version0.8.0 implements the remaining shared providers (plan2.6b). One host-owned AI reader supplies guarded frames to
+interested dock profiles. A host-supervised provider-only process supplies music/weather to interested cooler widgets,
+with replaced local readers disabled. Existing opt-ins, account barriers, quota/token history, source rates, explicit
+weather places and playback timing remain. Idle provider processes can retain the bounded weather cache without reads.
+[Contract](docs/device-app/shared-services-protocol.md).193 core/11 host/62 reader tests and relevant headless/native suites pass. Installed acceptance is recorded separately;
+installed0.7.0 remains running until the tested idle-safe update. Cross-device actions are the next implementation task.
+
 Version0.7.0 implements shared hardware readings (plan2.6a). One demand-driven CPU/RAM/NVIDIA collector serves dock and
 cooler displays, including the cooler's temperature, clock, memory, power and fan details. Demand expires when unused;
 both former cooler aggregate readers and the dock's local reader stay off in shared mode. Readings retain their original
