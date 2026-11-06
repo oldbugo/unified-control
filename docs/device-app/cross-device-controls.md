@@ -1,6 +1,6 @@
 # Dock-to-cooler controls
 
-Plan2.7. Software implementation verified2026-11-06; installed and physical acceptance are recorded separately.
+Plan2.7. Software implementation verified2026-11-06 and installed in0.9.0. Physical acceptance remains open: cooler Live reports write_timeout, reproduced on the prior0.8.0 as well. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
 
 ## Stored action
 

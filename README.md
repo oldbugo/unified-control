@@ -12,13 +12,13 @@ screen brightness. Configuration and previews remain inert; existing A/B faces a
 Target actions never auto-enable the cooler or store Embedded content. Busy work is refused rather than replayed, and
 requested brightness stays distinct from actual device readback. The cooler interface reflects changes and shows brightness.
 [Contract](docs/device-app/cross-device-controls.md).202 core/11 host/62 reader tests and relevant headless/native suites pass;
-physical result/feel and installed verification are separate. Installed0.8.0 remains until the tested idle-safe update.
+physical result/feel remains separate. Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
 
 Version0.8.0 implements the remaining shared providers (plan2.6b). One host-owned AI reader supplies guarded frames to
 interested dock profiles. A host-supervised provider-only process supplies music/weather to interested cooler widgets,
 with replaced local readers disabled. Existing opt-ins, account barriers, quota/token history, source rates, explicit
 weather places and playback timing remain. Idle provider processes can retain the bounded weather cache without reads.
-[Contract](docs/device-app/shared-services-protocol.md).193 core/11 host/62 reader tests and relevant headless/native suites pass. Installed0.8.0/source5dfec54 passed quiet startup/new-process, actual MCP/engine pin, connection and unchanged fourteen-key layout checks. One actual host account reader and one provider-only process are verified; both AI providers report verified readings. Cross-device actions are the next implementation task.
+[Contract](docs/device-app/shared-services-protocol.md).193 core/11 host/62 reader tests and relevant headless/native suites pass. Installed0.8.0/source5dfec54 passed quiet startup/new-process, actual MCP/engine pin, connection and unchanged fourteen-key layout checks. One actual host account reader and one provider-only process are verified; both AI providers report verified readings. Cross-device controls are implemented in0.9.0 above; installer replacement2.8 is next in the recorded plan.
 
 Version0.7.0 implements shared hardware readings (plan2.6a). One demand-driven CPU/RAM/NVIDIA collector serves dock and
 cooler displays, including the cooler's temperature, clock, memory, power and fan details. Demand expires when unused;

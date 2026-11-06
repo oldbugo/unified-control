@@ -11,7 +11,7 @@ That child owns the dock driver, rendering, A/B and folder runtime, keepalive/re
 AI pixel consumption. Since0.7.0 it consumes host-collected shared hardware snapshots with their original expiry rather than
 polling CPU/RAM/NVIDIA locally. Since0.8.0 AI reading/rasterization belongs to the host; the dock consumes bounded guarded frames and never starts a local account helper. See [shared providers](shared-services-protocol.md).
 The host's dormant rendering resources serve assets, read-only monitor discovery and MCP's explicitly static preview.
-Normal editor previews go to the child.
+Normal editor previews go to the child. Since0.9.0 typed cooler actions return through a host-owned bounded callback queue to the independent cooler worker. Correlated completion bypasses ordinary child dispatch; host busy ownership survives requester loss, with bounded completion and no replay. See [cross-device controls](cross-device-controls.md).
 
 The child receives validated profile snapshots in a memory-only replica. It cannot write the profile journal,
 startup backup or index. After a crash the replacement receives the latest durable host snapshot, brightness and
@@ -22,7 +22,7 @@ runtime state, published only after successful delivery, with the existing edito
 
 Versioned, typed JSON messages use inherited private stdin/stdout pipes, without a public endpoint or network
 command listener. Frames are bounded at 64 MiB; unknown operations/fields, malformed messages and incomplete frames
-are rejected. Only reviewed configuration, previews and debug/fake input operations cross the boundary.
+are rejected. Only reviewed configuration, previews, named cross-device action requests/completions and debug/fake input operations cross the boundary.
 The supervisor retries after actual process exit with bounded backoff; it never starts a second driver beside a
 living old child. Process status, generations and counters are local diagnostics, without user profile contents.
 Worker device logs live under `devices/dock`.
