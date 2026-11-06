@@ -4,6 +4,25 @@ Current checkpoint: installed0.8.0, shared hardware/AI/music/weather and engine4
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
+## 2026-11-06 cross-device controls: software gate
+
+Prepared0.9.0 pins engine4.21.0/sourceda2cb2c.202 UC core/11 host/62 reader tests pass (three existing ignored checks),
+plus cooler five dock-control/19 scheduler/nine private-worker cases. Full headless editor and cooler checks pass.
+Native cross-device fixtureW3tNZb verifies fake physical Button→dock→host→cooler actions, deduplicated presses,
+selection/cycle/Live/brightness with iframe title/switch/brightness readout updates, unchanged Embedded, and no device
+auto-enablement. Admitted host action busy survives dock loss and refuses Quit/both disables; dock/cooler replacements
+never replay. Raw wrong-ID completion is ignored, correct completion bypasses draining Shutdown, and EOF cancels waiters.
+Existing profile/MCP/dock-worker/cooler/cooler-lifetime/migration/shared-provider/hardware native gates pass. These use synthetic sources,
+throwaway themes and fake devices; actual visual switching/brightness and physical coverage remain user acceptance.
+
+Independent reviews checked strict schema/catalog bounds, atomic target admission, original-session correlation, action
+busy across crashes and shutdown, scheduler/Live USB handoff, fixed documented brightness operation, fresh relative
+baselines and distinct requested/reported readback. Bounded completion enqueue prevents a stalled original channel from
+holding a completed target action forever. Missing/mismatched brightness readback emits unconfirmed state without retry.
+Headless testing caught detached numeric input modifying another operation; current-element/operation guards fix it.
+New/worker Rust formatting and whitespace pass; broad repository formatting retains unrelated existing differences.
+Packaging and installed verification pending; installed0.8.0 stays running until the tested quiet update.
+
 ## 2026-11-05 remaining shared services: software gate
 
 Installed0.8.0/source5dfec54 pins cooler engine4.20.0/source947aad3.193 UC core/11 host/62 reader tests pass, with three existing ignored

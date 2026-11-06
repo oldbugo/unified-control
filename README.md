@@ -7,6 +7,13 @@ Development resumed by the user on2026-11-04. [Current handoff](docs/handoff-cur
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Version0.9.0 adds a Cooler screen action in the dock editor: select/cycle Live themes, turn Live on/off/toggle, and set/step
+screen brightness. Configuration and previews remain inert; existing A/B faces and user assignments stay unchanged.
+Target actions never auto-enable the cooler or store Embedded content. Busy work is refused rather than replayed, and
+requested brightness stays distinct from actual device readback. The cooler interface reflects changes and shows brightness.
+[Contract](docs/device-app/cross-device-controls.md).202 core/11 host/62 reader tests and relevant headless/native suites pass;
+physical result/feel and installed verification are separate. Installed0.8.0 remains until the tested idle-safe update.
+
 Version0.8.0 implements the remaining shared providers (plan2.6b). One host-owned AI reader supplies guarded frames to
 interested dock profiles. A host-supervised provider-only process supplies music/weather to interested cooler widgets,
 with replaced local readers disabled. Existing opt-ins, account barriers, quota/token history, source rates, explicit

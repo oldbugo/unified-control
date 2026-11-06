@@ -32,6 +32,7 @@
     "allow-cooler-migration-verify",
     "allow-cooler-configure",
     "allow-cooler-call",
+    "allow-cooler-controls-state",
     "allow-dock-configure",
     "allow-dock-test-button",
     "allow-dock-test-studio",

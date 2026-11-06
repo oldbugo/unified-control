@@ -132,6 +132,56 @@ fn parse_monitor_list(result: &serde_json::Value) -> Result<Vec<MonitorInfo>, St
     Ok(monitors)
 }
 
+/// Reviewed host-routed operations. No worker command or filesystem path is stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CoolerAction {
+    ThemeSelect { theme_id: String },
+    ThemeNext {},
+    ThemePrevious {},
+    Live { mode: CoolerLiveMode },
+    BrightnessSet { value: u8 },
+    BrightnessStep { delta: i16 },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoolerLiveMode {
+    On,
+    Off,
+    Toggle,
+}
+impl CoolerAction {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::ThemeSelect { theme_id }
+                if theme_id.is_empty()
+                    || theme_id.len() > 128
+                    || !theme_id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_') =>
+            {
+                Err("Choose a valid cooler theme".into())
+            }
+            Self::BrightnessSet { value } if *value > 100 => {
+                Err("Cooler brightness must be 0 to 100".into())
+            }
+            Self::BrightnessStep { delta } if *delta == 0 || !(-100..=100).contains(delta) => {
+                Err("Cooler brightness step must be -100 to 100 and not zero".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+pub fn parse_cooler(value: &str) -> Result<CoolerAction, String> {
+    if value.len() > MAX_VALUE || value.contains('\0') {
+        return Err("Invalid cooler action data".into());
+    }
+    let action: CoolerAction =
+        serde_json::from_str(value).map_err(|_| "Choose a supported cooler action".to_string())?;
+    action.validate()?;
+    Ok(action)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionPlan {
     None,
@@ -141,6 +191,7 @@ pub enum ActionPlan {
     Launch(LaunchSpec),
     Url(String),
     Monitor(MonitorSpec),
+    Cooler(CoolerAction),
 }
 
 /// Narrow seam: fakes inspect requested effects without sending input, spawning
@@ -187,6 +238,7 @@ pub fn plan_action(action: &PendingAction) -> Result<ActionPlan, String> {
             Ok(ActionPlan::Url(action.value.clone()))
         }
         "monitor" => Ok(ActionPlan::Monitor(parse_monitor(&action.value)?)),
+        "cooler" => Ok(ActionPlan::Cooler(parse_cooler(&action.value)?)),
         "page" | "folder" | "back" => Err("Page navigation belongs to the dock runtime".into()),
         _ => Err("Unsupported key action".into()),
     }
@@ -260,6 +312,7 @@ pub fn execute_with(
         ActionPlan::Launch(spec) => platform.launch(&spec),
         ActionPlan::Url(url) => platform.open_url(&url),
         ActionPlan::Monitor(spec) => platform.monitor(&spec),
+        ActionPlan::Cooler(_) => Err("Cooler actions require host routing".into()),
     }
 }
 
@@ -1089,6 +1142,59 @@ mod tests {
         assert!(plan_action(&action("launch", r"C:\")).is_ok());
         assert!(plan_action(&action("launch", r"\\server\share\file.txt")).is_ok());
     }
+    #[test]
+    fn cooler_actions_are_strict_typed_data_and_require_host_routing() {
+        for value in [
+            r#"{"op":"theme_select","theme_id":"theme_123-abc"}"#,
+            r#"{"op":"theme_next"}"#,
+            r#"{"op":"theme_previous"}"#,
+            r#"{"op":"live","mode":"on"}"#,
+            r#"{"op":"live","mode":"off"}"#,
+            r#"{"op":"live","mode":"toggle"}"#,
+            r#"{"op":"brightness_set","value":0}"#,
+            r#"{"op":"brightness_set","value":100}"#,
+            r#"{"op":"brightness_step","delta":-100}"#,
+            r#"{"op":"brightness_step","delta":100}"#,
+        ] {
+            let parsed = parse_cooler(value).unwrap();
+            assert_eq!(
+                parse_cooler(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+                parsed
+            );
+            assert_eq!(
+                plan_action(&action("cooler", value)).unwrap(),
+                ActionPlan::Cooler(parsed)
+            );
+            let mut fake = Fake::default();
+            assert!(execute_with(&action("cooler", value), &mut fake).is_err());
+            assert!(
+                fake.batches.is_empty()
+                    && fake.launches.is_empty()
+                    && fake.urls.is_empty()
+                    && fake.monitors.is_empty()
+            );
+        }
+        for value in [
+            r#"{"op":"theme_next","command":"shutdown"}"#,
+            r#"{"op":"theme_select","theme_id":"../theme"}"#,
+            r#"{"op":"theme_select","theme_id":""}"#,
+            r#"{"op":"live","mode":"enable"}"#,
+            r#"{"op":"brightness_set","value":101}"#,
+            r#"{"op":"brightness_set","value":1.5}"#,
+            r#"{"op":"brightness_step","delta":0}"#,
+            r#"{"op":"brightness_step","delta":-101}"#,
+            r#"{"op":"shutdown"}"#,
+            r#"{"op":"theme_next","op":"theme_previous"}"#,
+        ] {
+            assert!(parse_cooler(value).is_err(), "{value}");
+        }
+        assert!(parse_cooler(&format!(
+            r#"{{"op":"theme_select","theme_id":"{}"}}"#,
+            "a".repeat(129)
+        ))
+        .is_err());
+    }
+
     #[test]
     fn invalid_values_are_refused_before_platform_calls() {
         for value in [

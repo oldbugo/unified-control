@@ -223,6 +223,12 @@ const server = http.createServer((req,res) => {
       const appState={page:'dock',appVersion:'fixture',autostart:false,dock};
       window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
         if(command==='app_state'||command==='settings_update')return appState;
+        if(command==='cooler_controls_state'){
+          window.__coolerChoiceReads=(window.__coolerChoiceReads||0)+1;
+          if(window.__coolerChoicesFail)throw new Error('fixture unavailable');
+          return {available:true,running:true,connected:true,themes:window.__coolerThemes||[{id:'theme-alpha',name:'Alpha'},{id:'theme-beta',name:'Beta <safe>'}],currentThemeId:'theme-alpha'};
+        }
+        if(command==='cooler_call'||command==='cooler_action')throw new Error('Editor must never execute a cooler action');
         if(command==='dock_state')return dock;
         if(command==='profiles_save'){window.__lastSavedSnapshot=structuredClone(args.snapshot);return 0;}
         if(command==='profiles_state')return {state:{version:1,currentProfile:'p',currentPage:'pg',profiles:[{id:'p',name:'Fixture',pages:[{id:'pg',name:'Main',keys:Array.from({length:14},(_,index)=>({a:{kind:index===0?'clock':'text',text:''},b:{kind:'text',text:''},action:'none',value:''}))}]}]}};
@@ -275,6 +281,40 @@ const server = http.createServer((req,res) => {
     await nativePreview.keyboard.press('Enter');
     assert.equal(await nativePreview.locator('.editor-head h2').textContent(),'Key 7','native stable IDs preserve the selected display on undo');
     assert.equal(await nativePreview.evaluate(()=>window.__lastSavedSnapshot.currentProfile==='p'&&window.__lastSavedSnapshot.currentPage==='pg'&&window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].a.text===''),true);
+    // Configuring cooler actions saves only typed inert data. Reading choices
+    // never selects a theme or enables a device.
+    await nativePreview.locator('#action-kind').selectOption('cooler');
+    await nativePreview.waitForFunction(()=>window.__coolerChoiceReads===1);
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'theme_next'});
+    await nativePreview.locator('#cooler-operation').selectOption('theme_select');
+    assert.equal(await nativePreview.locator('#cooler-theme').inputValue(),'');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'theme_next'},'theme selection requires an explicit choice');
+    await nativePreview.locator('#cooler-theme').selectOption('theme-beta');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'theme_select',theme_id:'theme-beta'});
+    await nativePreview.evaluate(()=>{window.__coolerThemes=[];});
+    await nativePreview.locator('[data-do="refresh-cooler-controls"]').click();
+    await nativePreview.waitForFunction(()=>window.__coolerChoiceReads===2);
+    assert.equal(await nativePreview.locator('#cooler-theme').inputValue(),'theme-beta');
+    assert.match(await nativePreview.locator('#cooler-theme option:checked').textContent(),/Unavailable theme/);
+    await nativePreview.evaluate(()=>{window.__coolerChoicesFail=true;});
+    await nativePreview.locator('[data-do="refresh-cooler-controls"]').click();
+    await nativePreview.waitForFunction(()=>document.querySelector('#cooler-action-status')?.textContent.includes('could not be read'));
+    assert.equal(await nativePreview.locator('#cooler-theme').inputValue(),'theme-beta');
+    await nativePreview.locator('#cooler-operation').selectOption('live');
+    for(const mode of ['on','off','toggle']){
+      await nativePreview.locator('#cooler-live').selectOption(mode);
+      assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'live',mode});
+    }
+    await nativePreview.locator('#cooler-operation').selectOption('brightness_step');
+    await nativePreview.locator('#cooler-number').fill('-20');await nativePreview.locator('#cooler-number').dispatchEvent('change');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'brightness_step',delta:-20});
+    await nativePreview.locator('#cooler-number').fill('0');await nativePreview.locator('#cooler-number').dispatchEvent('change');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'brightness_step',delta:-20},'invalid zero step never saves');
+    await nativePreview.locator('#cooler-operation').selectOption('brightness_set');
+    await nativePreview.locator('#cooler-number').fill('100');await nativePreview.locator('#cooler-number').dispatchEvent('change');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'brightness_set',value:100});
+    await nativePreview.locator('#cooler-operation').selectOption('theme_previous');
+    assert.deepEqual(await nativePreview.evaluate(()=>JSON.parse(window.__lastSavedSnapshot.profiles[0].pages[0].keys[6].value)),{op:'theme_previous'});
     await nativePreview.evaluate(()=>{window.__oldPreviewKey=document.querySelector('[data-key="0"]');window.__oldPreviewImage=window.__oldPreviewKey.firstChild;window.__holdPreviewDecode=true;window.__previewRevision=2;});
     await nativePreview.waitForFunction(()=>window.__pendingPreviewDecodes.length>0);
     await nativePreview.locator('[data-page="home"]').click();

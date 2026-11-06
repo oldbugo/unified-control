@@ -205,6 +205,10 @@ pub async fn cooler_configure(core: State<'_, Core>, enabled: bool) -> Result<Va
     run(&core, move |app| app.cooler_configure(enabled)).await
 }
 #[tauri::command]
+pub async fn cooler_controls_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.cooler_controls_state()).await
+}
+#[tauri::command]
 pub async fn cooler_call(
     core: State<'_, Core>,
     command: String,

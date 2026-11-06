@@ -176,6 +176,14 @@ impl App {
         self.dock
             .set(controller.clone())
             .map_err(|_| CoreError::new("Dock is already initialized"))?;
+        let weak = self.me.lock().unwrap().clone();
+        controller.set_cooler_handler(Arc::new(move |action| {
+            let app = weak
+                .upgrade()
+                .ok_or_else(|| "Unified Control is unavailable".to_string())?;
+            app.execute_cooler_action(action)
+                .map_err(|error| error.message)
+        }));
         controller.start_configured(
             settings.0["dock"]["enabled"].as_bool().unwrap_or(false),
             settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
@@ -414,6 +422,12 @@ impl App {
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
+        if !enabled && self.dock.get().is_some_and(|dock| dock.cross_action_busy()) {
+            return Err(CoreError::coded(
+                "busy",
+                "A cooler key action is still running; retry when it finishes.",
+            ));
+        }
         let _guard = self.cooler_config_lock.lock().unwrap();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
@@ -447,6 +461,42 @@ impl App {
         }
         Ok(self.cooler_state())
     }
+    pub fn cooler_controls_state(&self) -> CoreResult<Value> {
+        match self.cooler.get() {
+            Some(cooler) => super::cooler_controls::state(cooler),
+            None => Ok(super::cooler_controls::unavailable()),
+        }
+    }
+    fn execute_cooler_action(&self, action: super::actions::CoolerAction) -> CoreResult<()> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let _guard = self
+            .cooler_config_lock
+            .try_lock()
+            .map_err(|_| CoreError::coded("busy", "Cooler configuration is busy."))?;
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        if cfg!(debug_assertions) && super::buildinfo::fake_device().is_some() {
+            let delay = std::env::var("UC_COOLER_TEST_ACTION_DELAY_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(10_000);
+            if delay > 0 {
+                std::thread::sleep(Duration::from_millis(delay));
+            }
+        }
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let cooler = self
+            .cooler
+            .get()
+            .ok_or_else(|| CoreError::new("Cooler engine is unavailable"))?;
+        super::cooler_controls::execute(cooler, action)
+    }
     pub fn cooler_call(&self, command: &str, args: Value) -> CoreResult<Value> {
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
@@ -464,6 +514,7 @@ impl App {
             value["usageReaderRunning"] =
                 json!(value["usageStatus"]["reader"]["code"] == "ready");
             value["worker"] = dock.worker_status();
+            value["worker"]["crossActionBusy"] = json!(dock.cross_action_busy());
             value["busy"] = json!(dock.busy());
             value["hardware"] = dock.hardware_state();
         }

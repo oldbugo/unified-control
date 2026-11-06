@@ -47,6 +47,7 @@ pub const USAGE_VIEWS: &[&str] = &[
 ];
 pub const ACTION_KINDS: &[&str] = &[
     "none", "hotkey", "media", "launch", "url", "text", "page", "monitor", "folder", "back",
+    "cooler",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,6 +236,10 @@ impl ProfileState {
                         return Err(invalid(
                             "Action data is too long or contains a null character",
                         ));
+                    }
+                    if key.action == "cooler" {
+                        super::actions::parse_cooler(&key.value)
+                            .map_err(|message| invalid(&message))?;
                     }
                     if ["page", "folder"].contains(&key.action.as_str())
                         && !own_page_ids.contains(key.value.as_str())
@@ -848,6 +853,20 @@ mod tests {
         store.save(&edited(initial.clone(), "Later edit")).unwrap();
         fs::write(store.directory().join("transaction.json"), "torn").unwrap();
         assert_eq!(ProfileStore::new(dir.path()).load().unwrap(), initial);
+    }
+
+    #[test]
+    fn cooler_action_storage_roundtrips_and_rejects_invalid_operations() {
+        let (_dir, store) = store();
+        let mut state = store.load().unwrap();
+        state.profiles[0].pages[0].keys[0].action = "cooler".into();
+        state.profiles[0].pages[0].keys[0].value =
+            r#"{"op":"theme_select","theme_id":"theme-does-not-need-to-be-online"}"#.into();
+        store.save(&state).unwrap();
+        assert_eq!(store.load().unwrap(), state);
+        state.profiles[0].pages[0].keys[0].value = r#"{"op":"brightness_step","delta":0}"#.into();
+        assert!(store.save(&state).is_err());
+        assert_ne!(store.load().unwrap(), state);
     }
 
     #[test]

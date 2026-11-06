@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — 2026-11-06
+
+Add typed dock actions for cooler Live-theme selection/cycling, Live on/off/toggle and brightness set/step. The editor
+preserves missing theme IDs and valid prior choices through temporary unavailability; editing/preview never executes.
+A generation-bound child-to-host route delivers each admitted physical action once, with correlated completion handled
+before ordinary worker dispatch. Bounded completion delivery and host busy counts survive requester loss, preventing
+shutdown deadlock or replay after restart. Disabled/busy targets refuse without auto-enablement or queued work.
+
+Cooler engine4.21.0 resolves relative actions atomically, preserves Embedded and uses a dedicated reviewed serialized
+brightness operation. Fresh readback supplies relative baselines; missing/mismatched confirmation remains explicit and
+never automatically retries. Existing cooler UI events reflect theme/Live changes; Screen settings displays brightness.
+No physical-action MCP method, arbitrary worker command, generic raw device access, reset or firmware operation is added.
+
+
 ## 0.8.0 — 2026-11-05
 
 Move AI reading/rasterization into one host-owned service, preserving existing account, provenance, freshness, history
