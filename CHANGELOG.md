@@ -14,6 +14,8 @@ never automatically retries. Existing cooler UI events reflect theme/Live change
 No physical-action MCP method, arbitrary worker command, generic raw device access, reset or firmware operation is added.
 
 
+Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
+
 ## 0.8.0 — 2026-11-05
 
 Move AI reading/rasterization into one host-owned service, preserving existing account, provenance, freshness, history

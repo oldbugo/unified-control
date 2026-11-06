@@ -1,7 +1,8 @@
 # Current project backlog
 
-Updated2026-11-05. Plan2.4 dock isolation and shared-services2.6 are installed in0.8.0.
-Cross-device actions2.7 are the next implementation task.
+Updated2026-11-06. Plan2.4/shared-services2.6 and software2.7 are installed in0.9.0.
+Installer replacement2.8 is next in the recorded implementation order; physical cross-device acceptance remains open.
+Current cooler Live fails with write_timeout, also reproduced by a quiet0.8.0 comparison. Cause/recovery remain unverified; no automatic reset was attempted.
 [Scope, phase status and ordered next work](project-status.md) is the current
 implementation plan; [handoff](handoff-current.md) is the restart entry point.
 

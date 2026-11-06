@@ -1,56 +1,40 @@
-# Current handoff: UC0.8.0 shared services
+# Current handoff: UC0.9.0 cross-device controls
 
-Checkpoint: **2026-11-05**, Australia/Sydney. Plan2.4 dock isolation and shared-services2.6 are complete and installed.
-Leave the tray app running. Cross-device controls2.7 are next.
+Checkpoint: **2026-11-06**, Australia/Sydney. Plan2.4/shared-services2.6 and software2.7 are complete and installed.
+Leave the tray app running. Cooler physical acceptance remains blocked by an unresolved USB write timeout.
 
 ## Start here next time
 
 1. Use `C:/Users/pc/Documents/UnifiedControl`, not the separate Ulanzi plugins repository.
-2. Read the vault's `Start here.md`, perform its safe refresh check, then read UC `AGENTS.md`, `CLAUDE.md` and `README.md`.
-3. Read [scope, completed work and ordered next tasks](project-status.md).
-4. Check branch/status/remotes and running MCP `uc_get_status` / `uc_get_layout`; do not edit profiles directly.
-5. Unless the user changes priority, the next coding task is **plan2.7: cross-device cooler controls**.
-   Use named worker operations for theme selection, next/previous, Live and brightness; physical result/UI reflection need user acceptance.
-   Installer replacement/release gates and Dial follow. Cooler workspace issue23 remains separate; measure before changing retention.
+2. Refresh/read the vault Start here, then UC AGENTS.md, CLAUDE.md and README.md in full.
+3. Read [project status](project-status.md), inspect Git status and running MCP status/layout. Preserve user changes.
+4. Next recorded implementation: **2.8 installer replacement**, followed by combined release gates and Dial. Do not uninstall the standalone CoolerScreen or remove rollback data without a concrete reviewed migration plan.
+5. Cooler issue23 (workspace entry delay) stays separate. No retention timer or measured speedup was included.
 
-## Installed state
+## Installed state and open connection failure
 
-- UC0.8.0, clean build source`5dfec54bfa9ddcc136d80b7e719ea214af93151a`, pinned by`v0.8.0`.
-- Cooler engine4.20.0/source`947aad3ca6e703194ae7b037da9ff2cfd6e40bba`, tagv4.20.0/CoolerScreen PR5;
-  dock-driver pin`9ea93c06ad8ff3ae6f01784a4403886593ffff5d`.
-- PR27 completes shared providers. The host alone writes profiles and owns one leased hardware collector and one account
-  reader/rasterizer. A supervised device-free provider owns selected music/weather. Worker local duplicates stay off.
-  Original source/transport deadlines, account/configuration binding, playback timing and bounded weather cache/rates remain.
-  Idle provider can retain cache without active reads until UC quits. Later documentation has no binary/version change.
-- Private issue23 tracks cooler workspace entry delay. The engine/Live already stays running; iframe hydration is repeated.
-  The installed cause/timing is unmeasured. No timer or cooler-entry speedup is claimed.
-- PR20 contains the completed cooler migration, retained through0.8.0.
-- Actual app-owned comparison:286 library files,22 originals,6 themes,27 versions;22 byte-identical gallery files;23 active references.
-  No missing files, changed original media, old-root dependencies, missing references, unreadable records or unstable files.
-  One UC theme edit and two regenerated previews are preserved. Original standalone installation/data remain rollback.
-- User confirms themes/settings look right and physical Live updates. Background Live away from the page/in the tray was already confirmed.
-- Last installed checks: actual MCP0.8.0/engine4.20.0, new host with separate dock/cooler workers, one host-owned Node account
-  helper and one provider-only child. Dock/cooler Live connected/no holds/errors, unchanged selected profile/page/all14keys.
-  Both AI providers verified initially and331seconds later; reader/source ownership and process counts stay1, weather fetches stay1, hardware reads advance17to347 per family without failures. Connections/layout remain preserved. Bounded refresh evidence only; read fresh state on resume.
-- Software evidence:193 core/11 host/62 reader plus cooler five receiver/seven music/four weather/nine worker-source cases,
-  headless and quiet native shared/profile/MCP/hardware/worker/cooler/lifetime checks pass. Three UC ignores are existing;
-  cooler renderer helper is invoked. One earlier opaque lifecycle poll failure passed unchanged-binary retry; cause unconfirmed.
-  Normal pipe admission now tolerates brief contention for250ms before refusing; final affected native reruns pass.
+Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
 
-## Safety and permissions that persist
+- UC0.9.0 source7c3ee6daaac24f90e85d3ae7359fe392fae5d5cb/tagv0.9.0, private PR29/mainc88530e.
+- Cooler engine4.21.0 sourceda2cb2c61965058604430a5153c0eb0975c6cbaa/tagv4.21.0, PR6/mainf7642fd4.
+- Dock driver remains pinned9ea93c06ad8ff3ae6f01784a4403886593ffff5d.
+- One host account reader and one provider-only child verified. Source worker has no failures; the cooler worker is ready with no restarts, while physical Live remains disconnected.
+- All existing key assignments are preserved; no new cooler actions were assigned. All three saved pages were checked for rollback compatibility before the0.8.0 comparison. No actual cooler actions were used for testing.
+- Original standalone installation/data remain untouched. Prior user confirmation of themes/settings/background Live is historical, not evidence of recovery from this failure.
 
-The user permits tested UC updates without repeated install questions. Use the idle-safe updater, defer while busy,
-restart quietly to the tray and verify afterward. This permission does not cover replacing unrelated apps.
-Never force-close UC, CoolerScreen or Studio, and never launch the installed GUI from a packaged shell.
-Use the dedicated request proxy/MCP; test instances must be debug, quiet, isolated and fake.
-Sleep/resume remains explicitly deferred. No automatic resets/elevation, guessed USB commands or firmware operations.
-Keep repositories private, real profiles/auth/media/diagnostics out of Git and opt-in integrations off unless the user enables them.
+## Software verification
 
-## Local cleanup and retained material
+202 UC core/11 host/62 reader tests pass (three existing ignored checks); cooler five action/19 scheduler/nine worker cases pass.
+Full headless editor/cooler and quiet native cross-device/profile/MCP/dock-worker/cooler/lifetime/migration/shared-provider/hardware checks pass.
+NativeW3tNZb proves fake button routing, deduplication, iframe reflection, Embedded preservation, busy after requester loss, no replay, correlated completion during Shutdown and EOF cancellation.
+Touched worker/action formatting and whitespace pass; broad formatting retains unrelated prior differences. Release packaging and inactive bundled reader smoke pass.
+[Contract](device-app/cross-device-controls.md) and [acceptance/checksums](acceptance.md).
 
-UC has one main checkout and no session worktree. Completed session branches are removed after merge.
-`dist` retains0.8.0 plus previous0.7.0,0.6.0,0.5.1 and0.4.1 installers. No installer cleanup was requested for this milestone.
-Seven known isolated cooler-migration fixtures remain under the Windows temporary folder: automatic approval review
-blocked their recursive removal, including explicitly named paths. Do not claim they were deleted. Reusable dependency/build caches remain.
-The user's installed apps, profiles, original cooler backup and unrelated project worktrees remain in place.
-See [acceptance](acceptance.md) for checksums/evidence. The [0.3.0 handoff](handoff-0.3.0.md) is historical only.
+## Persistent permissions and boundaries
+
+Tested UC idle-safe updates are authorized; defer while busy, never force-close, restart quietly to the tray and verify afterward.
+Use MCP/dedicated request proxy, never start installed GUI from a packaged shell. Tests are isolated quiet debug/fake instances.
+No automatic resets/elevation, guessed USB commands or firmware. Sleep/resume stays deferred. Do not change unrelated apps, auth/media/profiles or device opt-ins.
+Private repositories only. Completed branches/worktrees are removed after merge; documentation does not trigger a new version or reinstall.
+`dist` retains0.9.0 plus0.8.0/0.7.0/0.6.0/0.5.1/0.4.1. No installer cleanup requested.
+Seven old migration fixtures remain because earlier automatic approval blocked recursive deletion; reusable caches and unrelated worktrees remain.

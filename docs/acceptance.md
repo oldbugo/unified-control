@@ -1,12 +1,12 @@
 # Device acceptance evidence
 
-Current checkpoint: installed0.8.0, shared hardware/AI/music/weather and engine4.20.0; prior dock/cooler continuity is retained.
+Current checkpoint: installed0.9.0/engine4.21.0 with software-tested cross-device controls. Dock/usage checks pass; cooler Live has an unresolved USB write_timeout, also reproduced on0.8.0. Physical cooler acceptance is blocked.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
 ## 2026-11-06 cross-device controls: software gate
 
-Prepared0.9.0 pins engine4.21.0/sourceda2cb2c.202 UC core/11 host/62 reader tests pass (three existing ignored checks),
+Installed0.9.0 pins engine4.21.0/sourceda2cb2c.202 UC core/11 host/62 reader tests pass (three existing ignored checks),
 plus cooler five dock-control/19 scheduler/nine private-worker cases. Full headless editor and cooler checks pass.
 Native cross-device fixtureW3tNZb verifies fake physical Button→dock→host→cooler actions, deduplicated presses,
 selection/cycle/Live/brightness with iframe title/switch/brightness readout updates, unchanged Embedded, and no device
@@ -21,7 +21,9 @@ baselines and distinct requested/reported readback. Bounded completion enqueue p
 holding a completed target action forever. Missing/mismatched brightness readback emits unconfirmed state without retry.
 Headless testing caught detached numeric input modifying another operation; current-element/operation guards fix it.
 New/worker Rust formatting and whitespace pass; broad repository formatting retains unrelated existing differences.
-Packaging and installed verification pending; installed0.8.0 stays running until the tested quiet update.
+Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
+
+Release source7c3ee6daaac24f90e85d3ae7359fe392fae5d5cb is preserved byv0.9.0; private PR29 merged as c88530e86745fd65870c07f4ecf6b4e8da17e737. Engine source/tagda2cb2c61965058604430a5153c0eb0975c6cbaa/v4.21.0 and PR6/mainf7642fd4a1dfd8e258e045901617b6bb664bad55 are remotely verified. Installer SHA256:30133DB008B3D3EC803D656047D9B12796C87F5026887F89F72F2C9E35E04DEA. Bundled inactive reader smoke passes. Installed request proxy matches the build except the expected three-byte NSIS marker substitution; SHA256:C51DF832F527D7B102DE98F853C152A4FD3FE1C5AD7DEE810E89F8A8168B15C9.
 
 ## 2026-11-05 remaining shared services: software gate
 
