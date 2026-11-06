@@ -65,6 +65,10 @@ enum Op {
     Usage {
         batch: Option<super::shared_usage::Batch>,
     },
+    ActionResult {
+        action_id: u64,
+        result: Result<(), String>,
+    },
     Shutdown {},
     Quiesce {},
     Resume {},
@@ -79,6 +83,11 @@ struct Request {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Message {
+    CoolerAction {
+        version: u32,
+        action_id: u64,
+        action: super::actions::CoolerAction,
+    },
     Reply {
         version: u32,
         id: u64,
@@ -156,9 +165,134 @@ struct Cache {
 }
 struct Session {
     child: Child,
-    input: Option<mpsc::SyncSender<Request>>,
+    input: Option<Arc<mpsc::SyncSender<Request>>>,
     pending: Pending,
     alive: Arc<AtomicBool>,
+}
+fn claim_action_id(highest: &mut u64, id: u64) -> bool {
+    if id == 0 || id > 9_007_199_254_740_991 || id <= *highest {
+        return false;
+    }
+    *highest = id;
+    true
+}
+type CoolerHandler = Arc<dyn Fn(super::actions::CoolerAction) -> Result<(), String> + Send + Sync>;
+#[derive(Default)]
+struct CrossState {
+    handler: Option<CoolerHandler>,
+    pending: usize,
+    closed: bool,
+}
+struct CrossJob {
+    action: super::actions::CoolerAction,
+    action_id: u64,
+    input: Arc<mpsc::SyncSender<Request>>,
+}
+// Only the result is retried while the original session channel has room;
+// the already-executed target effect is never submitted again.
+fn enqueue_completion(input: &mpsc::SyncSender<Request>, mut result: Request) -> bool {
+    let until = Instant::now() + Duration::from_millis(500);
+    loop {
+        match input.try_send(result) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+            Err(mpsc::TrySendError::Full(unsent)) => result = unsent,
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+struct CrossActions {
+    state: Arc<Mutex<CrossState>>,
+    queue: mpsc::SyncSender<CrossJob>,
+}
+impl CrossActions {
+    fn new() -> Self {
+        let state = Arc::new(Mutex::new(CrossState::default()));
+        let shared = state.clone();
+        let (queue, jobs) = mpsc::sync_channel::<CrossJob>(4);
+        std::thread::spawn(move || {
+            for job in jobs {
+                let handler = shared.lock().unwrap().handler.clone();
+                let result = handler
+                    .ok_or_else(|| "Cooler host routing is unavailable".to_string())
+                    .and_then(|handler| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handler(job.action)
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err("Cooler host routing failed; outcome is uncertain".into())
+                        })
+                    });
+                // Delivery belongs to the original session only. Never acquire the
+                // host operation lock here: Shutdown may be draining the executor.
+                enqueue_completion(
+                    &job.input,
+                    Request {
+                        version: VERSION,
+                        id: 0,
+                        request: Op::ActionResult {
+                            action_id: job.action_id,
+                            result,
+                        },
+                    },
+                );
+                shared.lock().unwrap().pending -= 1;
+            }
+        });
+        Self { state, queue }
+    }
+    fn admit(
+        &self,
+        action: super::actions::CoolerAction,
+        action_id: u64,
+        input: Arc<mpsc::SyncSender<Request>>,
+    ) -> Result<(), String> {
+        action.validate()?;
+        let mut state = self.state.lock().unwrap();
+        if state.closed || state.handler.is_none() {
+            return Err("Cooler action admission is closed".into());
+        }
+        state.pending += 1;
+        if self
+            .queue
+            .try_send(CrossJob {
+                action,
+                action_id,
+                input,
+            })
+            .is_err()
+        {
+            state.pending -= 1;
+            return Err("Cooler action queue is full".into());
+        }
+        Ok(())
+    }
+}
+struct CrossBarrier {
+    state: Arc<Mutex<CrossState>>,
+    keep: bool,
+}
+impl CrossBarrier {
+    fn close(state: Arc<Mutex<CrossState>>) -> Result<Self, String> {
+        {
+            let mut s = state.lock().unwrap();
+            if s.pending > 0 {
+                return Err("A cross-device action is still running".into());
+            }
+            s.closed = true;
+        }
+        Ok(Self { state, keep: false })
+    }
+}
+impl Drop for CrossBarrier {
+    fn drop(&mut self) {
+        if !self.keep {
+            self.state.lock().unwrap().closed = false;
+        }
+    }
 }
 pub struct Controller {
     profiles: Arc<ProfileStore>,
@@ -177,6 +311,7 @@ pub struct Controller {
     quiesced: AtomicBool,
     profiles_dirty: AtomicBool,
     profiles_sync: Mutex<()>,
+    cross: Arc<CrossActions>,
 }
 impl Controller {
     pub fn new(
@@ -218,6 +353,7 @@ impl Controller {
             quiesced: AtomicBool::new(false),
             profiles_dirty: AtomicBool::new(false),
             profiles_sync: Mutex::new(()),
+            cross: Arc::new(CrossActions::new()),
         });
         let weak = Arc::downgrade(&this);
         std::thread::spawn(move || loop {
@@ -237,6 +373,12 @@ impl Controller {
             }
         });
         this
+    }
+    pub fn set_cooler_handler(&self, handler: CoolerHandler) {
+        self.cross.state.lock().unwrap().handler = Some(handler);
+    }
+    pub fn cross_action_busy(&self) -> bool {
+        self.cross.state.lock().unwrap().pending > 0
     }
     fn ensure_started(&self) -> Result<(), String> {
         let _operation = self.operation.lock().unwrap();
@@ -319,7 +461,12 @@ impl Controller {
             c.profile_revision = None;
             c.generation
         };
+        let (input_tx, input_rx) = mpsc::sync_channel::<Request>(4);
+        let input_tx = Arc::new(input_tx);
+        let callback_input = Arc::downgrade(&input_tx);
+        let cross = self.cross.clone();
         std::thread::spawn(move || {
+            let mut highest_action = 0;
             let mut reader = BufReader::new(output);
             loop {
                 let Ok(Some(bytes)) = read_frame(&mut reader) else {
@@ -329,6 +476,35 @@ impl Controller {
                     break;
                 };
                 match message {
+                    Message::CoolerAction {
+                        version,
+                        action_id,
+                        action,
+                    } if version == VERSION => {
+                        let Some(callback_input) = callback_input.upgrade() else {
+                            break;
+                        };
+                        // A duplicate must not complete the original wait with a
+                        // spurious failure while its operation is still running.
+                        let admitting = {
+                            let c = cache.lock().unwrap();
+                            c.generation == generation && c.alive && !c.uncertain && !c.retiring
+                        };
+                        if !admitting || !claim_action_id(&mut highest_action, action_id) {
+                            continue;
+                        }
+                        let result = cross.admit(action, action_id, callback_input.clone());
+                        if let Err(error) = result {
+                            let _ = callback_input.try_send(Request {
+                                version: VERSION,
+                                id: 0,
+                                request: Op::ActionResult {
+                                    action_id,
+                                    result: Err(error),
+                                },
+                            });
+                        }
+                    }
                     Message::Reply {
                         version,
                         id,
@@ -385,7 +561,6 @@ impl Controller {
                 ));
             }
         });
-        let (input_tx, input_rx) = mpsc::sync_channel::<Request>(4);
         let (cache, live, waiting) = (self.cache.clone(), alive.clone(), pending.clone());
         std::thread::spawn(move || {
             for request in input_rx {
@@ -542,6 +717,9 @@ impl Controller {
         if self.stopped.load(Ordering::SeqCst) {
             return Err("Dock worker is stopping".into());
         }
+        if !enabled && self.cross_action_busy() {
+            return Err("A cross-device action is still running".into());
+        }
         if !enabled && self.session.lock().unwrap().is_none() {
             self.enabled.store(false, Ordering::SeqCst);
             self.brightness.store(brightness as usize, Ordering::SeqCst);
@@ -644,7 +822,7 @@ impl Controller {
     }
     pub fn worker_status(&self) -> Value {
         let c = self.cache.lock().unwrap();
-        json!({"pid":c.pid,"generation":c.generation,"restarts":c.restarts,"busy":c.busy,"state":if c.alive{"running"}else{"unavailable"}})
+        json!({"pid":c.pid,"generation":c.generation,"restarts":c.restarts,"busy":c.busy,"crossActionBusy":self.cross_action_busy(),"state":if c.alive{"running"}else{"unavailable"}})
     }
     pub fn hardware_state(&self) -> Value {
         let cache = self.cache.lock().unwrap();
@@ -703,6 +881,9 @@ impl Controller {
         self.rpc_inner(Op::Usage { batch })
     }
     pub fn busy(&self) -> bool {
+        if self.cross_action_busy() {
+            return true;
+        }
         let cache_busy = {
             let c = self.cache.lock().unwrap();
             c.busy
@@ -745,6 +926,7 @@ impl Controller {
         self.rpc(Op::Studio { running }).map(|_| ())
     }
     pub fn prepare_exit(&self) -> Result<(), String> {
+        let mut barrier = CrossBarrier::close(self.cross.state.clone())?;
         let _operation = self.operation.lock().unwrap();
         // A cached busy flag can describe a render which has already finished.
         // The child owns admission; only uncertain transport state is a host
@@ -773,9 +955,11 @@ impl Controller {
             return Err("Dock worker is recovering; try again when idle".into());
         }
         self.quiesced.store(true, Ordering::SeqCst);
+        barrier.keep = true;
         Ok(())
     }
     pub fn cancel_exit(&self) {
+        self.cross.state.lock().unwrap().closed = false;
         let _operation = self.operation.lock().unwrap();
         if self.cache.lock().unwrap().alive {
             let _ = self.rpc_inner(Op::Resume {});
@@ -783,6 +967,7 @@ impl Controller {
         self.quiesced.store(false, Ordering::SeqCst);
     }
     pub fn shutdown(&self) {
+        self.cross.state.lock().unwrap().closed = true;
         let _operation = self.operation.lock().unwrap();
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
@@ -841,6 +1026,41 @@ pub fn worker_main() -> Result<(), String> {
     } else {
         RuntimeResources::new(&home, resources, fake)
     };
+    let action_waiters: Arc<Mutex<HashMap<u64, mpsc::Sender<Result<(), String>>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let (waiters, callback_output) = (action_waiters.clone(), output.clone());
+    let callback_live = Arc::new(AtomicBool::new(true));
+    let callback_alive = callback_live.clone();
+    let action_ids = AtomicU64::new(1);
+    resources.set_cooler_handler(Arc::new(move |action| {
+        let action_id = action_ids.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut pending = waiters.lock().unwrap();
+            if !callback_alive.load(Ordering::SeqCst) {
+                return Err("Cooler host disconnected".into());
+            }
+            pending.insert(action_id, tx);
+        }
+        if let Err(error) = write_frame(
+            &mut *callback_output.lock().unwrap(),
+            &Message::CoolerAction {
+                version: VERSION,
+                action_id,
+                action,
+            },
+        ) {
+            waiters.lock().unwrap().remove(&action_id);
+            return Err(error);
+        }
+        let result = rx
+            .recv_timeout(Duration::from_secs(125))
+            .unwrap_or_else(|_| {
+                Err("Cooler action outcome is uncertain; it was not replayed".into())
+            });
+        waiters.lock().unwrap().remove(&action_id);
+        result
+    }));
     let controller = Arc::new(dock_service::Controller::new(
         profiles.clone(),
         resources.clone(),
@@ -896,11 +1116,23 @@ pub fn worker_main() -> Result<(), String> {
             if request.version != VERSION {
                 break;
             }
-            if tx.send(request).is_err() {
+            if let Op::ActionResult { action_id, result } = request.request {
+                if let Some(waiter) = action_waiters.lock().unwrap().remove(&action_id) {
+                    let _ = waiter.send(result);
+                }
+                continue;
+            }
+            if tx.try_send(request).is_err() {
                 break;
             }
         }
         live.store(false, Ordering::SeqCst);
+        callback_live.store(false, Ordering::SeqCst);
+        for (_, waiter) in action_waiters.lock().unwrap().drain() {
+            let _ = waiter.send(Err(
+                "Cooler host disconnected; action was not replayed".into()
+            ));
+        }
         c.shutdown();
     });
     for request in rx {
@@ -939,6 +1171,7 @@ fn dispatch(
     resources: &RuntimeResources,
 ) -> Result<Value, String> {
     match op {
+        Op::ActionResult { .. } => return Err("Unexpected cooler action completion".into()),
         Op::Init { .. } => return Err("Dock worker is already initialized".into()),
         Op::Profiles { state } => {
             profiles.replace_replica(state).map_err(|e| e.to_string())?;
@@ -1050,6 +1283,147 @@ fn preview_output(mut frames: Vec<PreviewFrame>, now: u64) -> Result<Value, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saturated_original_session_bounds_completion_without_repeating_target_effect() {
+        let cross = CrossActions::new();
+        let effects = Arc::new(AtomicUsize::new(0));
+        let observed = effects.clone();
+        cross.state.lock().unwrap().handler = Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let (input, output) = mpsc::sync_channel(1);
+        input
+            .send(Request {
+                version: VERSION,
+                id: 7,
+                request: Op::Resume {},
+            })
+            .unwrap();
+        let input = Arc::new(input);
+        let started = Instant::now();
+        cross
+            .admit(
+                super::super::actions::CoolerAction::ThemeNext {},
+                1,
+                input.clone(),
+            )
+            .unwrap();
+        while cross.state.lock().unwrap().pending > 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "completion enqueue must be bounded"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+        assert_eq!(output.try_recv().unwrap().id, 7);
+        assert!(
+            output.try_recv().is_err(),
+            "expired completion must not be replayed later"
+        );
+        cross
+            .admit(super::super::actions::CoolerAction::ThemeNext {}, 2, input)
+            .unwrap();
+        assert!(matches!(
+            output.recv_timeout(Duration::from_secs(3)).unwrap().request,
+            Op::ActionResult {
+                action_id: 2,
+                result: Ok(())
+            }
+        ));
+        assert_eq!(
+            effects.load(Ordering::SeqCst),
+            2,
+            "a fresh request executes once after delivery congestion"
+        );
+    }
+    #[test]
+    fn cross_action_ids_never_replay_or_complete_a_new_request() {
+        let mut highest = 0;
+        assert!(!claim_action_id(&mut highest, 0));
+        assert!(claim_action_id(&mut highest, 2));
+        assert!(!claim_action_id(&mut highest, 2));
+        assert!(!claim_action_id(&mut highest, 1));
+        assert!(!claim_action_id(&mut highest, u64::MAX));
+        assert!(claim_action_id(&mut highest, 3));
+        // A fresh session has its own channel and generation-scoped watermark.
+        let mut replacement = 0;
+        assert!(claim_action_id(&mut replacement, 1));
+        assert_eq!(highest, 3);
+    }
+    #[test]
+    fn cross_action_survives_requester_disconnect_and_holds_exit_barrier() {
+        let cross = CrossActions::new();
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let released = Mutex::new(released);
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = count.clone();
+        cross.state.lock().unwrap().handler = Some(Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            entered_tx.send(()).unwrap();
+            released
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap();
+            Ok(())
+        }));
+        let (input, output) = mpsc::sync_channel(4);
+        cross
+            .admit(
+                super::super::actions::CoolerAction::ThemeNext {},
+                42,
+                Arc::new(input),
+            )
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        drop(output); // requesting dock crashed, target operation still owns admission
+        assert!(CrossBarrier::close(cross.state.clone()).is_err());
+        assert_eq!(cross.state.lock().unwrap().pending, 1);
+        release.send(()).unwrap();
+        let end = Instant::now() + Duration::from_secs(3);
+        while cross.state.lock().unwrap().pending != 0 {
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        let barrier = CrossBarrier::close(cross.state.clone()).unwrap();
+        let (input, _output) = mpsc::sync_channel(4);
+        assert!(cross
+            .admit(
+                super::super::actions::CoolerAction::ThemeNext {},
+                43,
+                Arc::new(input)
+            )
+            .is_err());
+        drop(barrier);
+        assert!(!cross.state.lock().unwrap().closed);
+    }
+    #[test]
+    fn cross_action_result_has_original_id_and_strict_wire_schema() {
+        let cross = CrossActions::new();
+        cross.state.lock().unwrap().handler = Some(Arc::new(|_| Err("target refused".into())));
+        let (input, output) = mpsc::sync_channel(4);
+        cross
+            .admit(
+                super::super::actions::CoolerAction::ThemePrevious {},
+                99,
+                Arc::new(input),
+            )
+            .unwrap();
+        let message = output.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(
+            message.request,
+            Op::ActionResult {
+                action_id: 99,
+                result: Err(_)
+            }
+        ));
+        assert!(serde_json::from_value::<Message>(json!({"type":"cooler_action","version":VERSION,"action_id":1,"action":{"op":"theme_next","extra":true}})).is_err());
+    }
+
     fn controller() -> (tempfile::TempDir, Arc<Controller>) {
         let home = tempfile::tempdir().unwrap();
         let profiles = Arc::new(ProfileStore::new(home.path()));

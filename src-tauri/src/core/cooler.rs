@@ -350,7 +350,12 @@ impl Cooler {
             || !command.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
             || matches!(
                 command,
-                "shutdown" | "ready" | "hardware_exchange" | "services_exchange"
+                "shutdown"
+                    | "ready"
+                    | "hardware_exchange"
+                    | "services_exchange"
+                    | "dock_action"
+                    | "dock_control_state"
             )
         {
             return Err(CoreError::new("Invalid cooler command"));
@@ -443,6 +448,49 @@ impl Cooler {
         };
         self.diagnostics
             .finish(ticket, &worker, reply, pnp, Instant::now());
+    }
+    pub fn controls_state(&self) -> CoreResult<Value> {
+        let _operation = self
+            .operation
+            .try_read()
+            .map_err(|_| CoreError::coded("busy", "Cooler controls are busy."))?;
+        self.probe_request("dock_control_state", json!({}), Duration::from_secs(2))
+            .map_err(|_| {
+                CoreError::coded(
+                    "cooler_control_state",
+                    "The cooler control state is temporarily unavailable.",
+                )
+            })
+    }
+    pub fn dock_action(&self, action: super::actions::CoolerAction) -> CoreResult<Value> {
+        action.validate().map_err(CoreError::new)?;
+        {
+            let state = self.state.lock().unwrap();
+            // Pending synchronous reads are not an uncertain prior effect.
+            // An unanswered timed-out request must block another physical action
+            // until its exact reply or confirmed worker exit clears the outcome.
+            if state.uncertain.len() > self.inflight.load(Ordering::SeqCst)
+                || state.job_busy
+                || !state.jobs.is_empty()
+            {
+                return Err(CoreError::coded(
+                    "busy",
+                    "Cooler work is still active or its outcome is uncertain.",
+                ));
+            }
+        }
+        if self.transfers.lock().unwrap().busy() {
+            return Err(CoreError::coded("busy", "A cooler import is still active."));
+        }
+        let _operation = self
+            .operation
+            .try_read()
+            .map_err(|_| CoreError::coded("busy", "Cooler controls are busy."))?;
+        self.request(
+            "dock_action",
+            json!({"action":action}),
+            Duration::from_secs(120),
+        )
     }
     /// Read-only probes use distinct IDs/pending entries but never mutation
     /// uncertainty or job busy flags. A lost health reply cannot prevent Quit.
@@ -943,6 +991,48 @@ mod health_tests {
         assert_eq!(state["local_metric_polls"], 2);
     }
     #[test]
+    fn cross_device_action_refuses_an_unresolved_prior_effect_even_during_a_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Cooler::new(
+            dir.path().join("home"),
+            dir.path().join("resources"),
+            true,
+            Arc::new(|_, _| {}),
+        );
+        manager.stopped.store(true, Ordering::SeqCst);
+        {
+            let mut state = manager.state.lock().unwrap();
+            state.enabled = true;
+            state.ready = true;
+            state.uncertain.insert(42);
+        }
+        let action = super::super::actions::CoolerAction::ThemeNext {};
+        assert_eq!(
+            manager
+                .dock_action(action.clone())
+                .unwrap_err()
+                .code
+                .as_deref(),
+            Some("busy")
+        );
+        manager.inflight.store(1, Ordering::SeqCst);
+        manager.state.lock().unwrap().uncertain.insert(43);
+        assert_eq!(
+            manager
+                .dock_action(action.clone())
+                .unwrap_err()
+                .code
+                .as_deref(),
+            Some("busy")
+        );
+        manager.state.lock().unwrap().uncertain.remove(&42);
+        assert_ne!(
+            manager.dock_action(action).unwrap_err().code.as_deref(),
+            Some("busy"),
+            "a pending synchronous read alone must not look like a lost effect"
+        );
+    }
+    #[test]
     fn editor_cannot_inject_private_provider_snapshots() {
         let dir = tempfile::tempdir().unwrap();
         let manager = Cooler::new(
@@ -951,7 +1041,12 @@ mod health_tests {
             true,
             Arc::new(|_, _| {}),
         );
-        for command in ["hardware_exchange", "services_exchange"] {
+        for command in [
+            "hardware_exchange",
+            "services_exchange",
+            "dock_action",
+            "dock_control_state",
+        ] {
             let error = manager.call(command, json!({"snapshot":null})).unwrap_err();
             assert_eq!(error.message, "Invalid cooler command");
         }

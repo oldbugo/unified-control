@@ -70,6 +70,9 @@ pub struct RuntimeResources {
     sampler: Mutex<Sampler>,
     providers: Mutex<Vec<ActiveProvider>>,
     actions: Mutex<NativeActions>,
+    cooler_handler: Mutex<
+        Option<Arc<dyn Fn(super::actions::CoolerAction) -> Result<(), String> + Send + Sync>>,
+    >,
     activation: Mutex<()>,
     health: Mutex<ReaderHealth>,
     usage_diagnostics: Mutex<UsageDiagnostics>,
@@ -133,6 +136,7 @@ impl RuntimeResources {
             sampler: Mutex::new(Sampler::new()),
             providers: Mutex::new(Vec::new()),
             actions: Mutex::new(NativeActions::new(resources, home.into(), fake)),
+            cooler_handler: Mutex::new(None),
             activation: Mutex::new(()),
             health: Mutex::new(ReaderHealth {
                 next: Instant::now(),
@@ -148,6 +152,12 @@ impl RuntimeResources {
             usage_physical: Mutex::new(Vec::new()),
             usage_recent: Mutex::new(Vec::new()),
         })
+    }
+    pub fn set_cooler_handler(
+        &self,
+        handler: Arc<dyn Fn(super::actions::CoolerAction) -> Result<(), String> + Send + Sync>,
+    ) {
+        *self.cooler_handler.lock().unwrap() = Some(handler);
     }
     pub fn usage_exchange(
         &self,
@@ -586,6 +596,15 @@ impl DockHooks for RuntimeResources {
         }
     }
     fn execute(&self, action: &PendingAction) -> Result<(), String> {
+        if let super::actions::ActionPlan::Cooler(action) = super::actions::plan_action(action)? {
+            let handler = self
+                .cooler_handler
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("Cooler host routing is unavailable")?;
+            return handler(action);
+        }
         if self.fake {
             super::actions::plan_action(action).map(|_| ())
         } else {
@@ -623,6 +642,35 @@ pub fn local_time() -> RenderInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fake_cooler_action_uses_host_routing_but_fake_os_action_stays_inert() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeResources::new(home.path(), home.path().join("resources"), true);
+        let action = PendingAction {
+            kind: "cooler".into(),
+            value: r#"{"op":"brightness_step","delta":10}"#.into(),
+        };
+        assert!(runtime.execute(&action).unwrap_err().contains("routing"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let received = seen.clone();
+        runtime.set_cooler_handler(Arc::new(move |action| {
+            received.lock().unwrap().push(action);
+            Ok(())
+        }));
+        runtime.execute(&action).unwrap();
+        runtime
+            .execute(&PendingAction {
+                kind: "media".into(),
+                value: "Play / pause".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![super::super::actions::CoolerAction::BrightnessStep { delta: 10 }]
+        );
+        assert!(!runtime.usage.is_running());
+    }
+
     #[test]
     fn shared_usage_prefetches_both_faces_preserves_profile_policy_and_never_starts_local_reader() {
         let home = tempfile::tempdir().unwrap();

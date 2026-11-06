@@ -17,7 +17,7 @@ const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial
 const FACES = {text:'Large text', icon:'Icon and label', picture:'Picture and label', clock:'Clock', date:'Date', claude:'Claude usage', codex:'Codex usage', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'};
 const USAGE_VIEWS={rings:'Combined rings',bars:'Combined bars',trend:'Combined trends',tokens:'Daily tokens',resets:'Both reset countdowns','five-hour-ring':'Five-hour ring','weekly-ring':'Weekly ring','five-hour-number':'Five-hour number','weekly-number':'Weekly number','five-hour-reset':'Five-hour countdown','weekly-reset':'Weekly countdown','five-hour-time':'Five-hour reset time','weekly-time':'Weekly reset time','five-hour-trend':'Five-hour trend','weekly-trend':'Weekly trend','wide-dashboard':'Wide dashboard'};
 const FACE_ICONS={app:'App',folder:'Folder',back:'Back',play:'Play',pause:'Pause',next:'Next',previous:'Previous',volume:'Volume',mute:'Mute',monitor:'Monitor',globe:'Web',keyboard:'Keyboard',clock:'Clock'};
-const ACTIONS = {none:'No action', hotkey:'Hotkey', media:'Media key', launch:'Open app or file', url:'Open URL', text:'Type text', page:'Switch page', folder:'Open folder page', back:'Back', monitor:'Monitor Toggle'};
+const ACTIONS = {none:'No action', hotkey:'Hotkey', media:'Media key', launch:'Open app or file', url:'Open URL', text:'Type text', page:'Switch page', folder:'Open folder page', back:'Back', monitor:'Monitor Toggle', cooler:'Cooler screen'};
 const ICONS = {
   home:'<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
   cooler:'<rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8m-4-3v3"/>',
@@ -57,6 +57,7 @@ const history=new EditorHistory();
 const pendingMutations=new Set();
 const pictureEpoch=new WeakMap();
 let actionSearch='',deviceStatus=null;
+let coolerControls=null,coolerChoicesLoaded=false,coolerChoicesLoading=false,coolerChoicesError='';
 let followPhysicalPage=true,followPreferenceReady=!T,followPreferenceEpoch=0,savedFollowPhysicalPage=true,followPreferenceWrite=Promise.resolve();
 let dockPollRunning=false,dockRequestTicket=0,lastDockStatusTicket=0,editorIntentEpoch=0,dockStatusUnavailable=false;
 let editGesture=null;
@@ -154,8 +155,55 @@ function faceMarkup(f, k) {
 function dockMarkup() {
   return `<div class="dock-body"><div class="dock-brand">ULANZI <span>D200H · layout preview</span></div><div class="dock-grid">${page().keys.map((k,i) => `<button class="dock-key${i===13?' wide-key':''}${i===selected?' selected':''}" data-key="${i}" aria-label="${i===13?'Wide display':`Key ${i+1}`}, ${FACES[k[previewFace].kind]}" aria-pressed="${i===selected}">${faceMarkup(k[previewFace],k)}<span class="key-index">${i===13?'Wide':String(i+1).padStart(2,'0')}</span></button>`).join('')}</div></div>`;
 }
+const coolerSelectDraft=new WeakSet();
+const COOLER_OPS={theme_next:'Next theme',theme_previous:'Previous theme',theme_select:'Select theme',live:'Live',brightness_set:'Set brightness',brightness_step:'Change brightness'};
+function coolerConfig(k=activeKey()){if(coolerSelectDraft.has(k))return {op:'theme_select',theme_id:''};try{const value=JSON.parse(k.value);if(value&&Object.hasOwn(COOLER_OPS,value.op))return value;}catch{}return {op:'theme_next'};}
+function coolerThemeOptions(selected){
+  const themes=Array.isArray(coolerControls?.themes)?coolerControls.themes:[];
+  const entries=themes.filter(t=>typeof t.id==='string'&&typeof t.name==='string').map(t=>[t.id,t.name]);
+  if(selected&&!entries.some(([id])=>id===selected))entries.unshift([selected,`Unavailable theme (${selected})`]);
+  return `<option value="" disabled>Choose a theme</option>`+entries.map(([id,name])=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(name)}</option>`).join('');
+}
+function coolerActionMarkup(k){
+  const c=coolerConfig(k);
+  let controls=field('Cooler control','cooler-operation',`<select id="cooler-operation">${options(COOLER_OPS,c.op)}</select>`);
+  if(c.op==='theme_select')controls+=field('Theme','cooler-theme',`<select id="cooler-theme">${coolerThemeOptions(c.theme_id||'')}</select>`);
+  if(c.op==='live')controls+=field('Live mode','cooler-live',`<select id="cooler-live">${options({on:'On',off:'Off',toggle:'Toggle'},c.mode||'toggle')}</select>`);
+  if(c.op==='brightness_set')controls+=field('Brightness (%)','cooler-number',`<input id="cooler-number" type="number" min="0" max="100" step="1" value="${esc(c.value??50)}">`);
+  if(c.op==='brightness_step')controls+=field('Brightness change (%)','cooler-number',`<input id="cooler-number" type="number" min="-100" max="100" step="1" value="${esc(c.delta??10)}">`);
+  if(['brightness_set','brightness_step'].includes(c.op))controls+='<p id="cooler-number-error" class="hint" role="status"></p>';
+  return controls+(coolerSelectDraft.has(k)?'<p class="hint">Choose a theme to save this action. The previous action stays saved until then.</p>':'')+'<p class="hint" id="cooler-action-status"></p><button class="btn" data-do="refresh-cooler-controls" type="button">Refresh cooler themes</button><p class="hint">The cooler must already be enabled. This action does not turn the device on. Selecting a theme changes the Live theme; it does not store an Embedded copy.</p>';
+}
+function paintCoolerChoices(){
+  const status=document.getElementById('cooler-action-status');if(!status)return;
+  status.textContent=!T?'Theme choices are available in the Windows app.':coolerChoicesLoading?'Loading cooler themes�':coolerChoicesError||(!coolerControls?.running?'Cooler unavailable. Saved theme choices are kept.':coolerControls.connected?'Cooler connected.':'Cooler engine running; screen disconnected.');
+  const select=document.getElementById('cooler-theme');if(select){const id=coolerConfig().theme_id||'';select.innerHTML=coolerThemeOptions(id);select.value=id;}
+}
+async function updateCoolerControls(force=false){
+  if(!document.getElementById('cooler-action-status'))return;
+  if(!T||coolerChoicesLoading||coolerChoicesLoaded&&!force){paintCoolerChoices();return;}
+  coolerChoicesLoading=true;coolerChoicesError='';paintCoolerChoices();
+  try{coolerControls=await invoke('cooler_controls_state');}catch{coolerChoicesError='Cooler themes could not be read. Saved choices are kept; refresh to retry.';}
+  finally{coolerChoicesLoaded=true;coolerChoicesLoading=false;paintCoolerChoices();}
+}
+function updateCoolerAction(target){
+  if(!target.isConnected||document.getElementById(target.id)!==target)return;
+  const k=activeKey(),c=coolerConfig(k);
+  if(target.id==='cooler-operation'){
+    const op=target.value;if(op==='theme_select'){coolerSelectDraft.add(k);render({preserveFocus:true});return;}coolerSelectDraft.delete(k);k.value=JSON.stringify(op==='live'?{op,mode:'toggle'}:op==='brightness_set'?{op,value:50}:op==='brightness_step'?{op,delta:10}:{op});
+    persist();render({preserveFocus:true});return;
+  }
+  if(target.id==='cooler-theme'){if(!target.value)return;coolerSelectDraft.delete(k);c.theme_id=target.value;}
+  else if(target.id==='cooler-live')c.mode=target.value;
+  else if(target.id==='cooler-number'){
+    if(!['brightness_set','brightness_step'].includes(c.op))return;
+    const value=Number(target.value);if(target.value===''||!Number.isInteger(value)||value < (c.op==='brightness_step'?-100:0)||value>100||c.op==='brightness_step'&&value===0){target.setCustomValidity('Enter a whole number in range; a brightness change cannot be zero.');const error=document.getElementById('cooler-number-error');if(error)error.textContent='Enter a whole number in range; a brightness change cannot be zero. The previous value stays saved.';return;}target.setCustomValidity('');const error=document.getElementById('cooler-number-error');if(error)error.textContent='';c[c.op==='brightness_step'?'delta':'value']=value;
+  }else return;
+  const value=JSON.stringify(c);if(k.value!==value){k.value=value;persist();}
+}
 function actionControl(k) {
   if (k.action === 'none') return '<p class="hint">This key has no action.</p>';
+  if (k.action === 'cooler') return coolerActionMarkup(k);
   if (k.action === 'monitor') return `<div id="monitor-targets"><p class="hint">Loading available monitors…</p></div><p class="hint">Choose the displays this key will toggle.</p>`;
   if (k.action === 'back') return '<p class="hint">Return from the current folder page.</p>';
   if (['page','folder'].includes(k.action)) return field('Target page','action-value',`<select id="action-value">${options(Object.fromEntries(profile().pages.map((p,i)=>[String(i),p.name])), k.value)}</select>`);
@@ -234,7 +282,7 @@ function render({preserveFocus=false,focusFallback=''}={}) {
     <div class="setting-row"><div><strong>Layout storage</strong><p>${T?'Profiles and pages stay in the app data folder, with a startup backup.':'Preview drafts are stored in this browser, separately from app profiles.'}</p></div><span class="chip">Local only</span></div>
     <div class="setting-row"><div><strong>Background behavior</strong><p>Close the window to keep enabled devices running in the tray. Use Quit to stop them; active work finishes first.</p></div></div></section>`;
   else html = `<div class="page-heading"><div><span class="eyebrow">About this app</span><h1>Unified Control</h1><p>One Windows app for your stream dock, cooler screen and dial.</p></div></div><section class="about-card"><h2>One workspace. Your devices.</h2><p>Shape your dock, manage your cooler display and keep your controls close. Choose enabled devices in General. Dial support follows later.</p>${state?`<dl><dt>Version</dt><dd>${esc(state.appVersion)}</dd><dt>Build</dt><dd>${esc(state.build?.hash)} · ${esc(state.build?.commitDate)}</dd></dl>`:'<p class="hint">Browser preview · app build information is unavailable.</p>'}</section>`;
-  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane);if(draft.current==='general')coolerPanel.mountSettings(pane.querySelector('#cooler-settings')); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateDeviceStatus();
+  pane.innerHTML = html;if(draft.current==='cooler')coolerPanel.mount(pane);if(draft.current==='general')coolerPanel.mountSettings(pane.querySelector('#cooler-settings')); showStorage(); updateNativePreviews(); updatePictures(); updateMonitors(); updateCoolerControls(); updateDeviceStatus();
   syncDeviceVisibility();
   restoreEditorFocus(focus,focusFallback);
 }
@@ -389,6 +437,7 @@ document.addEventListener('click', e => {
   const action = e.target.closest('[data-do]')?.dataset.do;
   if (action === 'load-profiles') { loadNativeProfiles(); return; }
   if (action === 'retry-save') { writer.completion=writer.drain(); return; }
+  if (action === 'refresh-cooler-controls') { updateCoolerControls(true); return; }
   if (action === 'retry-monitors') { updateMonitors(); return; }
   if (action === 'undo') {
     const previous=history.undo();
@@ -436,6 +485,7 @@ pane.addEventListener('change', e => {
   if(id==='dock-enabled'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{enabled:e.target.checked}}).then(result=>{applyDockStatus(result,ticket,intent);updateNativePreviews();}).catch(()=>{previewNote='The dock setting could not be applied.';showStorage();updateDeviceStatus();});return;}
   if(id==='dock-brightness'){const ticket=++dockRequestTicket,intent=++editorIntentEpoch;invoke('dock_configure',{patch:{brightness:Number(value)}}).then(result=>{applyDockStatus(result,ticket,intent);}).catch(()=>{previewNote='Brightness could not be applied.';showStorage();});return;}
   if(e.target.dataset.monitor){remember();activeKey().value=JSON.stringify({targets:[...document.querySelectorAll('[data-monitor]:checked')].map(el=>el.dataset.monitor),mode:'toggle'});persist();return;}
+  if(['cooler-operation','cooler-theme','cooler-live','cooler-number'].includes(id)){remember();updateCoolerAction(e.target);return;}
   if(id==='face-picture'){const file=e.target.files?.[0];if(!file)return;editorIntentEpoch++;const dest=activeKey()[selectedFace],epoch=Symbol();pictureEpoch.set(dest,epoch);remember();const mutation=(async()=>{try{if(file.size>4*1024*1024)throw new Error();const asset=T?await invoke('asset_import',{bytes:[...new Uint8Array(await file.arrayBuffer())]}):await savePreviewPicture(file);if(pictureEpoch.get(dest)!==epoch)return;dest.asset=asset;persist();render();}catch{previewNote='Choose a valid PNG or JPEG of at most 4 MiB and 4096 pixels per side.';showStorage();}})();pendingMutations.add(mutation);mutation.finally(()=>pendingMutations.delete(mutation));return;}
   if(id==='usage-view'||id==='face-icon'){remember();activeKey()[selectedFace][id==='usage-view'?'usageView':'icon']=value;persist();render({preserveFocus:true});return;}
   // A blur-triggered change must not replace the next button before its click.
@@ -450,13 +500,14 @@ pane.addEventListener('change', e => {
   const k=activeKey();
   if (id === 'profile-picker') { editGesture=null;pageFollower.manualSelection();draft.profile=Number(value); draft.page=0; selected=0; }
   else if (id === 'face-kind') { k[selectedFace].kind=value;if(!['claude','codex'].includes(value))delete k[selectedFace].usageView;if(value==='claude'&&k[selectedFace].usageView==='tokens')k[selectedFace].usageView='rings';previewFace=selectedFace; }
-  else if (id === 'action-kind') { k.action=value; k.value=['page','folder'].includes(value)?'0':value==='media'?'Play / pause':''; }
+  else if (id === 'action-kind') { k.action=value; coolerSelectDraft.delete(k); k.value=['page','folder'].includes(value)?'0':value==='media'?'Play / pause':value==='cooler'?JSON.stringify({op:'theme_next'}):''; }
   else return;
   persist(); render({preserveFocus:true});
 });
 pane.addEventListener('input', e => {
   const {id,value} = e.target;
   markEditGesture(e.target);
+  if(id==='cooler-number'){remember(`${draft.profile}/${draft.page}/${selected}/cooler-number`);updateCoolerAction(e.target);return;}
   if(id==='action-search'){actionSearch=value;const choices=Object.fromEntries(Object.entries(ACTIONS).filter(([kind,label])=>kind===activeKey().action||label.toLowerCase().includes(value.toLowerCase())));document.getElementById('action-kind').innerHTML=options(choices,activeKey().action);return;}
   if(!['face-text','action-value','launch-args','profile-name','page-name'].includes(id))return;
   remember(`${draft.profile}/${draft.page}/${selected}/${selectedFace}/${id}`);

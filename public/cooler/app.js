@@ -2478,6 +2478,8 @@ function renderScreenSettings() {
     noReply: connectionMessage(st), connecting: connectionMessage(st),
   }[pillState()];
   $('scrStatus').textContent = text;
+  const brightness = S.app?.brightness;
+  $('scrBrightness').textContent = 'Screen brightness: ' + (Number.isInteger(brightness?.reported) ? brightness.reported + '%' : 'unknown') + (Number.isInteger(brightness?.requested) && brightness.requested !== brightness.reported ? ' · Last requested: ' + brightness.requested + '%' : '');
   $('scrSetup').hidden = st.state !== 'setup';
   $('scrSetupAgain').hidden = st.state !== 'ready';
   $('scrCheck').disabled = st.state === 'checking' || st.state === 'updating';
@@ -2509,6 +2511,7 @@ async function refreshConnection() {
     // A setting or app event may have returned while this read was in flight.
     if (S.app !== previousApp || S.app.live !== previousLive) return;
     S.app.live = app.live;
+    S.app.brightness = app.brightness;
     const now = currentScreen();
     if (now.source === 'live' && now.state === 'ready') {
       // Keep the last real recovery when Live is then turned off: an old failed

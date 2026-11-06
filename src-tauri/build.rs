@@ -65,6 +65,7 @@ fn main() {
         "cooler_migration_verify",
         "cooler_configure",
         "cooler_call",
+        "cooler_controls_state",
         "dock_configure",
         "dock_test_button",
         "dock_test_studio",

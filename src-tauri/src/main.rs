@@ -115,6 +115,7 @@ fn main() {
             cc::cooler_migration_verify,
             cc::cooler_configure,
             cc::cooler_call,
+            cc::cooler_controls_state,
             cc::dock_configure,
             cc::dock_test_button,
             cc::dock_test_studio,
