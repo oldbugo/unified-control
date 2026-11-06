@@ -4,6 +4,12 @@ Current checkpoint: installed0.9.0/engine4.21.0 with software-tested cross-devic
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 
+## 2026-11-06 precise cooler connection diagnostics: software gate
+
+Prepared0.9.1 pins engine4.21.1/source77c9086.206 UC core tests pass (three existing ignored),11 host tests, eight engine session/trace tests and ten worker/source cases. New tests cover each failed handshake stage, all existing cancellation points, exact command/wait/timeouts, continued stop attempts after errors, finite redaction/bounds, queue saturation/drain, host-only event routing, opt-out/migration and shared log rotation. Independent review found no command/timing/error/privacy regression. The250ms bound covers trace draining; existing stdout protocol replies can still wait on a stalled parent. Close/ok means the existing void close returned, not independently verified USB release.
+
+Quiet fake native cooler fixtureMzzouL and lifetimeOQoaoQ pass: actual worker IPC, background sampling/opt-out, imports/busy-safe Quit, crash/restart isolation and Live surviving page/tray transitions. No real USB/reset/firmware effects or user data are used. Bundling/installed verification pending; current0.9.0 remains running with the known write_timeout. Instrumentation does not itself recover the device.
+
 ## 2026-11-06 cross-device controls: software gate
 
 Installed0.9.0 pins engine4.21.0/sourceda2cb2c.202 UC core/11 host/62 reader tests pass (three existing ignored checks),

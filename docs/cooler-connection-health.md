@@ -2,6 +2,16 @@
 
 User request, 2026-11-01: the physical cooler freezes repeatedly, cannot connect through UC or original CoolerScreen, and needs recovery plus background evidence. This feature runs inside the visible UC tray app, not a Windows service or a Codex automation.
 
+## Step diagnostics (0.9.1 / engine4.21.1)
+
+User-approved2026-11-06 after reviewing the retained logs. A final healthy snapshot at03:38:42.267UTC precedes the update stop at03:38:55.019. First reopen03:39:02.043 closes with20 successfully sent bytes: EOS4 + genuine-info request7 + preserve-ending9. Matching current source localizes the next failed write to enter-Live; later opens fail before sending any successful bytes. Normal Windows nodes remain. This correlation does not identify firmware versus transport cause, and the failed0.8.0 comparison cannot rule out the initial transition as trigger.
+
+New private `cs:connection_trace` events name each connect/normal-stop/fast-stop/cancel-stop step, finite result and elapsed milliseconds. Commands, order, sleep intervals, timeouts and original errors are unchanged; failed stop writes still permit the remaining best-effort steps. Memory-buffered records are emitted after the USB sequence, through a16-entry nonblocking queue with a250ms final drain. Excess or blocked diagnostics may be dropped; they never trigger retry/reset. No per-frame or keepalive log is added.
+
+UC strictly validates schema1, operation/step/result enums, at most8steps and duration bounds, then appends `kind:live_steps` to the existing2MiB-plus-rotation connection-health log. The diagnostics switch, same serialized opt-out boundary and completed-migration guard apply. Events are internal, not forwarded to the iframe or MCP. No payload, ID, path or arbitrary error text is included. Successful writes confirm transport completion only, not visible pixels or acknowledged Embedded playback. Existing coarse health snapshots remain unchanged.
+
+Tests and installed evidence are recorded in [acceptance](acceptance.md). Original incident records below remain historical. No reset, firmware or physical recovery is part of this instrumentation.
+
 ## Current incident
 
 **Later recovery,2026-11-03:** after the user manually clicked Reconnect, they report physical Live working. Root MCP

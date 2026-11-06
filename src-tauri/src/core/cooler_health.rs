@@ -67,6 +67,26 @@ impl Diagnostics {
     pub fn status(&self) -> Value {
         self.inner.lock().unwrap().status.clone()
     }
+    /// A completed engine transaction is evidence only, never a health update or
+    /// a command. Serialize persistence with opt-out, and keep the same migration
+    /// ownership gate as periodic health samples.
+    pub fn record_trace(&self, value: &Value) {
+        let _inner = self.inner.lock().unwrap();
+        if !self.enabled()
+            || !self
+                .path
+                .parent()
+                .is_some_and(|parent| parent.join("migration.json").is_file())
+        {
+            return;
+        }
+        let Some(trace) = sanitize_trace(value) else {
+            return;
+        };
+        let line =
+            json!({"ts":super::super::device::log::iso_now(),"kind":"live_steps","trace":trace});
+        let _ = append(&self.path, &line, LOG_LIMIT);
+    }
     pub fn begin(&self, now: Instant) -> Option<Ticket> {
         if !self.enabled() {
             return None;
@@ -148,6 +168,78 @@ impl Diagnostics {
             }
         }
     }
+}
+/// Reject the entire transaction when an unreviewed field or value appears.
+/// In particular, arbitrary transport errors and firmware replies never become
+/// diagnostic text. The timestamp is supplied by the host at persistence time.
+fn sanitize_trace(value: &Value) -> Option<Value> {
+    fn fields(value: &Value, names: &[&str]) -> bool {
+        value.as_object().is_some_and(|object| {
+            object.len() == names.len() && names.iter().all(|name| object.contains_key(*name))
+        })
+    }
+    fn choice<'a>(value: &'a Value, choices: &[&str]) -> Option<&'a str> {
+        value.as_str().filter(|text| choices.contains(text))
+    }
+    fn duration(value: &Value) -> Option<u64> {
+        value.as_u64().filter(|millis| *millis <= 120_000)
+    }
+    if !fields(
+        value,
+        &["schema", "sequence", "operation", "totalMs", "steps"],
+    ) || value["schema"].as_u64() != Some(1)
+    {
+        return None;
+    }
+    let sequence = value["sequence"].as_u64()?;
+    let operation = choice(
+        &value["operation"],
+        &["connect", "stop", "stop_fast", "cancel_connect"],
+    )?;
+    let total_ms = duration(&value["totalMs"])?;
+    let steps = value["steps"]
+        .as_array()
+        .filter(|steps| (1..=8).contains(&steps.len()))?;
+    let mut sanitized = Vec::with_capacity(steps.len());
+    for entry in steps {
+        if !fields(entry, &["step", "result", "elapsedMs"]) {
+            return None;
+        }
+        let step = choice(
+            &entry["step"],
+            &[
+                "open",
+                "end_stream",
+                "info",
+                "preserve_ending",
+                "enter_live",
+                "display_on",
+                "loop_clip",
+                "screen_off",
+                "cancelled",
+                "close",
+            ],
+        )?;
+        let result = choice(
+            &entry["result"],
+            &[
+                "ok",
+                "cancelled",
+                "not_found",
+                "descriptor_failure",
+                "busy",
+                "no_reply",
+                "write_timeout",
+                "short_write",
+                "transport_error",
+            ],
+        )?;
+        let elapsed_ms = duration(&entry["elapsedMs"])?;
+        sanitized.push(json!({"step":step,"result":result,"elapsedMs":elapsed_ms}));
+    }
+    Some(
+        json!({"schema":1,"sequence":sequence,"operation":operation,"totalMs":total_ms,"steps":sanitized}),
+    )
 }
 /// A second explicit boundary for agent-visible cached diagnostics. This reads
 /// no source and exposes no payload, identifier, path, PID or arbitrary text.
@@ -616,6 +708,138 @@ mod tests {
     }
     fn probe() -> Value {
         json!({"running":true,"connected":false,"connectionState":"error","code":"write_timeout","stage":"connecting","attempts":20})
+    }
+    fn trace() -> Value {
+        json!({"schema":1,"sequence":7,"operation":"connect","totalMs":710,
+            "steps":[{"step":"open","result":"ok","elapsedMs":200},
+                {"step":"end_stream","result":"write_timeout","elapsedMs":500},
+                {"step":"close","result":"ok","elapsedMs":10}]})
+    }
+    #[test]
+    fn trace_schema_preserves_finite_evidence_and_rejects_unreviewed_payloads() {
+        let original = trace();
+        assert_eq!(sanitize_trace(&original), Some(original.clone()));
+        for operation in ["connect", "stop", "stop_fast", "cancel_connect"] {
+            let mut value = original.clone();
+            value["operation"] = json!(operation);
+            value["totalMs"] = json!(120_000);
+            value["steps"] = json!(vec![
+                json!({"step":"close","result":"ok","elapsedMs":120_000});
+                8
+            ]);
+            assert!(sanitize_trace(&value).is_some());
+        }
+        let secret = "seed-secret USB\\identifier C:\\private\\file";
+        for field in ["message", "payload", "deviceId", "timestamp"] {
+            let mut value = original.clone();
+            value[field] = json!(secret);
+            assert!(
+                sanitize_trace(&value).is_none(),
+                "reject root field {field}"
+            );
+            let mut value = original.clone();
+            value["steps"][0][field] = json!(secret);
+            assert!(
+                sanitize_trace(&value).is_none(),
+                "reject step field {field}"
+            );
+        }
+        for (field, invalid) in [
+            ("schema", json!(2)),
+            ("schema", json!(1.0)),
+            ("sequence", json!(-1)),
+            ("sequence", json!(secret)),
+            ("operation", json!(secret)),
+            ("totalMs", json!(120_001)),
+            ("totalMs", json!(-1)),
+            ("totalMs", json!(0.5)),
+            ("steps", json!([])),
+            ("steps", json!(vec![original["steps"][0].clone(); 9])),
+        ] {
+            let mut value = original.clone();
+            value[field] = invalid;
+            assert!(sanitize_trace(&value).is_none(), "reject {field}");
+        }
+        for (field, invalid) in [
+            ("step", json!(secret)),
+            ("result", json!(secret)),
+            ("elapsedMs", json!(120_001)),
+            ("elapsedMs", json!(-1)),
+            ("elapsedMs", json!(1.5)),
+        ] {
+            let mut value = original.clone();
+            value["steps"][0][field] = invalid;
+            assert!(sanitize_trace(&value).is_none(), "reject step {field}");
+        }
+        for field in ["schema", "sequence", "operation", "totalMs", "steps"] {
+            let mut value = original.clone();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(sanitize_trace(&value).is_none(), "require {field}");
+        }
+        for value in [Value::Null, json!([]), json!(secret)] {
+            assert!(sanitize_trace(&value).is_none());
+        }
+    }
+    #[test]
+    fn trace_logging_obeys_opt_out_migration_and_does_not_change_cached_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("devices/cooler");
+        let path = home.join("connection-health.jsonl");
+        let d = Diagnostics::new(path.clone());
+        d.record_trace(&trace());
+        assert!(!home.exists());
+        d.set_enabled(true);
+        d.record_trace(&trace());
+        assert!(
+            !home.exists(),
+            "trace must not create an unowned migration target"
+        );
+        std::fs::create_dir_all(&home).unwrap();
+        d.record_trace(&trace());
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+        std::fs::write(home.join("migration.json"), b"{}").unwrap();
+        let before = d.status();
+        d.record_trace(&trace());
+        assert_eq!(
+            d.status(),
+            before,
+            "step evidence is not a current health sample"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(line["kind"], "live_steps");
+        assert_eq!(line["trace"], trace());
+        assert!(!agent_timestamp(&line["ts"]).is_null());
+        let mut invalid = trace();
+        invalid["steps"][0]["result"] = json!("seed-secret");
+        d.record_trace(&invalid);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        d.set_enabled(false);
+        d.record_trace(&trace());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(d.status()["code"], "diagnostics_off");
+    }
+    #[test]
+    fn trace_records_share_bounded_health_log_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("connection-health.jsonl");
+        std::fs::write(dir.path().join("migration.json"), b"{}").unwrap();
+        std::fs::write(&path, vec![b' '; LOG_LIMIT as usize - 1]).unwrap();
+        std::fs::write(path.with_extension("jsonl.old"), b"older").unwrap();
+        let d = Diagnostics::new(path.clone());
+        d.set_enabled(true);
+        d.record_trace(&trace());
+        assert_eq!(
+            std::fs::metadata(path.with_extension("jsonl.old"))
+                .unwrap()
+                .len(),
+            LOG_LIMIT - 1
+        );
+        assert!(std::fs::metadata(&path).unwrap().len() < LOG_LIMIT);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        let line: Value =
+            serde_json::from_str(std::fs::read_to_string(path).unwrap().trim()).unwrap();
+        assert_eq!(line["kind"], "live_steps");
     }
     #[test]
     fn agent_projection_is_finite_bounded_and_redacts_every_nested_payload() {
