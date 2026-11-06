@@ -884,6 +884,10 @@ fn read_worker(
         } else if let Some(event) = value["event"].as_str() {
             let Some(owner) = owner.upgrade() else { break };
             let payload = value["payload"].clone();
+            if event == "cs:connection_trace" {
+                owner.diagnostics.record_trace(&payload);
+                continue;
+            }
             if event == "ready" {
                 let mut state = owner.state.lock().unwrap();
                 state.ready = true;
@@ -942,6 +946,50 @@ fn read_worker(
 #[cfg(all(test, windows))]
 mod health_tests {
     use super::*;
+    #[test]
+    fn connection_trace_events_are_private_and_obey_saved_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("migration.json"), b"{}").unwrap();
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
+        let events = forwarded.clone();
+        let manager = Cooler::new(
+            home.clone(),
+            dir.path().join("resources"),
+            true,
+            Arc::new(move |event, _| events.lock().unwrap().push(event.to_string())),
+        );
+        // This test feeds the private reader directly. Suppress its unrelated
+        // periodic sampler so no timing race adds a health snapshot to the file.
+        manager.stopped.store(true, Ordering::SeqCst);
+        manager.set_diagnostics(true);
+        let payload = json!({"schema":1,"sequence":1,"operation":"connect","totalMs":500,
+            "steps":[{"step":"end_stream","result":"write_timeout","elapsedMs":500}]});
+        let event = json!({"v":1,"event":"cs:connection_trace","payload":payload});
+        let frame = format!("{event}\n");
+        read_worker(
+            std::io::Cursor::new(frame.clone()),
+            Arc::downgrade(&manager),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(true)),
+        );
+        assert!(forwarded.lock().unwrap().is_empty());
+        let path = home.join("connection-health.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(line["kind"], "live_steps");
+        assert_eq!(line["trace"], payload);
+        manager.set_diagnostics(false);
+        read_worker(
+            std::io::Cursor::new(frame),
+            Arc::downgrade(&manager),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(true)),
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+        assert!(forwarded.lock().unwrap().is_empty());
+    }
     #[test]
     fn unrelated_replies_cannot_reopen_an_unanswered_hardware_probe() {
         let dir = tempfile::tempdir().unwrap();

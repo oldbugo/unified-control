@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 — 2026-11-06
+
+Add finite per-step connection and shutdown results/timings from cooler engine4.21.1. Traces are buffered until a transaction finishes, delivered through a bounded nonblocking private event queue and validated again by UC. The existing diagnostics opt-out and migration guard control persistence in the rotated local health log. No device identities, reply payloads or arbitrary error text are recorded.
+
+Preserve commands, delays, timeouts, original errors and best-effort shutdown continuation. No new device probe, recovery operation or public RPC is added. Stop messages describe requested Embedded playback/screen-off, rather than claiming a verified physical result. This is diagnostic instrumentation, not a cooler recovery fix.
+
 ## 0.9.0 — 2026-11-06
 
 Add typed dock actions for cooler Live-theme selection/cycling, Live on/off/toggle and brightness set/step. The editor
