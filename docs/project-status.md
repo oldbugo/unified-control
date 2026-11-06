@@ -13,8 +13,10 @@ installation or delete its data as a cleanup step. It remains the rollback copy.
 
 ## Completed checkpoint
 
-Installed UC **0.9.0**, source `7c3ee6daaac24f90e85d3ae7359fe392fae5d5cb`, immutable tag `v0.9.0`.
-PR29 adds typed dock-to-cooler controls, pinning engine4.21.0/sourceda2cb2c (CoolerScreen PR6).
+Installed UC **0.9.1**, source `4f32d0512a519bcf13f806b093f75568cdad1b29`, immutable tag `v0.9.1`.
+PR31 adds precise opt-out connect/stop diagnostics with engine4.21.1/source77c9086 (CoolerScreen PR7);0.9.0 controls are retained.
+
+Installed0.9.1/source4f32d05 with engine4.21.1/source77c9086 passed quiet startup/newPID, actual MCP versions, request-proxy identity, connected dock, both verified providers and exact selected fourteen-key page preservation. Real live_steps records are present: first11:02:53.702UTC sequence0 reports open/ok207ms, end_stream/write_timeout512ms, close/ok46ms (total766ms). Later attempts repeat the same first-write failure. Worker remains ready/no restarts; Windows has two normal nodes/problem0 and no holds. No reset, elevation, firmware or manual physical-action test was performed. This verifies diagnostic collection, not cooler recovery.
 
 Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
 
@@ -29,13 +31,13 @@ account/history barriers, playback timing and weather cache/rates remain. The pr
 | Dock usability | Immediate physical face edits, persistence/reconnect and Monitor Toggle are user-confirmed. Folder/Back felt responsive in three retest cycles. Preview retention and virtual page-follow fixes are installed; final user confirmation remains open. |
 | AI Usage | Canonical Windows launch defect fixed in0.3.1. Both providers refreshed beyond five minutes; a transient Codex failure recovered automatically. Exact account-panel, logout/switch and physical gauge acceptance remain open. Claude needs the authenticated Desktop Code companion. |
 | MCP | Codex model-client status/read/preview/apply/conflict/undo acceptance passed. Layout edits coordinate with the visible editor. Claude model-client acceptance and physical-action tools remain open. |
-| Cooler | Separate supervised engine4.21.0, embedded themes/library/settings, guarded imports and safe lifecycle are implemented. Prior user confirmation covers background Live and themes/settings; current cooler connection fails with write_timeout, reproduced on0.8.0 as well. Reentry avoids redundant automatic USB checks. |
+| Cooler | Separate supervised engine4.21.1, embedded themes/library/settings, guarded imports and safe lifecycle are implemented. Prior user confirmation covers background Live and themes/settings; current cooler connection fails with write_timeout, reproduced on0.8.0 as well. Reentry avoids redundant automatic USB checks. |
 | Shared hardware | One leased CPU/RAM/full NVIDIA collector supplies both workers. Local aggregate duplicates stay off; original expiry survives worker caches and dock delivery. Unused sources stop; independent consumer failure/recovery and actual installed1Hz counters are verified. |
 | Shared AI/music/weather | One host account reader supplies bounded guarded frames; one provider-only process supplies selected cooler widgets. Original timing, cache/configuration binding, expiry and source/crash isolation pass. Idle provider retains bounded weather memory with readers off. Actual installed one-reader/one-provider process tree verified. |
 | Cooler data | App-owned verification passes286 library files,22 gallery files and23 active references. No missing media or old-root dependencies. One UC theme edit/two regenerated previews retained; original rollback data kept. |
 | Shell | Home/status cards, sidebar search, General device switches, enabled-only navigation, unframed cooler pane and overall polish are installed. Remaining visual review is acceptance/refinement work. |
 
-Latest0.9.0 software gate:202 core/11 host/62 reader tests pass, with three existing ignored checks; cooler five dock-action/19 scheduler/nine worker cases pass. Headless and native cross-device/profile/MCP/hardware/worker/cooler/lifetime/migration/shared-provider suites pass. The earlier shared receiver/music/weather gates also passed. A prior opaque lifecycle poll failure passed unchanged-binary retry; initiating cause is unconfirmed.
+Latest0.9.1 gate:206 core/11 host tests, eight session/trace and ten worker/source cases plus quiet native cooler/lifetime checks pass. Prior0.9.0 software gate:202 core/11 host/62 reader tests passed, with three existing ignored checks; cooler five dock-action/19 scheduler/nine worker cases pass. Headless and native cross-device/profile/MCP/hardware/worker/cooler/lifetime/migration/shared-provider suites pass. The earlier shared receiver/music/weather gates also passed. A prior opaque lifecycle poll failure passed unchanged-binary retry; initiating cause is unconfirmed.
 Bounded normal pipe admission and improved fixture errors were added; final affected native reruns pass.
 Worker Rust modules and diff whitespace pass. Whole-repository formatting still has unrelated existing differences.
 See [acceptance evidence](acceptance.md), [functional follow-ups](function-failures.md) and [migration contract](device-app/cooler-migration.md).

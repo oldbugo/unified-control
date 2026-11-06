@@ -10,7 +10,7 @@ New private `cs:connection_trace` events name each connect/normal-stop/fast-stop
 
 UC strictly validates schema1, operation/step/result enums, at most8steps and duration bounds, then appends `kind:live_steps` to the existing2MiB-plus-rotation connection-health log. The diagnostics switch, same serialized opt-out boundary and completed-migration guard apply. Events are internal, not forwarded to the iframe or MCP. No payload, ID, path or arbitrary error text is included. Successful writes confirm transport completion only, not visible pixels or acknowledged Embedded playback. Existing coarse health snapshots remain unchanged.
 
-Tests and installed evidence are recorded in [acceptance](acceptance.md). Original incident records below remain historical. No reset, firmware or physical recovery is part of this instrumentation.
+Installed0.9.1 real records confirm open succeeds and the initial end_stream write now times out in roughly500ms; the information-request step is never reached on these attempts. This is stronger evidence of the current failure stage, not the initiating cause. Tests and installed evidence are recorded in [acceptance](acceptance.md). Original incident records below remain historical. No reset, firmware or physical recovery is part of this instrumentation.
 
 ## Current incident
 

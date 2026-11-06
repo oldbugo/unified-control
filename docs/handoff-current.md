@@ -1,4 +1,4 @@
-# Current handoff: UC0.9.0 cross-device controls
+# Current handoff: UC0.9.1 cooler step diagnostics
 
 Checkpoint: **2026-11-06**, Australia/Sydney. Plan2.4/shared-services2.6 and software2.7 are complete and installed.
 Leave the tray app running. Cooler physical acceptance remains blocked by an unresolved USB write timeout.
@@ -12,6 +12,12 @@ Leave the tray app running. Cooler physical acceptance remains blocked by an unr
 5. Cooler issue23 (workspace entry delay) stays separate. No retention timer or measured speedup was included.
 
 ## Installed state and open connection failure
+
+Installed0.9.1/source4f32d05 with engine4.21.1/source77c9086 passed quiet startup/newPID, actual MCP versions, request-proxy identity, connected dock, both verified providers and exact selected fourteen-key page preservation. Real live_steps records are present: first11:02:53.702UTC sequence0 reports open/ok207ms, end_stream/write_timeout512ms, close/ok46ms (total766ms). Later attempts repeat the same first-write failure. Worker remains ready/no restarts; Windows has two normal nodes/problem0 and no holds. No reset, elevation, firmware or manual physical-action test was performed. This verifies diagnostic collection, not cooler recovery.
+
+Current release source4f32d0512a519bcf13f806b093f75568cdad1b29/tagv0.9.1; engine77c90863bec8e761d34f4de4cadd67abd59c8a6a/tagv4.21.1. UC PR31 and cooler PR7 merged.206 core/11 host, eight session/trace, ten worker and quiet native cooler/lifetime checks pass; bundled inactive reader smoke passes. Stop-path recording is software-tested but no healthy physical stop occurred during this failed-device installation.
+
+The0.9.0 checkpoint below is historical:
 
 Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
 
@@ -36,5 +42,5 @@ Tested UC idle-safe updates are authorized; defer while busy, never force-close,
 Use MCP/dedicated request proxy, never start installed GUI from a packaged shell. Tests are isolated quiet debug/fake instances.
 No automatic resets/elevation, guessed USB commands or firmware. Sleep/resume stays deferred. Do not change unrelated apps, auth/media/profiles or device opt-ins.
 Private repositories only. Completed branches/worktrees are removed after merge; documentation does not trigger a new version or reinstall.
-`dist` retains0.9.0 plus0.8.0/0.7.0/0.6.0/0.5.1/0.4.1. No installer cleanup requested.
-Seven old migration fixtures remain because earlier automatic approval blocked recursive deletion; reusable caches and unrelated worktrees remain.
+`dist` retains0.9.1/0.9.0 plus0.8.0/0.7.0/0.6.0/0.5.1/0.4.1. No installer cleanup requested.
+Seven old migration fixtures remain because earlier automatic approval blocked recursive deletion. Automatic review also blocked removing this session incomplete source cache; it was repaired as a clean pinned build cache using local Git objects and retained. Reusable caches and unrelated worktrees remain.

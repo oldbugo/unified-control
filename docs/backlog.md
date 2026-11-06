@@ -1,6 +1,6 @@
 # Current project backlog
 
-Updated2026-11-06. Plan2.4/shared-services2.6 and software2.7 are installed in0.9.0.
+Updated2026-11-06. Plan2.4/shared-services2.6 and software2.7 are retained in installed0.9.1. Precise startup/shutdown diagnostics are installed; actual attempts confirm the initial end_stream write times out after USB opens.
 Installer replacement2.8 is next in the recorded implementation order; physical cross-device acceptance remains open.
 Current cooler Live fails with write_timeout, also reproduced by a quiet0.8.0 comparison. Cause/recovery remain unverified; no automatic reset was attempted.
 [Scope, phase status and ordered next work](project-status.md) is the current
