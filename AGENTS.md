@@ -29,7 +29,7 @@ AppData profile files directly. No physical action, USB reset or firmware comman
 
 ## Resume safely
 
-The user resumed development on2026-11-06. Plan2.4/shared-services2.6 and software2.7 are complete. Cooler Live currently fails with write_timeout, reproduced on0.8.0 as well; physical2.7 acceptance remains open. Step diagnostics are installed and confirm open succeeds, then initial end_stream write times out; see connection-health docs. No automatic reset is authorized. Installer replacement2.8 is the next implementation item. Completed work is consolidated on `main`; immutable release tags identify their original build sources.
+The user resumed on2026-11-09 and confirms physical cooler recovery after cycling the PC. Current same-build MCP/logs show connected Live and all handshake steps passing. The earlier write_timeout cause is unresolved; keep diagnostics enabled and preserve failure/recovery evidence. Plan2.4/shared-services2.6/software2.7 are complete; physical2.7 controls acceptance remains open. No automatic reset is authorized. Installer transition2.8 preflight/rehearsal is built; next are immutable backup and reviewed identity/shortcut effects, with retirement behind release/rollback gates. Completed work is consolidated on `main`; immutable release tags identify their original build sources.
 Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall an app
 for documentation changes. Keep the repositories private and user profiles/authentication/local diagnostics out of Git.
 Follow `CLAUDE.md` for quiet simulated testing, idle-safe installation and hardware limits.

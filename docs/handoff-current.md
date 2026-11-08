@@ -1,17 +1,21 @@
 # Current handoff: UC0.9.1 cooler step diagnostics
 
-Checkpoint: **2026-11-06**, Australia/Sydney. Plan2.4/shared-services2.6 and software2.7 are complete and installed.
-Leave the tray app running. Cooler physical acceptance remains blocked by an unresolved USB write timeout.
+Checkpoint: **2026-11-09**, Australia/Sydney. Plan2.4/shared-services2.6 and software2.7 are complete and installed.
+Leave the tray app running. The user confirms physical cooler recovery after cycling the PC; same-build logs/MCP show connected streaming. The cause of prior disconnects remains unresolved; keep diagnostics enabled. Physical dock-to-cooler controls acceptance remains open.
 
 ## Start here next time
 
 1. Use `C:/Users/pc/Documents/UnifiedControl`, not the separate Ulanzi plugins repository.
 2. Refresh/read the vault Start here, then UC AGENTS.md, CLAUDE.md and README.md in full.
 3. Read [project status](project-status.md), inspect Git status and running MCP status/layout. Preserve user changes.
-4. Next recorded implementation: **2.8 installer replacement**, followed by combined release gates and Dial. Do not uninstall the standalone CoolerScreen or remove rollback data without a concrete reviewed migration plan.
+4. **2.8 installer transition:** read-only preflight and synthetic rollback rehearsal are built and pass33 checks. Read [contract/tooling](device-app/installer-transition.md). Next: verified immutable backup and reviewed identity/shortcut effects after release gates. Do not uninstall the standalone app or remove rollback data based on historical receipts/synthetic tests. Combined release gates and Dial follow.
 5. Cooler issue23 (workspace entry delay) stays separate. No retention timer or measured speedup was included.
 
-## Installed state and open connection failure
+## Installed state and connection evidence
+
+**Recovery checked2026-11-09:** the user reports the physical cooler screen works after restarting/power-cycling the PC. The same installedUC0.9.1/engine4.21.1 records a complete successful connect at2026-11-08T22:29:19.536UTC (09:29:19SydneyNov9): open209ms, end_stream0ms, genuine info16ms, preserve_ending0ms, enter_live215ms, total643ms. The next health sample reports streaming19FPS, no holds, normal Windows nodes/problem0 and no worker restarts. Earlier retained attempts through2026-11-08T09:25:20UTC still failed at the initial write. This establishes recovery after the user-reported PC cycle without a software update, not the initiating cause or uninterrupted reliability. Diagnostics stay enabled; no agent reset/restart/sleep/physical action was used.
+
+The following2026-11-06 failed-device results remain historical evidence:
 
 Installed0.9.1/source4f32d05 with engine4.21.1/source77c9086 passed quiet startup/newPID, actual MCP versions, request-proxy identity, connected dock, both verified providers and exact selected fourteen-key page preservation. Real live_steps records are present: first11:02:53.702UTC sequence0 reports open/ok207ms, end_stream/write_timeout512ms, close/ok46ms (total766ms). Later attempts repeat the same first-write failure. Worker remains ready/no restarts; Windows has two normal nodes/problem0 and no holds. No reset, elevation, firmware or manual physical-action test was performed. This verifies diagnostic collection, not cooler recovery.
 

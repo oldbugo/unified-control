@@ -2,6 +2,12 @@
 
 User request, 2026-11-01: the physical cooler freezes repeatedly, cannot connect through UC or original CoolerScreen, and needs recovery plus background evidence. This feature runs inside the visible UC tray app, not a Windows service or a Codex automation.
 
+## Current recovery:2026-11-09
+
+**Recovery checked2026-11-09:** the user reports the physical cooler screen works after restarting/power-cycling the PC. The same installedUC0.9.1/engine4.21.1 records a complete successful connect at2026-11-08T22:29:19.536UTC (09:29:19SydneyNov9): open209ms, end_stream0ms, genuine info16ms, preserve_ending0ms, enter_live215ms, total643ms. The next health sample reports streaming19FPS, no holds, normal Windows nodes/problem0 and no worker restarts. Earlier retained attempts through2026-11-08T09:25:20UTC still failed at the initial write. This establishes recovery after the user-reported PC cycle without a software update, not the initiating cause or uninterrupted reliability. Diagnostics stay enabled; no agent reset/restart/sleep/physical action was used.
+
+The failed state persisted across app-only restarts and a0.8 comparison; a PC power cycle later cleared it on the same0.9.1 build. This is consistent with retained device/USB state, but cannot distinguish device firmware, Windows transport/driver state or another effect of restarting. Do not label the disconnect fixed. Record the next first failing step, last successful stream, stop results, worker generation/holds and passive Windows evidence before any authorized recovery. Current log rotation is bounded; preserve incident boundary summaries at development checkpoints.
+
 ## Step diagnostics (0.9.1 / engine4.21.1)
 
 User-approved2026-11-06 after reviewing the retained logs. A final healthy snapshot at03:38:42.267UTC precedes the update stop at03:38:55.019. First reopen03:39:02.043 closes with20 successfully sent bytes: EOS4 + genuine-info request7 + preserve-ending9. Matching current source localizes the next failed write to enter-Live; later opens fail before sending any successful bytes. Normal Windows nodes remain. This correlation does not identify firmware versus transport cause, and the failed0.8.0 comparison cannot rule out the initial transition as trigger.
@@ -10,9 +16,9 @@ New private `cs:connection_trace` events name each connect/normal-stop/fast-stop
 
 UC strictly validates schema1, operation/step/result enums, at most8steps and duration bounds, then appends `kind:live_steps` to the existing2MiB-plus-rotation connection-health log. The diagnostics switch, same serialized opt-out boundary and completed-migration guard apply. Events are internal, not forwarded to the iframe or MCP. No payload, ID, path or arbitrary error text is included. Successful writes confirm transport completion only, not visible pixels or acknowledged Embedded playback. Existing coarse health snapshots remain unchanged.
 
-Installed0.9.1 real records confirm open succeeds and the initial end_stream write now times out in roughly500ms; the information-request step is never reached on these attempts. This is stronger evidence of the current failure stage, not the initiating cause. Tests and installed evidence are recorded in [acceptance](acceptance.md). Original incident records below remain historical. No reset, firmware or physical recovery is part of this instrumentation.
+On2026-11-06, installed0.9.1 real records confirmed open succeeded and the initial end_stream write timed out in roughly500ms; the information-request step was never reached on those attempts. This was stronger evidence of that failure stage, not the initiating cause. Tests and installed evidence are recorded in [acceptance](acceptance.md). Original incident records below remain historical. No reset, firmware or physical recovery is part of this instrumentation.
 
-## Current incident
+## Earlier incident and recovery history
 
 **Later recovery,2026-11-03:** after the user manually clicked Reconnect, they report physical Live working. Root MCP
 confirms connected, normalNodes2/problemCodes[0,0] and zero matched descriptor failures, with the same worker generation.

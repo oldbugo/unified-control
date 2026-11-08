@@ -7,12 +7,14 @@ Development resumed by the user on2026-11-04. [Current handoff](docs/handoff-cur
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Current recovery check,2026-11-09: the user confirms physical cooler playback after cycling the PC. Same-build logs show all connection steps passing and Live streaming; the disconnect cause remains unresolved. Diagnostics remain enabled. [Evidence](docs/cooler-connection-health.md). Installer-transition [preflight and synthetic rollback rehearsal](docs/device-app/installer-transition.md) are built and pass33 checks; actual retirement stays gated. Tooling/docs only: no app rebuild or restart.
+
 Version0.9.1 adds precise buffered connect/stop step diagnostics through the existing Connection diagnostics switch.
 The host persists strict finite results and timings in the existing bounded health log; a saturated private channel drops
 diagnostic records rather than holding Live. Commands, waits, errors and recovery policy are unchanged. Shutdown text
 describes the requested state rather than claiming physical playback. Engine4.21.1 is bundled; no standalone update.
 206 core/11 host tests, eight engine session/trace and ten worker cases plus quiet native cooler/lifetime checks pass.
-Installed0.9.1/source4f32d05 with engine4.21.1/source77c9086 passed quiet startup/newPID, actual MCP versions, request-proxy identity, connected dock, both verified providers and exact selected fourteen-key page preservation. Real live_steps records are present: first11:02:53.702UTC sequence0 reports open/ok207ms, end_stream/write_timeout512ms, close/ok46ms (total766ms). Later attempts repeat the same first-write failure. Worker remains ready/no restarts; Windows has two normal nodes/problem0 and no holds. No reset, elevation, firmware or manual physical-action test was performed. This verifies diagnostic collection, not cooler recovery.
+Historical2026-11-06 installation result: UC0.9.1/source4f32d05 with engine4.21.1/source77c9086 passed quiet startup/newPID, actual MCP versions, request-proxy identity, connected dock, both verified providers and exact selected fourteen-key page preservation. Real live_steps records are present: first11:02:53.702UTC sequence0 reports open/ok207ms, end_stream/write_timeout512ms, close/ok46ms (total766ms). Later attempts repeat the same first-write failure. Worker remains ready/no restarts; Windows has two normal nodes/problem0 and no holds. No reset, elevation, firmware or manual physical-action test was performed. This verifies diagnostic collection, not cooler recovery.
 
 Version0.9.0 adds a Cooler screen action in the dock editor: select/cycle Live themes, turn Live on/off/toggle, and set/step
 screen brightness. Configuration and previews remain inert; existing A/B faces and user assignments stay unchanged.

@@ -8,6 +8,8 @@ The user is not a programmer: report in plain language.
 
 ## Standing user instructions (read in full at every session start)
 
+- 2026-11-09: The user reports the cooler works after cycling the PC. Give special attention to evidence of disconnect causes while continuing the project. Keep connection diagnostics on unless the user changes the setting; preserve failure/recovery evidence and distinguish confirmed recovery from an identified cause.
+
 - 2026-11-03: Install tested UC builds as needed without asking again. Use the idle-safe updater; defer while busy and
   never force-close. Install/restart quietly to the tray, then verify startup, device reconnection and preserved
   configuration. This is standing permission for UC updates, not unrelated apps.
