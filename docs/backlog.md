@@ -1,8 +1,7 @@
 # Current project backlog
 
-Updated2026-11-06. Plan2.4/shared-services2.6 and software2.7 are retained in installed0.9.1. Precise startup/shutdown diagnostics are installed; actual attempts confirm the initial end_stream write times out after USB opens.
-Installer replacement2.8 is next in the recorded implementation order; physical cross-device acceptance remains open.
-Current cooler Live fails with write_timeout, also reproduced by a quiet0.8.0 comparison. Cause/recovery remain unverified; no automatic reset was attempted.
+Updated2026-11-09. Plan2.4/shared-services2.6/software2.7 remain in installed0.9.1. The user confirms physical cooler recovery after cycling the PC; all connect steps now pass on the same build. Disconnect cause remains unresolved; diagnostics stay enabled.
+Installer transition2.8 now has a tested read-only [preflight and synthetic rollback rehearsal](device-app/installer-transition.md). Actual retirement remains behind fresh backup, identity/shortcut and release gates. Physical cross-device acceptance remains open.
 [Scope, phase status and ordered next work](project-status.md) is the current
 implementation plan; [handoff](handoff-current.md) is the restart entry point.
 
@@ -17,6 +16,8 @@ implementation plan; [handoff](handoff-current.md) is the restart entry point.
 | [#7 Monitor Toggle](https://github.com/oldbugo/unified-control/issues/7) | Installed0.2.3 path fix, user-confirmed working on the selected Dell target. Broader action/monitor/audio combinations remain acceptance work. This is not an unimplemented feature. |
 
 ## Cooler and interface status
+
+- **Open: [#9 recurring cooler disconnects](https://github.com/oldbugo/unified-control/issues/9).** Physical playback recovered after the user PC cycle on2026-11-09; same0.9.1 handshake/streaming logs confirm recovery. Cause remains unresolved. Keep diagnostics on and preserve the next first-failure/last-good/stop evidence; no automatic reset.
 
 - **Open: [#23 Cooler page entry delay](https://github.com/oldbugo/unified-control/issues/23) (user-reported2026-11-04).** Returning to the cooler workspace can feel slow, including
 rapid navigation. The enabled engine/Live already stays running; the interface is recreated and rehydrates on each entry.
@@ -36,7 +37,7 @@ Actual286 library/22 gallery files and23 active references pass. The user confir
 Remaining interface work: installed scaling/usability review, further cooler styling, and the original General update,
 privacy and diagnostics-export surfaces. Keep these separate from already-delivered shell/search/device-switch work.
 Broader Live/Embedded transitions and combined recovery remain acceptance/release work. Installer-lineage replacement
-is still open; original CoolerScreen installation/data remain rollback. [Migration contract](device-app/cooler-migration.md).
+is still open after the preflight/rehearsal preparation; original CoolerScreen installation/data remain rollback. [Migration contract](device-app/cooler-migration.md).
 
 ## Navigation evidence and boundaries
 

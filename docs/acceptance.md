@@ -1,8 +1,16 @@
 # Device acceptance evidence
 
-Current checkpoint: installed0.9.1/engine4.21.1 with software-tested cross-device controls. Dock/usage checks pass; cooler Live has an unresolved USB write_timeout, also reproduced on0.8.0. Physical cooler acceptance is blocked.
+Current checkpoint: installed0.9.1/engine4.21.1. The user confirms physical cooler recovery after cycling the PC; same-build logs/MCP show connected streaming and all connect steps passing. Disconnect cause remains unresolved; physical cross-device actions acceptance remains open.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
+
+## 2026-11-09 installer-transition preparation
+
+Thirty-three Windows PowerShell checks pass for read-only inventory projection, redaction, conservative shared-view/custom-location handling, refusal of caller-supplied retirement flags, exact synthetic original/UC byte preservation, backup failure before synthetic retirement, rollback, rerun refusal, ownership/escape/overlap/junction guards. The actual shell inventory runs without app/registry/device changes and reports ambiguous observations in both registry views; this does not establish duplicate installs. Output remains unverified and readyToRetire:false. Actual NSIS replacement/uninstall and real4.x rollback are not tested. Existing apps/startup/shortcuts/settings stay untouched. Fixtures are retained. [Contract](device-app/installer-transition.md). No binary/version/reinstall.
+
+## 2026-11-09 PC-cycle recovery
+
+**Recovery checked2026-11-09:** the user reports the physical cooler screen works after restarting/power-cycling the PC. The same installedUC0.9.1/engine4.21.1 records a complete successful connect at2026-11-08T22:29:19.536UTC (09:29:19SydneyNov9): open209ms, end_stream0ms, genuine info16ms, preserve_ending0ms, enter_live215ms, total643ms. The next health sample reports streaming19FPS, no holds, normal Windows nodes/problem0 and no worker restarts. Earlier retained attempts through2026-11-08T09:25:20UTC still failed at the initial write. This establishes recovery after the user-reported PC cycle without a software update, not the initiating cause or uninterrupted reliability. Diagnostics stay enabled; no agent reset/restart/sleep/physical action was used.
 
 ## 2026-11-06 precise cooler connection diagnostics: software gate
 
