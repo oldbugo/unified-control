@@ -1,6 +1,6 @@
 # Dock-to-cooler controls
 
-Plan2.7. Software implementation verified2026-11-06 and installed in0.9.0. Physical acceptance remains open: cooler Live reports write_timeout, reproduced on the prior0.8.0 as well. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
+Plan2.7. Software implementation verified2026-11-06 and installed in0.9.0. Physical controls acceptance remains open. Earlier Live write_timeout also reproduced on0.8.0; the user confirms recovery after cycling the PC on2026-11-09 and same0.9.1 handshake/streaming logs pass. The disconnect cause remains unresolved. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
 
 ## Stored action
 
