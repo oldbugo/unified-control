@@ -5,6 +5,7 @@
 
 mod instance_id;
 mod agent_transport;
+mod freeze_heartbeat;
 mod live_app;
 mod quit_cmd;
 mod relaunch;
@@ -74,8 +75,8 @@ fn main() {
     // (The override only works in debug builds: an installed build always focuses the running one.)
     if !(cfg!(debug_assertions) && std::env::var_os("UC_MULTI").is_some()) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // a second launch brings the window up, except a quiet `--background` restart
-            if !args.iter().any(|a| a == "--background") {
+            // A login launch or quiet restart must not bring the window up.
+            if !args.iter().any(|a| a == "--background" || a == uc_core::core::autostart::TRAY_FLAG) {
                 live_app::show_main(app);
             }
         }));
@@ -150,6 +151,13 @@ fn main() {
             }
             // the tray is always there (Open, Quit): closing the window leaves the app in the tray
             live_app::ensure_tray(app.handle(), false);
+            let host = &app.state::<Core>().0;
+            let settings = host.settings.clone();
+            if freeze_heartbeat::start(host.base.clone(), move || {
+                settings.load().0["freezeDiagnostics"].as_bool().unwrap_or(false)
+            }).is_err() {
+                uc_core::device::log("freeze heartbeat could not start");
+            }
             if !tray_only && !background {
                 live_app::create_window(app.handle(), true)?;
             }

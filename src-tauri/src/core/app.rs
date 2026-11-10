@@ -605,6 +605,7 @@ impl App {
             "agentAccess": s.0["ui"]["agentAccess"].as_bool().unwrap_or(false),
             "agentBusy": self.agent_busy(),
             "autostart": super::autostart::is_on(),
+            "freezeDiagnostics": s.0["freezeDiagnostics"],
             "dock": self.dock_state(),
             "cooler": self.cooler_state(),
             "hardware": self.hardware.get().map(|hardware| hardware.status()),
@@ -623,6 +624,10 @@ impl App {
         if diagnostics.is_some_and(|value| !value.is_boolean()) {
             return Err(CoreError::new("Invalid cooler diagnostics setting"));
         }
+        let freeze = body.get("freezeDiagnostics");
+        if freeze.is_some_and(|value| !value.is_boolean()) {
+            return Err(CoreError::new("Invalid freeze diagnostics setting"));
+        }
         let follow = body.get("followPhysicalPage");
         if follow.is_some_and(|value| !value.is_boolean()) {
             return Err(CoreError::new("Invalid follow-physical-page setting"));
@@ -640,6 +645,9 @@ impl App {
                 }
                 if let Some(diagnostics) = diagnostics {
                     s["cooler"]["diagnostics"] = diagnostics.clone();
+                }
+                if let Some(enabled) = freeze {
+                    s["freezeDiagnostics"] = enabled.clone();
                 }
                 if let Some(follow) = follow {
                     s["ui"]["followPhysicalPage"] = follow.clone();
