@@ -5,6 +5,7 @@
 //! background work when a high-priority task is starved, and job events for the UI.
 //!
 //! Every task runs on its own OS thread once its resources are granted (the limits bound the thread count).
+use super::sync::{MutexExt, RecoverResult};
 use super::error::{CoreError, CoreResult};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -281,25 +282,25 @@ impl CancelToken {
     }
     fn cancel(&self, reason: CoreError) {
         {
-            let mut r = self.0.reason.lock().unwrap();
+            let mut r = self.0.reason.lock_or_recover();
             if r.is_none() {
                 *r = Some(reason);
             }
         }
         self.0.flag.store(true, Ordering::SeqCst);
-        for w in self.0.children.lock().unwrap().iter() {
+        for w in self.0.children.lock_or_recover().iter() {
             if let Some(c) = w.upgrade() {
-                let _ = c.lock().unwrap().kill();
+                let _ = c.lock_or_recover().kill();
             }
         }
     }
     fn reason(&self) -> CoreError {
-        self.0.reason.lock().unwrap().clone().unwrap_or_else(CoreError::cancelled)
+        self.0.reason.lock_or_recover().clone().unwrap_or_else(CoreError::cancelled)
     }
     fn reset(&self) {
         self.0.flag.store(false, Ordering::SeqCst);
-        *self.0.reason.lock().unwrap() = None;
-        self.0.children.lock().unwrap().clear();
+        *self.0.reason.lock_or_recover() = None;
+        self.0.children.lock_or_recover().clear();
     }
 }
 
@@ -311,38 +312,38 @@ pub struct ChildGuard {
 
 impl ChildGuard {
     pub fn id(&self) -> u32 {
-        self.child.lock().unwrap().id()
+        self.child.lock_or_recover().id()
     }
     /// Take the child's stdout / stderr pipes (if they were piped).
     pub fn take_stdout(&self) -> Option<std::process::ChildStdout> {
-        self.child.lock().unwrap().stdout.take()
+        self.child.lock_or_recover().stdout.take()
     }
     pub fn take_stderr(&self) -> Option<std::process::ChildStderr> {
-        self.child.lock().unwrap().stderr.take()
+        self.child.lock_or_recover().stderr.take()
     }
     /// Wait for exit. Returns `cancelled` if the task was cancelled (the process has been killed).
     pub fn wait(&self) -> CoreResult<ExitStatus> {
         loop {
-            if let Some(st) = self.child.lock().unwrap().try_wait()? {
+            if let Some(st) = self.child.lock_or_recover().try_wait()? {
                 if self.token.is_cancelled() {
                     return Err(self.token.reason());
                 }
                 return Ok(st);
             }
             if self.token.is_cancelled() {
-                let _ = self.child.lock().unwrap().kill();
+                let _ = self.child.lock_or_recover().kill();
             }
             std::thread::sleep(Duration::from_millis(15));
         }
     }
     pub fn kill(&self) {
-        let _ = self.child.lock().unwrap().kill();
+        let _ = self.child.lock_or_recover().kill();
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let mut c = self.child.lock().unwrap();
+        let mut c = self.child.lock_or_recover();
         if let Ok(None) = c.try_wait() {
             let _ = c.kill();
             let _ = c.wait();
@@ -401,7 +402,7 @@ impl TaskCtx {
         let spawned = cmd.spawn()?;
         super::jobobject::adopt(&spawned); // never outlives the app
         let child = Arc::new(Mutex::new(spawned));
-        self.token.0.children.lock().unwrap().push(Arc::downgrade(&child));
+        self.token.0.children.lock_or_recover().push(Arc::downgrade(&child));
         let g = ChildGuard { child, token: self.token.clone() };
         if self.is_cancelled() {
             g.kill();
@@ -465,26 +466,26 @@ pub struct JobHandle {
 impl JobHandle {
     /// Block until the job finishes.
     pub fn wait(&self) -> Outcome {
-        let mut g = self.slot.v.lock().unwrap();
+        let mut g = self.slot.v.lock_or_recover();
         while g.is_none() {
-            g = self.slot.cv.wait(g).unwrap();
+            g = self.slot.cv.wait(g).recover();
         }
         g.clone().unwrap()
     }
     pub fn wait_timeout(&self, d: Duration) -> Option<Outcome> {
         let end = Instant::now() + d;
-        let mut g = self.slot.v.lock().unwrap();
+        let mut g = self.slot.v.lock_or_recover();
         while g.is_none() {
             let now = Instant::now();
             if now >= end {
                 return None;
             }
-            g = self.slot.cv.wait_timeout(g, end - now).unwrap().0;
+            g = self.slot.cv.wait_timeout(g, end - now).recover().0;
         }
         g.clone()
     }
     pub fn try_result(&self) -> Option<Outcome> {
-        self.slot.v.lock().unwrap().clone()
+        self.slot.v.lock_or_recover().clone()
     }
 }
 
@@ -577,20 +578,20 @@ impl Scheduler {
             sink,
             me: Mutex::new(Weak::new()),
         });
-        *s.me.lock().unwrap() = Arc::downgrade(&s);
+        *s.me.lock_or_recover() = Arc::downgrade(&s);
         Scheduler(s)
     }
 
     pub fn set_limits(&self, limits: Limits) {
-        self.0.inner.lock().unwrap().limits = limits;
+        self.0.inner.lock_or_recover().limits = limits;
         self.0.pump();
     }
     pub fn set_policy(&self, policy: Policy) {
-        self.0.inner.lock().unwrap().policy = policy;
+        self.0.inner.lock_or_recover().policy = policy;
         self.0.pump();
     }
     pub fn policy(&self) -> Policy {
-        self.0.inner.lock().unwrap().policy
+        self.0.inner.lock_or_recover().policy
     }
 
     /// Queue a task. It runs when its resources are free and nothing more important is waiting for them.
@@ -603,7 +604,7 @@ impl Scheduler {
         let slot = Arc::new(Slot::default());
         let mut emits = vec![];
         {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             // Coalesce: drop queued tasks with the same key, cancel a running one.
             if let Some(key) = &spec.coalesce_key {
                 let old: Vec<String> = g
@@ -673,7 +674,7 @@ impl Scheduler {
     /// Cancel one job. Running device work cannot be cancelled (an upload must not be cut off); returns false then.
     pub fn cancel(&self, id: &str) -> bool {
         let j = {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             Shared::cancel_locked(&mut g, id, CoreError::cancelled())
         };
         let ok = j.is_some();
@@ -687,7 +688,7 @@ impl Scheduler {
     /// Cancel every job matching `pred` (by clip, by version, ...). Returns how many were cancelled.
     pub fn cancel_where(&self, pred: impl Fn(&TaskSpec) -> bool) -> usize {
         let js = {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             let ids: Vec<String> = g.entries.iter().filter(|(_, e)| pred(&e.spec)).map(|(k, _)| k.clone()).collect();
             ids.iter().filter_map(|id| Shared::cancel_locked(&mut g, id, CoreError::cancelled())).collect::<Vec<_>>()
         };
@@ -710,7 +711,7 @@ impl Scheduler {
     pub fn set_focus(&self, selected: Option<&str>, visible: &[String]) {
         let mut emits = vec![];
         {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             let ids: Vec<String> = g.entries.keys().cloned().collect();
             for id in ids {
                 let (oid, blur, auto) = {
@@ -749,12 +750,12 @@ impl Scheduler {
 
     /// A queued or running job submitted with this coalesce key (to join it instead of superseding it).
     pub fn live_with_key(&self, key: &str) -> Option<String> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         g.entries.iter().find(|(_, e)| e.spec.coalesce_key.as_deref() == Some(key)).map(|(id, _)| id.clone())
     }
 
     pub fn job(&self, id: &str) -> Option<Job> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         if let Some(e) = g.entries.get(id) {
             return Some(e.job.clone());
         }
@@ -763,7 +764,7 @@ impl Scheduler {
 
     /// Visible jobs that are queued/running or finished in the last `keep_ms`.
     pub fn activity(&self, keep_ms: u64) -> Vec<Job> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         let now = now_ms();
         let mut out: Vec<(u64, Job)> = g
             .finished
@@ -780,17 +781,17 @@ impl Scheduler {
 
     /// True while a device task is running or queued.
     pub fn device_active(&self) -> bool {
-        Shared::device_active(&self.0.inner.lock().unwrap())
+        Shared::device_active(&self.0.inner.lock_or_recover())
     }
 
     /// Any job the user can see is queued or running (upload, conversion, store, recording): not a moment to quit from a script.
     pub fn any_visible_job(&self) -> bool {
-        self.0.inner.lock().unwrap().entries.values().any(|e| e.spec.visible)
+        self.0.inner.lock_or_recover().entries.values().any(|e| e.spec.visible)
     }
 
     /// True while a visible job of one of these kinds is running (close guard).
     pub fn running_kind(&self, kinds: &[&str]) -> bool {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         g.running.iter().any(|id| kinds.contains(&g.entries[id].spec.kind.as_str()))
     }
 
@@ -800,7 +801,7 @@ impl Scheduler {
         let end = Instant::now() + max;
         loop {
             let busy = {
-                let g = self.0.inner.lock().unwrap();
+                let g = self.0.inner.lock_or_recover();
                 g.running.iter().any(|id| !(ignore_device && g.entries[id].spec.resources.get(Res::Device) > 0))
             };
             if !busy {
@@ -815,7 +816,7 @@ impl Scheduler {
 
     /// Number of queued and running tasks (tests, diagnostics).
     pub fn counts(&self) -> (usize, usize) {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         (g.queued.len(), g.running.len())
     }
 }
@@ -837,11 +838,11 @@ impl Shared {
         }
         if j.state.finished() {
             let w = {
-                let mut g = self.inner.lock().unwrap();
+                let mut g = self.inner.lock_or_recover();
                 g.wakes.iter().position(|(id, _, _)| id == &j.id).map(|i| g.wakes.swap_remove(i))
             };
             if let Some((_, slot, r)) = w {
-                *slot.v.lock().unwrap() = Some(r);
+                *slot.v.lock_or_recover() = Some(r);
                 slot.cv.notify_all();
             }
         }
@@ -866,7 +867,7 @@ impl Shared {
             }
             let e = g.entries.get_mut(id).unwrap();
             e.preempted = false;
-            *e.token.0.reason.lock().unwrap() = Some(reason);
+            *e.token.0.reason.lock_or_recover() = Some(reason);
             e.job.message = "Cancelling".into();
             return Some(e.job.clone());
         }
@@ -906,7 +907,7 @@ impl Shared {
 
     fn progress(&self, id: &str, f: f64, msg: Option<&str>, bytes: Option<(u64, u64)>) {
         let emit = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             let Some(e) = g.entries.get_mut(id) else { return };
             if e.token.is_cancelled() {
                 return;
@@ -981,7 +982,7 @@ impl Shared {
         let mut emits = vec![];
         let device_change;
         {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             let mut order = g.queued.clone();
             order.sort_by_key(|id| {
                 let e = &g.entries[id];
@@ -1073,28 +1074,42 @@ impl Shared {
         if let Some(b) = device_change {
             self.sink.device_busy(b);
         }
-        let me = self.me.lock().unwrap().clone();
+        let me = self.me.lock_or_recover().clone();
         for (id, f, token) in starts {
             let me = me.clone();
-            std::thread::Builder::new()
-                .name(format!("job-{id}"))
-                .spawn(move || {
+            let thread_id = id.clone();
+            #[cfg(test)]
+            let refused = tests::FAIL_SPAWNS.with(|n| n.get() > 0 && { n.set(n.get() - 1); true });
+            #[cfg(not(test))]
+            let refused = false;
+            let builder = std::thread::Builder::new().name(format!("job-{id}"));
+            let spawned = if refused {
+                Err(std::io::Error::other("test: thread refused"))
+            } else {
+                builder.spawn(move || {
+                    let id = thread_id;
                     let ctx = TaskCtx { id: id.clone(), token: token.clone(), sched: me.clone() };
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&ctx)))
-                        .unwrap_or_else(|_| Err(CoreError::new("Internal error (the task crashed).").status(500)));
+                    // A panicking task fails on its own (the panic hook logs where); the scheduler and later jobs go on.
+                    let r = super::sync::guarded("scheduler task", || f(&ctx))
+                        .unwrap_or_else(|| Err(CoreError::new("Internal error (the task crashed).").status(500)));
                     // A task that was cancelled reports `cancelled`, whatever it returned on its way out.
                     let r = if token.is_cancelled() && r.as_ref().is_err() { Err(token.reason()) } else { r };
                     if let Some(s) = me.upgrade() {
                         s.task_done(&id, r);
                     }
                 })
-                .expect("spawn job thread");
+            };
+            if spawned.is_err() {
+                // The system refused a new thread: fail this job (its resources are released) instead of panicking.
+                crate::device::log("scheduler: a job thread could not be started; the job failed");
+                self.task_done(&id, Err(CoreError::new("The task could not be started (the system refused a new thread).").status(503)));
+            }
         }
     }
 
     fn task_done(&self, id: &str, r: Outcome) {
         let job = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             g.running.retain(|x| x != id);
             let Some(mut e) = g.entries.remove(id) else { return };
             for i in 0..N_RES {
@@ -1584,6 +1599,11 @@ mod tests {
         assert_eq!(rec.1.lock().unwrap().first(), Some(&true));
     }
 
+    thread_local! {
+        /// Test hook: the next N job threads started from this thread are refused, as if the system had none left.
+        pub(super) static FAIL_SPAWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
     #[test]
     fn panicking_task_fails_cleanly() {
         let s = sched([1, 1, 1, 1, 1, 1]);
@@ -1591,5 +1611,47 @@ mod tests {
         assert!(h.wait().is_err());
         let h2 = s.submit(TaskSpec::new("t", "ok", Resources::one(Res::Cpu)), |_| Ok(json!(1)));
         assert_eq!(h2.wait().unwrap(), json!(1));
+    }
+
+    #[test]
+    fn panicking_task_is_reported_as_an_error_and_later_jobs_still_run() {
+        // One cpu slot: every later job needs the slot the crashed job held, so this also proves it was released.
+        let s = sched([1, 1, 1, 1, 1, 1]);
+        let lock = Arc::new(Mutex::new(0));
+        let held = lock.clone();
+        let crashed = s.submit(TaskSpec::new("t", "crash", Resources::one(Res::Cpu)), move |_| {
+            let _guard = held.lock().unwrap();
+            panic!("boom while holding a lock")
+        });
+        let err = crashed.wait().unwrap_err();
+        assert_eq!(err.status, 500);
+        assert!(err.message.contains("crashed"), "{}", err.message);
+        let job = s.job(&crashed.id).unwrap();
+        assert_eq!(job.state, JobState::Failed);
+        assert!(job.error.as_deref().unwrap_or("").contains("crashed"));
+        // Later jobs still run, including one that uses the lock the crashed job poisoned.
+        let used = lock.clone();
+        let next = s.submit(TaskSpec::new("t", "after", Resources::one(Res::Cpu)), move |_| {
+            *used.lock_or_recover() += 1;
+            Ok(json!("after"))
+        });
+        assert_eq!(next.wait().unwrap(), json!("after"));
+        for i in 0..3 {
+            let h = s.submit(TaskSpec::new("t", "more", Resources::one(Res::Cpu)), move |_| Ok(json!(i)));
+            assert_eq!(h.wait().unwrap(), json!(i));
+        }
+        assert_eq!(*lock.lock_or_recover(), 1);
+    }
+
+    #[test]
+    fn a_refused_job_thread_fails_that_job_and_keeps_the_scheduler_running() {
+        let s = sched([1, 1, 1, 1, 1, 1]);
+        FAIL_SPAWNS.with(|n| n.set(1));
+        let refused = s.submit(TaskSpec::new("t", "refused", Resources::one(Res::Cpu)), |_| Ok(json!("never")));
+        let err = refused.wait().unwrap_err();
+        assert_eq!(err.status, 503);
+        assert_eq!(s.job(&refused.id).unwrap().state, JobState::Failed);
+        let next = s.submit(TaskSpec::new("t", "next", Resources::one(Res::Cpu)), |_| Ok(json!("ran")));
+        assert_eq!(next.wait().unwrap(), json!("ran"));
     }
 }
