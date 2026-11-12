@@ -1,6 +1,6 @@
 # Reported dock function failures
 
-Current status at the 2026-11-04 pause: Monitor Toggle is user-confirmed working after 0.2.3. The AI Usage reader launch defect is fixed in 0.3.1, with both providers verified beyond the freshness cutoff and observed transient recovery. Remaining usage work is physical/account-state acceptance and reliability follow-up, not an unimplemented reader. See [ordered project work](project-status.md).
+Historical status at the 2026-11-04 pause (current state: [handoff](handoff-current.md)): Monitor Toggle is user-confirmed working after 0.2.3. The AI Usage reader launch defect is fixed in 0.3.1, with both providers verified beyond the freshness cutoff and observed transient recovery. Remaining usage work is physical/account-state acceptance and reliability follow-up, not an unimplemented reader. See [ordered project work](project-status.md).
 
 Historical report, 2026-11-01: AI Usage and Monitor Toggle did not work. The diagnosis and fixes below retain their dates.
 

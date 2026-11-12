@@ -1,6 +1,8 @@
 # Device acceptance evidence
 
-Current checkpoint: installed 0.9.1 / engine 4.21.1. The user confirms physical cooler recovery after cycling the PC; same-build logs/MCP show connected streaming and all connect steps passing. Disconnect cause remains unresolved; physical cross-device actions acceptance remains open.
+Current state, 2026-11-13: installed UC 0.9.2 / engine 4.21.1; dock connected; cooler worker running; cooler Live disconnected with transport/write_timeout errors; connection diagnostics on. The cause is unresolved ([issue 9](https://github.com/oldbugo/unified-control/issues/9)). See [current handoff](handoff-current.md).
+
+Historical checkpoint, 2026-11-09: installed 0.9.1 / engine 4.21.1. The user confirmed physical cooler recovery after cycling the PC; same-build logs/MCP show connected streaming and all connect steps passing. Disconnect cause remains unresolved; physical cross-device actions acceptance remains open.
 [Project status and remaining work](project-status.md) is the current task list. Dated sections below are historical evidence,
 and older unresolved/approval-pending statements are superseded by later results.
 

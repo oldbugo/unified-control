@@ -22,7 +22,7 @@ host process ID. A gap can also mean sleep, exit or a failed write. Use
 **General → Start with Windows** to launch the tray at Windows sign-in. Both
 switches are opt-in.
 
-Current recovery check, 2026-11-09: the user confirms physical cooler playback after cycling the PC. Same-build logs show all connection steps passing and Live streaming; the disconnect cause remains unresolved. Diagnostics remain enabled. [Evidence](docs/cooler-connection-health.md). Installer-transition [preflight and synthetic rollback rehearsal](docs/device-app/installer-transition.md) are built and pass 33 checks; actual retirement stays gated. Tooling/docs only: no app rebuild or restart.
+Historical recovery check, 2026-11-09 (current state 2026-11-13: cooler Live disconnected with write_timeout, cause unresolved): the user confirmed physical cooler playback after cycling the PC. Same-build logs show all connection steps passing and Live streaming; the disconnect cause remains unresolved. Diagnostics remain enabled. [Evidence](docs/cooler-connection-health.md). Installer-transition [preflight and synthetic rollback rehearsal](docs/device-app/installer-transition.md) are built and pass 33 checks; actual retirement stays gated. Tooling/docs only: no app rebuild or restart.
 
 Version 0.9.1 adds precise buffered connect/stop step diagnostics through the existing Connection diagnostics switch.
 The host persists strict finite results and timings in the existing bounded health log; a saturated private channel drops

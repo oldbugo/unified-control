@@ -1,6 +1,8 @@
 # Current project backlog
 
-Updated 2026-11-09. Plan 2.4 / shared-services 2.6 / software 2.7 remain in installed 0.9.1. The user confirms physical cooler recovery after cycling the PC; all connect steps now pass on the same build. Disconnect cause remains unresolved; diagnostics stay enabled.
+Updated 2026-11-13. Current state: installed UC 0.9.2; cooler Live disconnected with write_timeout; cause unresolved; see [current handoff](handoff-current.md). The text below dates from 2026-11-09 and is historical where it says "now".
+
+Historical note, 2026-11-09: Plan 2.4 / shared-services 2.6 / software 2.7 remain in installed 0.9.1. The user confirms physical cooler recovery after cycling the PC; all connect steps now pass on the same build. Disconnect cause remains unresolved; diagnostics stay enabled.
 Installer transition 2.8 now has a tested read-only [preflight and synthetic rollback rehearsal](device-app/installer-transition.md). Actual retirement remains behind fresh backup, identity/shortcut and release gates. Physical cross-device acceptance remains open.
 [Scope, phase status and ordered next work](project-status.md) is the current
 implementation plan; [handoff](handoff-current.md) is the restart entry point.

@@ -2,7 +2,9 @@
 
 User request, 2026-11-01: the physical cooler freezes repeatedly, cannot connect through UC or original CoolerScreen, and needs recovery plus background evidence. This feature runs inside the visible UC tray app, not a Windows service or a Codex automation.
 
-## Current recovery:2026-11-09
+## Historical recovery, 2026-11-09
+
+Current state, 2026-11-13: installed UC 0.9.2; cooler worker running; cooler Live disconnected with transport/write_timeout errors; connection diagnostics on. The recovery below is historical. The cause is unresolved ([issue 9](https://github.com/oldbugo/unified-control/issues/9)).
 
 **Recovery checked 2026-11-09:** the user reports the physical cooler screen works after restarting/power-cycling the PC. The same installed UC 0.9.1 / engine 4.21.1 records a complete successful connect at 2026-11-08T22:29:19.536 UTC (09:29:19 Sydney, 9 Nov): open 209 ms, end_stream 0 ms, genuine info 16 ms, preserve_ending 0 ms, enter_live 215 ms, total 643 ms. The next health sample reports streaming 19 FPS, no holds, normal Windows nodes/problem 0 and no worker restarts. Earlier retained attempts through 2026-11-08T09:25:20 UTC still failed at the initial write. This establishes recovery after the user-reported PC cycle without a software update, not the initiating cause or uninterrupted reliability. Diagnostics stay enabled; no agent reset/restart/sleep/physical action was used.
 
