@@ -1,5 +1,7 @@
 # Dock foundations (2026-10-30)
 
+Archived: this is a historical record. The `uc-ulanzi` pin below is outdated. The real pin is `9ea93c0` in `src-tauri/Cargo.toml`.
+
 This stage implements profile storage, initial PNG rendering and a transport-independent runtime. It does not complete
 the dock MVP. Production action adapters, verified account providers, native-device ownership/coexistence and physical
 acceptance are still required before replacing Studio. CoolerScreen and dial integration follow dock acceptance.

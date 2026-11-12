@@ -1,4 +1,5 @@
 # Dock controller
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 The controller is built for app integration. All automated checks use the software
 dock and injected hooks; native HID, Studio enumeration and real key actions have

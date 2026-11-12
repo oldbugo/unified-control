@@ -1,4 +1,5 @@
 # Navigation timing checks
+*Document type: dated evidence. Facts are true for the date shown. For the current state, read [status](status.md).*
 
 Available in installed 0.3.2. Read enabled MCP `uc_get_status` and inspect `dock.timing`. Status reads do not navigate or execute
 actions. Keep the installed app running; use its normal Folder/Back keys for a physical navigation sample.
@@ -39,7 +40,7 @@ six completed and zero aborted navigations. The latest host-receipt-to-completed
 0.007 ms and combined ZIP/transport 12.491 ms. These instrumented stages do not include every overhead and need not sum
 to the total. Earlier navigation durations were not retained: the bounded capture file contained no navigation samples.
 This is one latest timing plus the user's three-cycle feel report, not an average, before/after speedup or physical pixel
-latency measurement. No scheduling optimization was made in0.3.2.
+latency measurement. No scheduling optimization was made in 0.3.2.
 
 ## 0.3.2 package identity
 

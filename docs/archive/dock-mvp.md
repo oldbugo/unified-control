@@ -20,7 +20,7 @@ The native dock engine is currently an owner thread in the host; separate device
 
 Review regressions: render admission is checked again after slow rendering; expired account images are replaced before delivery; settings save/apply is serialized; quit refusal happens before irreversible controller shutdown. Active monitor recovery finishes before the exit watchdog is armed. Tests never change real monitor/audio/input state.
 
-Live Codex verification on 2026-10-31 ran for 360 seconds: 12 fresh samples and six distinct verified observation timestamps, including an observation after the five-minute cutoff. No model turns, token-history requests or auth-file reads. The owned helper exited cleanly. Claude's existing bridge output was observed separately without cleanup/writes and stayed stale throughout (zero fresh observations); full live Claude helper integration is not established. Its numerical gauges must stay suppressed. Live account switching/logout and physical readability remain acceptance checks. Current Codex metadata cannot uniquely distinguish same-name workspaces; see [usage limits](usage.md).
+Live Codex verification on 2026-10-31 ran for 360 seconds: 12 fresh samples and six distinct verified observation timestamps, including an observation after the five-minute cutoff. No model turns, token-history requests or auth-file reads. The owned helper exited cleanly. Claude's existing bridge output was observed separately without cleanup/writes and stayed stale throughout (zero fresh observations); full live Claude helper integration is not established. Its numerical gauges must stay suppressed. Live account switching/logout and physical readability remain acceptance checks. Current Codex metadata cannot uniquely distinguish same-name workspaces; see [usage limits](../usage.md).
 
 ## Build and install
 
@@ -75,7 +75,7 @@ User-reported on 0.1.3: assigning clock/date/icon did not become visible on the 
 
 Installed 0.1.4 cooperatively from 0.1.3; startup logs verify source `b212fe2fad2034de6135fe85c221ed4d87f45fb4` at 12:05:35 UTC, a new PID and Connected state. 95 core and five host tests pass. Installer SHA-256: `E9E1F1E00108756E093F8587D3E6844BA9B8F88150456A275FBD3C43940D8CBB`. No user layout was changed during verification; the physical edit check is for the user to perform.
 
-User subsequently confirmed immediate physical edit refresh on 0.1.4. USB unplug/replug also returned the layout without toggling Enabled or reopening UC; logs corroborate reconnect plus fresh full-page rendering during the intentional recovery check. [Current acceptance status](acceptance.md) tracks remaining checks. The minor software preview flicker is recorded separately as [issue #3](https://github.com/oldbugo/unified-control/issues/3), without blocking physical acceptance.
+User subsequently confirmed immediate physical edit refresh on 0.1.4. USB unplug/replug also returned the layout without toggling Enabled or reopening UC; logs corroborate reconnect plus fresh full-page rendering during the intentional recovery check. [Current acceptance status](../acceptance.md) tracks remaining checks. The minor software preview flicker is recorded separately as [issue #3](https://github.com/oldbugo/unified-control/issues/3), without blocking physical acceptance.
 
 ## Virtual page following and preview stability
 
@@ -85,4 +85,4 @@ The release also includes the prepared polling and typing preview fixes: unchang
 
 Sleep/resume remains deferred at the user's explicit request. Continue other work without marking that check passed or asking for it again during this checkpoint.
 
-On 2026-11-01, 0.1.5/source `b66df93` built and installed through the idle-safe script. No UC host was running, so installation left it closed for Start-menu launch. Installed file version 0.1.5 was verified; actual startup and physical follow/flicker checks remain pending. Installer SHA-256: `888DEA571659300CB788CEE0F3CDBAF7CD6C1968AD68C786F5A92766D5435A5D`. Private tag `v0.1.5` points to that exact source. Checks: 97 core/five host tests, full headless interface suite and quiet native fake IPC pass. No cooler/dial integration or physical navigation speedup is claimed.
+On 2026-11-01, 0.1.5 / source `b66df93` built and installed through the idle-safe script. No UC host was running, so installation left it closed for Start-menu launch. Installed file version 0.1.5 was verified; actual startup and physical follow/flicker checks remain pending. Installer SHA-256: `888DEA571659300CB788CEE0F3CDBAF7CD6C1968AD68C786F5A92766D5435A5D`. Private tag `v0.1.5` points to that exact source. Checks: 97 core/five host tests, full headless interface suite and quiet native fake IPC pass. No cooler/dial integration or physical navigation speedup is claimed.

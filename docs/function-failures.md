@@ -1,8 +1,9 @@
 # Reported dock function failures
+*Document type: dated evidence. Facts are true for the date shown. For the current state, read [status](status.md).*
 
-Current status at the2026-11-04 pause: Monitor Toggle is user-confirmed working after0.2.3. The AI Usage reader launch defect is fixed in0.3.1, with both providers verified beyond the freshness cutoff and observed transient recovery. Remaining usage work is physical/account-state acceptance and reliability follow-up, not an unimplemented reader. See [ordered project work](project-status.md).
+Historical status at the 2026-11-04 pause (current state: [status](status.md)): Monitor Toggle is user-confirmed working after 0.2.3. The AI Usage reader launch defect is fixed in 0.3.1, with both providers verified beyond the freshness cutoff and observed transient recovery. Remaining usage work is physical/account-state acceptance and reliability follow-up, not an unimplemented reader. See [ordered project work](status.md).
 
-Historical report,2026-11-01: AI Usage and Monitor Toggle did not work. The diagnosis and fixes below retain their dates.
+Historical report, 2026-11-01: AI Usage and Monitor Toggle did not work. The diagnosis and fixes below retain their dates.
 
 Private follow-ups: [AI Usage #6](https://github.com/oldbugo/unified-control/issues/6) retains physical/account-state acceptance and reliability follow-up. [Monitor Toggle #7](https://github.com/oldbugo/unified-control/issues/7) is now user-confirmed working after the 0.2.3 path fix.
 
@@ -39,9 +40,9 @@ dock reconnection and the dedicated request proxy SHA-256 matching the built exe
 reported verified usage; Claude changed from stale to verified within the first minute, without an agent-issued refresh
 or ordinary model request. The inactive profile still matched all fourteen baseline keys after the update.
 
-Bounded live watch, 2026-11-02: both providers were verified at02:24:11UTC and again at02:29:26UTC (five minutes fifteen
+Bounded live watch, 2026-11-02: both providers were verified at 02:24:11 UTC and again at 02:29:26 UTC (five minutes fifteen
 seconds later), with reader ready/dock connected throughout the sampled checks. Codex briefly reported unavailable at
-02:26:53UTC, then recovered without intervention by02:27:42UTC. Claude remained verified in those samples. MCP status
+02:26:53 UTC, then recovered without intervention by 02:27:42 UTC. Claude remained verified in those samples. MCP status
 inspection does not request account refresh. This establishes fresh readings beyond the cutoff and observed automatic
 recovery, not uninterrupted reliability, exact account-panel agreement, physical pixels or account-switch acceptance.
 The transient's cause remains unknown. Claude still depends on a supporting authenticated Desktop Code companion session.
@@ -49,11 +50,11 @@ The transient's cause remains unknown. Claude still depends on a supporting auth
 The 0.3.2 diagnostic correction preserves guarded Codex `error` and `stale` statuses instead of collapsing every non-ok
 result without identity into unavailable. Otherwise-ok readings without verified identity still become unavailable.
 Fixture tests verify number/history/token suppression, minute throttling and scheduled recovery. This is included in
-installed0.3.2 and does not identify or fix the transient source failure.
+installed 0.3.2 and does not identify or fix the transient source failure.
 
-Installer: `dist/UnifiedControl_0.3.1_x64-setup.exe`. Executable version0.3.1 and embedded
-sourcee23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.
-All120 core/11 host tests, touched-file rustfmt, official-SDK MCP fixtures and the staged resource inactive-reader
+Installer: `dist/UnifiedControl_0.3.1_x64-setup.exe`. Executable version 0.3.1 and embedded
+source e23be94 were verified. Installer SHA-256: `518D2E48D5E86A19E4DCD92DD69E67153909A74984985DD56DD54B34AF49DD61`.
+All 120 core/11 host tests, touched-file rustfmt, official-SDK MCP fixtures and the staged resource inactive-reader
 health/render/shutdown check pass. The resource smoke check uses the combined packaging layout: runtime Node/reader plus
 `resources/monitor`, rather than treating `runtime` alone as a complete install root. Whole-repository formatting reports
 unrelated existing differences. No account source or physical action was activated by these checks.

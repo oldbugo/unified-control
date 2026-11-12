@@ -1,4 +1,5 @@
 # AI usage adapter
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 The app owns `core::usage::UsageService`. It starts no process at construction.
 Only `set_active_providers` starts the managed Node helper. Empty configuration,

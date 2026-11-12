@@ -1,17 +1,18 @@
 # Dock-to-cooler controls
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
-Plan2.7. Software implementation verified2026-11-06 and installed in0.9.0. Physical controls acceptance remains open. Earlier Live write_timeout also reproduced on0.8.0; the user confirms recovery after cycling the PC on2026-11-09 and same0.9.1 handshake/streaming logs pass. The disconnect cause remains unresolved. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
+Plan 2.7. Software implementation verified 2026-11-06 and installed in 0.9.0. Physical controls acceptance remains open. Earlier Live write_timeout also reproduced on 0.8.0; the user confirms recovery after cycling the PC on 2026-11-09 and same 0.9.1 handshake/streaming logs pass. The disconnect cause remains unresolved. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
 
 ## Stored action
 
 Existing profile storage remains `{action,value}`. The new action kind is `cooler`; value is a strict JSON object tagged
 by `op`, with unknown/duplicate fields rejected at profile and execution boundaries:
 
-- `theme_select` with `theme_id`: stable ASCII letters/digits/hyphen/underscore,1–128bytes; never a path or display name.
+- `theme_select` with `theme_id`: stable ASCII letters/digits/hyphen/underscore, 1–128 bytes; never a path or display name.
 - `theme_next` / `theme_previous`: fixed case-insensitive theme-name order, ID tie-break, wrapping at either end.
 - `live` with mode `on`, `off` or `toggle`.
-- `brightness_set` with integer value0–100.
-- `brightness_step` with nonzero integer delta−100–100; the result clamps to0–100 from a fresh device report.
+- `brightness_set` with integer value 0–100.
+- `brightness_step` with nonzero integer delta−100–100; the result clamps to 0–100 from a fresh device report.
 
 The action editor does not execute effects. It provides explicit theme selection and preserves deleted/unavailable IDs
 and prior valid choices during temporary disconnection. Existing A/B faces, navigation and unrelated actions remain.
@@ -25,7 +26,7 @@ monotonic ID on the current private worker channel. The host validates/adopts it
 A captured session/generation prevents replay into a replacement worker. Host callback busy counts survive requester loss,
 so Quit and device disable cannot truncate an admitted cross-device operation.
 
-Completion is enqueued with a500ms bound through the original session writer and demultiplexed by the child's stdin reader before ordinary
+Completion is enqueued with a 500 ms bound through the original session writer and demultiplexed by the child's stdin reader before ordinary
 command dispatch. This avoids Shutdown waiting on an action whose completion is queued behind Shutdown. EOF fails pending
 waiters. Timeout, disconnect, target failure or a stale/duplicate ID never causes an automatic retry of a relative action.
 
@@ -51,6 +52,6 @@ All automated action tests use isolated quiet debug instances, fake devices and 
 inert editing/preview, press deduplication, deterministic cycle/Live semantics, Embedded preservation, brightness bounds and
 readback, iframe reflection, busy refusal, correlated completion, requester/target crashes, no replay and safe Quit.
 Actual visual switching, brightness feel and physical key coverage require separate user acceptance. Cooler workspace
-entry issue23, sleep/resume, installer replacement and longer combined soak remain separate work.
+entry issue 23, sleep/resume, installer replacement and longer combined soak remain separate work.
 
-Software gate:202 UC core/11 host/62 reader tests pass, with three existing ignored checks. Cooler five dock-control,19 scheduler and nine private-worker cases pass. Full headless editor/cooler and native cross-device/profile/MCP/dock-worker/cooler/lifetime/migration/shared-provider/hardware checks pass. Native cross-device evidenceW3tNZb proves actual fake button routing, iframe reflection, Embedded preservation, busy after requester crash, no replay, correlation during Shutdown and EOF cancellation. Independent routing/device safety reviews found no remaining actionable issue. New/worker formatting and whitespace pass; broad formatting retains unrelated existing differences.
+Software gate:202 UC core/11 host/62 reader tests pass, with three existing ignored checks. Cooler five dock-control, 19 scheduler and nine private-worker cases pass. Full headless editor/cooler and native cross-device/profile/MCP/dock-worker/cooler/lifetime/migration/shared-provider/hardware checks pass. Native cross-device evidence W3tNZb proves actual fake button routing, iframe reflection, Embedded preservation, busy after requester crash, no replay, correlation during Shutdown and EOF cancellation. Independent routing/device safety reviews found no remaining actionable issue. New/worker formatting and whitespace pass; broad formatting retains unrelated existing differences.

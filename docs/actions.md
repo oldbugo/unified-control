@@ -1,4 +1,5 @@
 # Dock actions
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 `core::actions::ActionSink` is the dock service's execution boundary:
 

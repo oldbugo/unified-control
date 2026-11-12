@@ -1,4 +1,5 @@
 # Dock profiles
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 The profile store is separate from app settings and from the browser prototype.
 It stores inert action data. Loading, editing or importing a layout never runs an

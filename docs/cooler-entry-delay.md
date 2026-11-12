@@ -1,4 +1,5 @@
 # Cooler workspace entry delay
+*Document type: dated evidence. Facts are true for the date shown. For the current state, read [status](status.md).*
 
 Status: **open, user-reported on 2026-11-04**. Separate follow-up to dock-worker extraction.
 The user notices a delay before the cooler workspace appears connected, including after rapid section switching.

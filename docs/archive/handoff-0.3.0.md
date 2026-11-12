@@ -1,13 +1,13 @@
 # UC 0.3.0 stand-down and next-session handoff
 
-**Historical only.** Use [the current handoff](handoff-current.md) and [project status](project-status.md) for resuming.
+**Historical only.** Use [status](../status.md) for resuming.
 
 Checkpoint: 2026-11-02 (Australia/Sydney). Feature development is stood down at 0.3.0. The installed app stays running.
 
 **Superseded checkpoint:** Work resumed later on 2026-11-02. Actual Codex model-client MCP read/preview/apply/undo checks
-passed with the temporary inactive-profile edit restored. The user approved installation of0.3.1/sourcee23be94;
+passed with the temporary inactive-profile edit restored. The user approved installation of 0.3.1 / source e23be94;
 startup/version/new PID, proxy hash and dock reconnection were verified, and both usage providers reached verified status.
-Use current README/acceptance/function-failures/backlog and live MCP state. The0.3.0 details below remain historical evidence.
+Use current README/acceptance/function-failures/backlog and live MCP state. The 0.3.0 details below remain historical evidence.
 
 ## Start here
 
@@ -55,7 +55,7 @@ frame/deadline/shutdown checks; 13 pure editor cases plus three headless cases; 
 Native timing tests now verify actual blocked writer/File reads and elapsed time. The earlier nonwritable `T.invoke`
 replacement did not establish those delayed branches; use the corrected tests. No automated physical/account effects.
 
-See [MCP contract](agent-control.md), [acceptance](acceptance.md), [backlog](backlog.md) and [functional failures](function-failures.md).
+See [MCP contract](../agent-control.md), [acceptance](../acceptance.md), [backlog](../backlog.md) and [functional failures](../function-failures.md).
 
 ## Open work; no new implementation during stand-down
 
