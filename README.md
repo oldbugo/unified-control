@@ -7,6 +7,21 @@ Development resumed by the user on2026-11-04. [Current handoff](docs/handoff-cur
 Current user-confirmed results and remaining checks: [dock acceptance](docs/acceptance.md).
 UI and navigation follow-ups: [backlog](docs/backlog.md).
 
+Stand-down checkpoint, **2026-11-13**. Installed UC0.9.2/source8c194f2.
+Current MCP reports dock connected and cooler Live disconnected with
+write_timeout. Connection diagnostics remain on. The temporary heartbeat
+switch remains off. See [handoff](docs/handoff-current.md) for evidence,
+activation, limitations and next-agent context.
+
+Version 0.9.2 adds optional **General → Freeze diagnostics**. The tray host
+writes one local line per minute while the switch is on, including when the
+window is closed. The two rotating files are `freeze-heartbeat.log` and
+`freeze-heartbeat.previous.log` in the Unified Control app data folder. Each
+line contains the sample time and host start time in Unix seconds, then the
+host process ID. A gap can also mean sleep, exit or a failed write. Use
+**General → Start with Windows** to launch the tray at Windows sign-in. Both
+switches are opt-in.
+
 Current recovery check,2026-11-09: the user confirms physical cooler playback after cycling the PC. Same-build logs show all connection steps passing and Live streaming; the disconnect cause remains unresolved. Diagnostics remain enabled. [Evidence](docs/cooler-connection-health.md). Installer-transition [preflight and synthetic rollback rehearsal](docs/device-app/installer-transition.md) are built and pass33 checks; actual retirement stays gated. Tooling/docs only: no app rebuild or restart.
 
 Version0.9.1 adds precise buffered connect/stop step diagnostics through the existing Connection diagnostics switch.

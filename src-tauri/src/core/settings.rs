@@ -22,7 +22,8 @@ pub fn defaults() -> Value {
     json!({
         "ui": { "page": "home", "followPhysicalPage": true, "agentAccess": false },
         "dock": { "enabled": false, "brightness": 50 },
-        "cooler": {"enabled":false,"diagnostics":true}
+        "cooler": {"enabled":false,"diagnostics":true},
+        "freezeDiagnostics": false
     })
 }
 
@@ -33,6 +34,7 @@ pub fn sanitize(s: &Value) -> Settings {
         .filter(|p| PAGES.contains(p))
         .unwrap_or("home");
     let mut v = defaults();
+    v["freezeDiagnostics"] = json!(s["freezeDiagnostics"].as_bool().unwrap_or(false));
     v["cooler"]["enabled"] = json!(s["cooler"]["enabled"].as_bool().unwrap_or(false));
     v["cooler"]["diagnostics"] = json!(s["cooler"]["diagnostics"].as_bool().unwrap_or(true));
     v["ui"]["page"] = json!(page);
@@ -140,7 +142,7 @@ mod tests {
         assert_eq!(sanitize(&json!({})).0, defaults());
         assert_eq!(
             sanitize(&json!({ "ui": { "page": "dock" }, "junk": 1 })).0,
-            json!({ "ui": { "page": "dock", "followPhysicalPage":true, "agentAccess":false }, "dock":{"enabled":false,"brightness":50}, "cooler":{"enabled":false,"diagnostics":true} })
+            json!({ "ui": { "page": "dock", "followPhysicalPage":true, "agentAccess":false }, "dock":{"enabled":false,"brightness":50}, "cooler":{"enabled":false,"diagnostics":true}, "freezeDiagnostics":false })
         );
         assert_eq!(
             sanitize(&json!({ "ui": { "page": "cooler" } })).page(),

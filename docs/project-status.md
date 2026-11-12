@@ -1,6 +1,12 @@
 # Project scope and next work
 
-Updated2026-11-09. The user selected the existing priority order; dock isolation, shared-services2.6 and software2.7 are complete.
+Updated2026-11-13. The user requested stand-down and handoff. Installed UC0.9.2/source8c194f2
+adds optional host heartbeat diagnostics. The switch remains off. Startup Run
+entry targets the installed app with --tray; sign-in acceptance is open.
+Read-only MCP now reports dock connected and cooler Live disconnected with
+write_timeout, despite the earlier user-confirmed recovery. Cause unresolved.
+See [current handoff](handoff-current.md). The historical checkpoints below retain
+their original dates. Dock isolation, shared-services2.6 and software2.7 are complete.
 This is the current project overview; older dated records remain evidence, not current task lists.
 
 ## Goal and boundaries
@@ -11,7 +17,7 @@ Devices are opt-in, Start with Windows is opt-in, repositories stay private and 
 Keep separate UC, cooler-engine, Ulanzi-driver and Toolkit repositories. Do not replace the standalone CoolerScreen
 installation or delete its data as a cleanup step. It remains the rollback copy.
 
-## Completed checkpoint
+## Historical checkpoint (2026-11-09)
 
 **Recovery checked2026-11-09:** the user reports the physical cooler screen works after restarting/power-cycling the PC. The same installedUC0.9.1/engine4.21.1 records a complete successful connect at2026-11-08T22:29:19.536UTC (09:29:19SydneyNov9): open209ms, end_stream0ms, genuine info16ms, preserve_ending0ms, enter_live215ms, total643ms. The next health sample reports streaming19FPS, no holds, normal Windows nodes/problem0 and no worker restarts. Earlier retained attempts through2026-11-08T09:25:20UTC still failed at the initial write. This establishes recovery after the user-reported PC cycle without a software update, not the initiating cause or uninterrupted reliability. Diagnostics stay enabled; no agent reset/restart/sleep/physical action was used.
 

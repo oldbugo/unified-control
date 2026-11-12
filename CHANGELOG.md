@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 — 2026-11-11
+
+Add an optional General freeze-diagnostics switch. The tray host writes one
+timestamp per minute into bounded local rotating logs while enabled. Quiet fake
+tray and native UI checks verify recording, disabled behavior and saving both
+switch states. The records establish host-thread progress. Freeze causes remain
+unresolved. Keep repeated --tray launches quiet through the existing Windows
+startup function.
+
 ## 0.9.1 — 2026-11-06
 
 Add finite per-step connection and shutdown results/timings from cooler engine4.21.1. Traces are buffered until a transaction finishes, delivered through a bounded nonblocking private event queue and validated again by UC. The existing diagnostics opt-out and migration guard control persistence in the rotated local health log. No device identities, reply payloads or arbitrary error text are recorded.
