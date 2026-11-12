@@ -5,6 +5,7 @@ use super::{
     dock_runtime::{elapsed_us, PageRuntime, PendingAction, RenderTimings},
     key_render::{render_face, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState, ProfileStore},
+    sync::{MutexExt, RwLockExt},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -103,10 +104,10 @@ struct Shared {
 }
 impl Shared {
     fn status(&self) -> DockStatus {
-        self.status.lock().unwrap().clone()
+        self.status.lock_or_recover().clone()
     }
     fn set_state(&self, state: &str, message: &str) {
-        let mut s = self.status.lock().unwrap();
+        let mut s = self.status.lock_or_recover();
         if s.state != state || s.message != message {
             crate::device::log(&format!("dock state={state}: {message}"));
         }
@@ -217,7 +218,7 @@ impl Controller {
         if !enabled {
             self.shared.action_epoch.fetch_add(1, Ordering::SeqCst);
         }
-        self.shared.status.lock().unwrap().enabled = enabled;
+        self.shared.status.lock_or_recover().enabled = enabled;
         let _ = self.tx.try_send(Control::Wake);
         Ok(())
     }
@@ -280,7 +281,7 @@ impl Controller {
             {
                 return Err("Dock is busy; try again when idle".into());
             }
-            if let Ok(_admission) = self.shared.admission.try_write() {
+            if let Some(_admission) = self.shared.admission.try_write_or_recover() {
                 if self.shared.action_busy.load(Ordering::SeqCst)
                     || self.shared.queued_actions.load(Ordering::SeqCst) > 0
                 {
@@ -332,7 +333,7 @@ impl Controller {
         self.shared.stop.store(true, Ordering::SeqCst);
         self.shared.enabled.store(false, Ordering::SeqCst);
         let _ = self.tx.try_send(Control::Wake);
-        if let Some((worker, executor)) = self.threads.lock().unwrap().take() {
+        if let Some((worker, executor)) = self.threads.lock_or_recover().take() {
             let _ = worker.join();
             let _ = executor.join();
         }
@@ -351,7 +352,7 @@ fn action_loop(
     completed: SyncSender<Completion>,
 ) {
     while let Ok(job) = rx.recv() {
-        let _admission = shared.admission.read().unwrap();
+        let _admission = shared.admission.read_or_recover();
         shared.action_busy.store(true, Ordering::SeqCst);
         shared.queued_actions.fetch_sub(1, Ordering::SeqCst);
         let executed = shared.action_epoch.load(Ordering::SeqCst) == job.epoch
@@ -523,7 +524,7 @@ impl Worker {
     }
     fn failed(&mut self, now: Instant, message: &str) {
         self.release();
-        self.shared.status.lock().unwrap().errors += 1;
+        self.shared.status.lock_or_recover().errors += 1;
         self.shared.set_state("error", message);
         self.retry_at = now + self.retry_delay;
         self.retry_delay = (self.retry_delay * 2).min(Duration::from_secs(30));
@@ -553,7 +554,7 @@ impl Worker {
             self.failed(now, "Dock keepalive write failed; reconnecting");
             return false;
         }
-        self.shared.status.lock().unwrap().keep_alives_sent += 1;
+        self.shared.status.lock_or_recover().keep_alives_sent += 1;
         self.next_keep_alive = Some(now + Duration::from_secs(5));
         true
     }
@@ -590,7 +591,7 @@ impl Worker {
         }
         self.last_brightness_write = Some(now);
         self.probe_sent = true;
-        self.shared.status.lock().unwrap().probe_writes += 1;
+        self.shared.status.lock_or_recover().probe_writes += 1;
         true
     }
     fn run(mut self, rx: Receiver<Control>) {
@@ -678,12 +679,12 @@ impl Worker {
     }
     fn step(&mut self, now: Instant) {
         let shared = self.shared.clone();
-        let _admission = shared.admission.read().unwrap();
+        let _admission = shared.admission.read_or_recover();
         if shared.quiesced.load(Ordering::SeqCst) {
             return;
         }
         self.step_inner(now);
-        self.shared.status.lock().unwrap().timing = self.timing.clone();
+        self.shared.status.lock_or_recover().timing = self.timing.clone();
     }
     /// The dock owner's state machine step. Each `bool` helper returns `false`
     /// when the step must end early (the original early `return`).
@@ -748,7 +749,7 @@ impl Worker {
     /// Account for key actions the executor has finished.
     fn collect_completions(&mut self, now: Instant) {
         while let Ok(done) = self.completed.try_recv() {
-            let mut status = self.shared.status.lock().unwrap();
+            let mut status = self.shared.status.lock_or_recover();
             if done.executed {
                 status.actions += 1;
             }
@@ -915,7 +916,7 @@ impl Worker {
     }
     /// Status and navigation timing after a render delivered `count` frames.
     fn record_delivery(&mut self, now: Instant, render_started: Instant, count: usize) {
-        let mut s = self.shared.status.lock().unwrap();
+        let mut s = self.shared.status.lock_or_recover();
         s.frames_sent += count as u64;
         if count == 14 {
             s.pages_sent += 1;
@@ -1053,7 +1054,7 @@ impl Worker {
                     {
                         self.shared.queued_actions.fetch_sub(1, Ordering::SeqCst);
                         self.flash[index] = Some(now + Duration::from_millis(900));
-                        let mut s = self.shared.status.lock().unwrap();
+                        let mut s = self.shared.status.lock_or_recover();
                         s.errors += 1;
                         s.message = "Key action queue is full".into();
                     }
@@ -1076,7 +1077,7 @@ impl Worker {
                 }
             }
             Err(_) => {
-                self.shared.status.lock().unwrap().errors += 1;
+                self.shared.status.lock_or_recover().errors += 1;
                 self.shared
                     .set_state("error", "Key navigation failed; review the page action");
             }

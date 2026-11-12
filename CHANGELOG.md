@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0 — 2026-11-13
+
+Crash recovery and cleanup after the agent handover. A fault in one part now
+gets recovered instead of stopping the whole program. Release builds unwind on a
+panic. Locks recover after a crash. The scheduler reports a crashed job as an
+error and keeps running. Background loops restart with a back-off. An unguarded
+crash in the dock worker ends only that worker, and UC restarts it. Each crash
+writes one short line to device.log. The dock owner's large step function is
+split into named parts with no change in behaviour. Shared helpers replace
+copied process flags and pipe framing. The documents now have one current-state
+page, docs/status.md. The cooler engine stays 4.21.1 and still stops on a
+panic; UC restarts it.
+
 ## 0.9.2 — 2026-11-11
 
 Add an optional General freeze-diagnostics switch. The tray host writes one
