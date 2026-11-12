@@ -11,7 +11,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
-type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<CoreResult<Value>>>>>;
+type Pending = super::frame::Pending<CoreError>;
 pub type EventSink = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 struct Session {
@@ -849,13 +849,10 @@ fn read_worker(
     alive: Arc<AtomicBool>,
 ) {
     loop {
-        let mut bytes = Vec::new();
-        let read = std::io::Read::take(reader.by_ref(), (MAX_FRAME + 1) as u64)
-            .read_until(b'\n', &mut bytes);
-        if !matches!(read,Ok(n) if n>0&&n<=MAX_FRAME&&bytes.last()==Some(&b'\n')) {
+        let Ok(Some(bytes)) = super::frame::read_frame(&mut reader, MAX_FRAME) else {
             super::super::device::log("cooler protocol: frame ended or exceeded bound");
             break;
-        }
+        };
         let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
             super::super::device::log("cooler protocol: invalid JSON");
             break;
