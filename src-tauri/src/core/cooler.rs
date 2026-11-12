@@ -1,6 +1,7 @@
 //! A supervised CoolerScreen process. Only inherited anonymous pipes carry RPC;
 //! no network command listener, shell command, USB packet or credentials cross it.
 use super::error::{CoreError, CoreResult};
+use super::sync::{MutexExt, RwLockExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -61,12 +62,10 @@ pub struct Cooler {
 fn acquire_command_pipe<T>(pipe: &Mutex<T>) -> CoreResult<std::sync::MutexGuard<'_, T>> {
     let deadline = Instant::now() + Duration::from_millis(250);
     loop {
-        match pipe.try_lock() {
-            Ok(guard) => return Ok(guard),
-            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(1))
-            }
-            _ => {
+        match pipe.try_lock_or_recover() {
+            Some(guard) => return Ok(guard),
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
+            None => {
                 return Err(CoreError::coded(
                     "busy",
                     "The cooler engine pipe is busy; retry when it responds.",
@@ -122,13 +121,15 @@ impl Cooler {
             events,
         });
         let weak = Arc::downgrade(&this);
+        // The restart supervisor. A crash in one round is logged and the next round runs,
+        // so a fault here can never leave the cooler engine without restarts.
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(250));
             let Some(this) = weak.upgrade() else { break };
             if this.stopped.load(Ordering::SeqCst) {
                 break;
             }
-            this.supervise();
+            super::sync::guarded("cooler supervisor", || this.supervise());
         });
         let weak = Arc::downgrade(&this);
         std::thread::spawn(move || loop {
@@ -137,7 +138,7 @@ impl Cooler {
             if this.stopped.load(Ordering::SeqCst) {
                 break;
             }
-            this.sample_health();
+            super::sync::guarded("cooler health sampler", || this.sample_health());
         });
         this
     }
@@ -145,8 +146,8 @@ impl Cooler {
         self.diagnostics.set_enabled(enabled);
     }
     pub fn status(&self) -> Value {
-        let state = self.state.lock().unwrap();
-        let hardware = self.hardware_cache.lock().unwrap();
+        let state = self.state.lock_or_recover();
+        let hardware = self.hardware_cache.lock_or_recover();
         let mut hardware_state = hardware.2.clone();
         if hardware.1 != state.session.as_ref().map(|session| session.child.id())
             || !hardware_state.is_object()
@@ -165,24 +166,24 @@ impl Cooler {
             hardware_state["ram_present"] = json!(false);
             hardware_state["gpu_fields"] = json!(0);
         }
-        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock().unwrap().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id()),"diagnosticsEnabled":self.diagnostics.enabled(),"health":self.diagnostics.status(),"hardware":hardware_state})
+        json!({"enabled":state.enabled,"state":state.phase,"message":state.message,"engineVersion":state.engine_version,"busy":state.job_busy||!state.jobs.is_empty()||!state.uncertain.is_empty()||self.transfers.lock_or_recover().busy()||self.inflight.load(Ordering::SeqCst)>0,"fake":self.fake,"pid":state.session.as_ref().map(|s|s.child.id()),"diagnosticsEnabled":self.diagnostics.enabled(),"health":self.diagnostics.status(),"hardware":hardware_state})
     }
     pub fn busy(&self) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_or_recover();
         state.job_busy
             || !state.jobs.is_empty()
             || !state.uncertain.is_empty()
             || self.inflight.load(Ordering::SeqCst) > 0
-            || self.transfers.lock().unwrap().busy()
+            || self.transfers.lock_or_recover().busy()
             || (state.enabled && state.session.is_some() && !state.ready)
     }
     pub fn configure(self: &Arc<Self>, enabled: bool) -> CoreResult<Value> {
-        let _operation = self.operation.write().unwrap();
+        let _operation = self.operation.write_or_recover();
         if enabled {
             if self.stopped.load(Ordering::SeqCst) {
                 return Err(CoreError::new("The app is closing"));
             }
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_or_recover();
             if !state.enabled {
                 state.enabled = true;
                 state.phase = "starting";
@@ -194,7 +195,7 @@ impl Cooler {
             self.start_if_due();
         } else {
             self.stop_session()?;
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_or_recover();
             state.enabled = false;
             state.phase = "disabled";
             state.message = "Cooler screen is disabled".into();
@@ -242,7 +243,7 @@ impl Cooler {
         command
     }
     fn start_if_due(self: &Arc<Self>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_or_recover();
         if !state.enabled
             || state.session.is_some()
             || Instant::now() < state.next_start
@@ -299,10 +300,10 @@ impl Cooler {
         }
     }
     fn supervise(self: &Arc<Self>) {
-        let Ok(_operation) = self.operation.try_write() else {
+        let Some(_operation) = self.operation.try_write_or_recover() else {
             return;
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_or_recover();
         let ended = state
             .session
             .as_mut()
@@ -328,8 +329,8 @@ impl Cooler {
             if let Some(session) = state.session.take() {
                 fail_pending(&session.pending);
             }
-            for (_, id) in self.finishing_transfers.lock().unwrap().drain() {
-                let _ = self.transfers.lock().unwrap().complete(&id, true);
+            for (_, id) in self.finishing_transfers.lock_or_recover().drain() {
+                let _ = self.transfers.lock_or_recover().complete(&id, true);
             }
             state.ready = false;
             state.job_busy = false;
@@ -360,16 +361,15 @@ impl Cooler {
         {
             return Err(CoreError::new("Invalid cooler command"));
         }
-        let _operation = self.operation.read().unwrap();
+        let _operation = self.operation.read_or_recover();
         if command == "import_abort" {
             return self
                 .transfers
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .abort(args["transferId"].as_str().unwrap_or(""));
         }
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_or_recover();
             if !state.ready {
                 return Err(CoreError::new(format!(
                     "The cooler engine is not ready ({})",
@@ -378,20 +378,19 @@ impl Cooler {
             }
         }
         match command {
-            "import_begin" => return self.transfers.lock().unwrap().begin(&args),
-            "import_append" => return self.transfers.lock().unwrap().append(&args),
+            "import_begin" => return self.transfers.lock_or_recover().begin(&args),
+            "import_append" => return self.transfers.lock_or_recover().append(&args),
             "import_abort" => {
                 return self
                     .transfers
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .abort(args["transferId"].as_str().unwrap_or(""))
             }
             "import_finish" => {
                 let id = args["transferId"]
                     .as_str()
                     .ok_or_else(|| CoreError::new("Invalid file transfer"))?;
-                let (path, kind, original_id) = self.transfers.lock().unwrap().finish(id)?;
+                let (path, kind, original_id) = self.transfers.lock_or_recover().finish(id)?;
                 let result = if kind == "asset" {
                     self.request_with_transfer(
                         "theme_asset_add",
@@ -416,8 +415,7 @@ impl Cooler {
                     )
                 }) {
                     self.transfers
-                        .lock()
-                        .unwrap()
+                        .lock_or_recover()
                         .complete(id, result.is_ok())?;
                 }
                 return result;
@@ -431,7 +429,7 @@ impl Cooler {
             return;
         };
         let worker = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_or_recover();
             json!({"enabled":state.enabled,"ready":state.ready,"state":state.phase,"generation":state.generation,"restarts":state.generation.saturating_sub(1)})
         };
         let pnp = if ticket.sample_pnp {
@@ -441,7 +439,7 @@ impl Cooler {
         };
         let reply = if worker["enabled"] != true || worker["ready"] != true {
             Err("worker_unavailable")
-        } else if let Ok(_operation) = self.operation.try_read() {
+        } else if let Some(_operation) = self.operation.try_read_or_recover() {
             self.health_request()
         } else {
             Err("sample_deferred")
@@ -452,8 +450,8 @@ impl Cooler {
     pub fn controls_state(&self) -> CoreResult<Value> {
         let _operation = self
             .operation
-            .try_read()
-            .map_err(|_| CoreError::coded("busy", "Cooler controls are busy."))?;
+            .try_read_or_recover()
+            .ok_or_else(|| CoreError::coded("busy", "Cooler controls are busy."))?;
         self.probe_request("dock_control_state", json!({}), Duration::from_secs(2))
             .map_err(|_| {
                 CoreError::coded(
@@ -465,7 +463,7 @@ impl Cooler {
     pub fn dock_action(&self, action: super::actions::CoolerAction) -> CoreResult<Value> {
         action.validate().map_err(CoreError::new)?;
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_or_recover();
             // Pending synchronous reads are not an uncertain prior effect.
             // An unanswered timed-out request must block another physical action
             // until its exact reply or confirmed worker exit clears the outcome.
@@ -479,13 +477,13 @@ impl Cooler {
                 ));
             }
         }
-        if self.transfers.lock().unwrap().busy() {
+        if self.transfers.lock_or_recover().busy() {
             return Err(CoreError::coded("busy", "A cooler import is still active."));
         }
         let _operation = self
             .operation
-            .try_read()
-            .map_err(|_| CoreError::coded("busy", "Cooler controls are busy."))?;
+            .try_read_or_recover()
+            .ok_or_else(|| CoreError::coded("busy", "Cooler controls are busy."))?;
         self.request(
             "dock_action",
             json!({"action":action}),
@@ -505,12 +503,11 @@ impl Cooler {
     ) -> CoreResult<Value> {
         let _operation = self
             .operation
-            .try_read()
-            .map_err(|_| CoreError::new("Hardware exchange is deferred"))?;
+            .try_read_or_recover()
+            .ok_or_else(|| CoreError::new("Hardware exchange is deferred"))?;
         let pid = self
             .state
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .session
             .as_ref()
             .map(|session| session.child.id());
@@ -521,20 +518,20 @@ impl Cooler {
                 Duration::from_millis(500),
             )
             .map_err(|_| CoreError::new("Hardware exchange is deferred"))?;
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_or_recover();
         if !state.ready || state.session.as_ref().map(|session| session.child.id()) != pid {
             return Err(CoreError::new(
                 "Hardware exchange belongs to a disconnected worker",
             ));
         }
-        *self.hardware_cache.lock().unwrap() = (Instant::now(), pid, result["state"].clone());
+        *self.hardware_cache.lock_or_recover() = (Instant::now(), pid, result["state"].clone());
         Ok(result)
     }
     /// Shared music/weather updates are ephemeral, independently scoped to the
     /// current cooler process. Inspection never sends a request or renews demand.
     pub fn services_state(&self) -> Value {
-        let state = self.state.lock().unwrap();
-        let cache = self.services_cache.lock().unwrap();
+        let state = self.state.lock_or_recover();
+        let cache = self.services_cache.lock_or_recover();
         let mut value = cache.2.clone();
         if cache.1 != state.session.as_ref().map(|session| session.child.id()) || !value.is_object()
         {
@@ -557,12 +554,11 @@ impl Cooler {
     pub fn services_exchange(&self, snapshot: Option<Value>) -> CoreResult<Value> {
         let _operation = self
             .operation
-            .try_read()
-            .map_err(|_| CoreError::new("Services exchange is deferred"))?;
+            .try_read_or_recover()
+            .ok_or_else(|| CoreError::new("Services exchange is deferred"))?;
         let pid = self
             .state
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .session
             .as_ref()
             .map(|session| session.child.id());
@@ -573,13 +569,13 @@ impl Cooler {
                 Duration::from_millis(500),
             )
             .map_err(|_| CoreError::new("Services exchange is deferred"))?;
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_or_recover();
         if !state.ready || state.session.as_ref().map(|session| session.child.id()) != pid {
             return Err(CoreError::new(
                 "Services exchange belongs to a disconnected worker",
             ));
         }
-        *self.services_cache.lock().unwrap() = (Instant::now(), pid, result["state"].clone());
+        *self.services_cache.lock_or_recover() = (Instant::now(), pid, result["state"].clone());
         Ok(result)
     }
     fn probe_request(
@@ -602,7 +598,7 @@ impl Cooler {
         }
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
         let (input, pending) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_or_recover();
             if !state.enabled || !state.ready {
                 return Err("worker_unavailable");
             }
@@ -617,12 +613,12 @@ impl Cooler {
             };
             (input, session.pending.clone())
         };
-        let Ok(input_guard) = input.try_lock() else {
+        let Some(input_guard) = input.try_lock_or_recover() else {
             return Err("sample_deferred");
         };
         if self.inflight.load(Ordering::SeqCst) > 0
-            || !pending.lock().unwrap().is_empty()
-            || !self.state.lock().unwrap().uncertain.is_empty()
+            || !pending.lock_or_recover().is_empty()
+            || !self.state.lock_or_recover().uncertain.is_empty()
         {
             return Err("sample_deferred");
         }
@@ -641,7 +637,7 @@ impl Cooler {
         }
         let _active = ActiveProbe(&self.probe_active_id, id);
         let (send, recv) = mpsc::channel();
-        pending.lock().unwrap().insert(id, send);
+        pending.lock_or_recover().insert(id, send);
         let mut frame = serde_json::to_vec(&json!({"v":1,"id":id,"command":command,"args":args}))
             .map_err(|_| "invalid_probe")?;
         let limit = if command == "services_exchange" {
@@ -650,7 +646,7 @@ impl Cooler {
             2_048
         };
         if frame.len() > limit {
-            pending.lock().unwrap().remove(&id);
+            pending.lock_or_recover().remove(&id);
             self.health_blocked.store(false, Ordering::SeqCst);
             self.probe_id.store(0, Ordering::SeqCst);
             return Err("invalid_probe");
@@ -669,7 +665,7 @@ impl Cooler {
                     .map_err(|_| ())
             });
             if written.is_err() {
-                if let Some(send) = pending_write.lock().unwrap().remove(&id) {
+                if let Some(send) = pending_write.lock_or_recover().remove(&id) {
                     let _ = send.send(Err(CoreError::new("Worker pipe disconnected")));
                 }
             }
@@ -679,7 +675,7 @@ impl Cooler {
             Ok(Err(_)) => Err("worker_unavailable"),
             Err(_) => Err("worker_timeout"),
         };
-        pending.lock().unwrap().remove(&id);
+        pending.lock_or_recover().remove(&id);
         result
     }
     fn accept_probe_reply(&self, id: u64) {
@@ -704,7 +700,7 @@ impl Cooler {
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
         let (send, recv) = mpsc::channel();
         let (input, pending) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock_or_recover();
             if !state.enabled || (!state.ready && command != "shutdown") {
                 return Err(CoreError::coded(
                     "cooler_unavailable",
@@ -734,14 +730,13 @@ impl Cooler {
         // A bounded ephemeral writer may still be waiting on a stalled pipe.
         // Refuse before mutation admission instead of waiting on its mutex.
         let mut input = acquire_command_pipe(&input)?;
-        pending.lock().unwrap().insert(id, send);
+        pending.lock_or_recover().insert(id, send);
         if let Some(transfer) = transfer {
             self.finishing_transfers
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .insert(id, transfer.into());
         }
-        self.state.lock().unwrap().uncertain.insert(id);
+        self.state.lock_or_recover().uncertain.insert(id);
         self.inflight.fetch_add(1, Ordering::SeqCst);
         let written = input.write_all(&frame).and_then(|_| input.flush());
         drop(input);
@@ -758,7 +753,7 @@ impl Cooler {
                 "The cooler engine connection was lost",
             ))
         };
-        pending.lock().unwrap().remove(&id);
+        pending.lock_or_recover().remove(&id);
         self.inflight.fetch_sub(1, Ordering::SeqCst);
         result
     }
@@ -769,9 +764,9 @@ impl Cooler {
                 "CoolerScreen is busy. Wait for its current work to finish.",
             ));
         }
-        if self.state.lock().unwrap().session.is_some() {
+        if self.state.lock_or_recover().session.is_some() {
             self.request("shutdown", json!({}), Duration::from_secs(30))?;
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_or_recover();
             if let Some(mut session) = state.session.take() {
                 let deadline = Instant::now() + Duration::from_secs(10);
                 while session.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline
@@ -790,7 +785,7 @@ impl Cooler {
         Ok(())
     }
     pub fn shutdown(&self) -> CoreResult<()> {
-        let _operation = self.operation.write().unwrap();
+        let _operation = self.operation.write_or_recover();
         self.stop_session()?;
         self.stopped.store(true, Ordering::SeqCst);
         Ok(())
@@ -798,7 +793,7 @@ impl Cooler {
 }
 
 fn fail_pending(pending: &Pending) {
-    for (_, sender) in pending.lock().unwrap().drain() {
+    for (_, sender) in pending.lock_or_recover().drain() {
         let _ = sender.send(Err(CoreError::coded(
             "cooler_disconnected",
             "The cooler engine connection was lost",
@@ -848,7 +843,9 @@ fn read_worker(
     pending: Pending,
     alive: Arc<AtomicBool>,
 ) {
-    loop {
+    // A crash while handling a message counts as pipe loss: `alive` still goes false and
+    // waiters are failed, so the supervisor retires and restarts the engine.
+    super::sync::guarded("cooler reader", || loop {
         let Ok(Some(bytes)) = super::frame::read_frame(&mut reader, MAX_FRAME) else {
             super::super::device::log("cooler protocol: frame ended or exceeded bound");
             break;
@@ -864,12 +861,12 @@ fn read_worker(
         if let Some(id) = value["id"].as_u64() {
             if let Some(owner) = owner.upgrade() {
                 owner.accept_probe_reply(id);
-                owner.state.lock().unwrap().uncertain.remove(&id);
-                if let Some(transfer) = owner.finishing_transfers.lock().unwrap().remove(&id) {
-                    let _ = owner.transfers.lock().unwrap().complete(&transfer, true);
+                owner.state.lock_or_recover().uncertain.remove(&id);
+                if let Some(transfer) = owner.finishing_transfers.lock_or_recover().remove(&id) {
+                    let _ = owner.transfers.lock_or_recover().complete(&transfer, true);
                 }
             }
-            if let Some(sender) = pending.lock().unwrap().remove(&id) {
+            if let Some(sender) = pending.lock_or_recover().remove(&id) {
                 let result = if value["ok"] == true {
                     Ok(value["result"].clone())
                 } else {
@@ -886,7 +883,7 @@ fn read_worker(
                 continue;
             }
             if event == "ready" {
-                let mut state = owner.state.lock().unwrap();
+                let mut state = owner.state.lock_or_recover();
                 state.ready = true;
                 state.phase = if payload["blocked"] == true {
                     "blocked"
@@ -905,17 +902,17 @@ fn read_worker(
                 if payload["blocked"] != true {
                     let owner = owner.clone();
                     std::thread::spawn(move || {
-                        let _operation = owner.operation.read().unwrap();
+                        let _operation = owner.operation.read_or_recover();
                         let _ = owner.request("activate", json!({}), Duration::from_secs(30));
                     });
                 }
             }
             if event == "cs:device" {
-                owner.state.lock().unwrap().job_busy = payload["busy"].as_bool().unwrap_or(true);
+                owner.state.lock_or_recover().job_busy = payload["busy"].as_bool().unwrap_or(true);
             }
             if event == "cs:job" {
                 if let Some(id) = payload["id"].as_str() {
-                    let mut state = owner.state.lock().unwrap();
+                    let mut state = owner.state.lock_or_recover();
                     if matches!(payload["state"].as_str(), Some("queued" | "running"))
                         || matches!(
                             payload["status"].as_str(),
@@ -935,7 +932,7 @@ fn read_worker(
             super::super::device::log("cooler protocol: invalid message");
             break;
         }
-    }
+    });
     alive.store(false, Ordering::SeqCst);
     fail_pending(&pending);
 }
@@ -986,6 +983,41 @@ mod health_tests {
         );
         assert_eq!(std::fs::read_to_string(path).unwrap(), text);
         assert!(forwarded.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn a_crash_in_the_reader_counts_as_pipe_loss_so_the_engine_is_restarted() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("migration.json"), b"{}").unwrap();
+        let manager = Cooler::new(
+            home,
+            dir.path().join("resources"),
+            true,
+            Arc::new(|event, _| {
+                if event == "cs:job" {
+                    panic!("event relay crashed");
+                }
+            }),
+        );
+        manager.stopped.store(true, Ordering::SeqCst);
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (send, waiter) = mpsc::channel();
+        pending.lock().unwrap().insert(7, send);
+        let alive = Arc::new(AtomicBool::new(true));
+        let frame = format!("{}
+", json!({"v":1,"event":"cs:job","payload":{"id":"j","state":"done"}}));
+        read_worker(
+            std::io::Cursor::new(frame),
+            Arc::downgrade(&manager),
+            pending.clone(),
+            alive.clone(),
+        );
+        // The supervisor retires a session whose reader is no longer alive.
+        assert!(!alive.load(Ordering::SeqCst));
+        let error = waiter.recv_timeout(Duration::from_secs(1)).unwrap().unwrap_err();
+        assert!(error.code_is("cooler_disconnected"));
+        assert!(pending.lock().unwrap().is_empty());
     }
     #[test]
     fn unrelated_replies_cannot_reopen_an_unanswered_hardware_probe() {

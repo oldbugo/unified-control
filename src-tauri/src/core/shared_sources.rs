@@ -1,6 +1,7 @@
 //! UC-owned music/weather source process. The process has no device engine,
 //! window, account reader or arbitrary-command endpoint. Only leased demand and
 //! bounded typed observations cross its inherited private pipes.
+use super::sync::MutexExt;
 use super::{
     cooler::Cooler,
     frame::{self, FrameError},
@@ -599,8 +600,25 @@ impl Service {
             retained: Mutex::new(None),
         });
         let weak = Arc::downgrade(&this);
-        let worker = thread::spawn(move || run(weak, cooler, home, executable, fake));
-        *this.thread.lock().unwrap() = Some(worker);
+        // A crash in the source loop is logged and the loop starts again (Session's Drop stops
+        // its collector while unwinding), so shared sources never stop silently.
+        let worker = thread::spawn(move || {
+            let stopped = || {
+                weak.upgrade()
+                    .is_none_or(|s| s.stopped.load(Ordering::SeqCst))
+            };
+            super::sync::restarting("shared sources service", stopped, || {
+                run(
+                    weak.clone(),
+                    cooler.clone(),
+                    home.clone(),
+                    executable.clone(),
+                    fake,
+                )
+            })
+            .unwrap_or(Ok(()))
+        });
+        *this.thread.lock_or_recover() = Some(worker);
         this
     }
     pub fn set_test_control(&self, failure: bool, paused: bool) -> Result<(), String> {
@@ -615,7 +633,7 @@ impl Service {
         Ok(())
     }
     pub fn status(&self) -> Value {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_or_recover();
         let now = now_ms();
         let current = state.snapshot.as_ref().filter(|s| s.expires_at_ms > now);
         json!({"shared":true,"fake":self.fake,"state":state.phase,"running":state.pid.is_some()&&matches!(state.phase,"starting"|"running"|"idle"),"pid":state.pid,
@@ -630,16 +648,16 @@ impl Service {
     pub fn shutdown(&self) -> Result<(), String> {
         self.stopped.store(true, Ordering::SeqCst);
         let mut outcome = Ok(());
-        if let Some(worker) = self.thread.lock().unwrap().take() {
+        if let Some(worker) = self.thread.lock_or_recover().take() {
             outcome = worker
                 .join()
                 .map_err(|_| "Shared source supervisor stopped unexpectedly".to_string())?;
         }
-        let mut retained = self.retained.lock().unwrap();
+        let mut retained = self.retained.lock_or_recover();
         if let Some(child) = retained.as_mut() {
             child.stop()?;
             retained.take();
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_or_recover();
             state.phase = "stopped";
             state.pid = None;
             state.snapshot = None;
@@ -663,7 +681,7 @@ impl Drop for Service {
 fn retire(session: &mut Option<Session>, service: &Service) -> Result<(), String> {
     if let Some(child) = session.as_mut() {
         if let Err(error) = child.stop() {
-            let mut state = service.state.lock().unwrap();
+            let mut state = service.state.lock_or_recover();
             state.phase = "stopping";
             state.pid = Some(child.child.id());
             state.snapshot = None;
@@ -674,7 +692,7 @@ fn retire(session: &mut Option<Session>, service: &Service) -> Result<(), String
         }
         session.take();
     }
-    let mut state = service.state.lock().unwrap();
+    let mut state = service.state.lock_or_recover();
     state.pid = None;
     state.source = None;
     state.snapshot = None;
@@ -724,7 +742,7 @@ fn source_exchange(
     }
     let snapshot = exchange.snapshot.for_demand(demand);
     child.demand = Some(demand.clone());
-    let mut state = service.state.lock().unwrap();
+    let mut state = service.state.lock_or_recover();
     state.phase = if demand.active() { "running" } else { "idle" };
     state.sequence = sequence;
     state.exchanges += 1;
@@ -798,7 +816,7 @@ fn run(
                 }
                 if outgoing.is_some() {
                     delivered = key;
-                    service.state.lock().unwrap().deliveries += 1;
+                    service.state.lock_or_recover().deliveries += 1;
                 }
             }
         } else {
@@ -812,7 +830,7 @@ fn run(
             delivered = None;
         }
         {
-            let mut state = service.state.lock().unwrap();
+            let mut state = service.state.lock_or_recover();
             state.demand = demand.clone();
             if latest.is_none() {
                 state.snapshot = None;
@@ -832,7 +850,7 @@ fn run(
                 thread::sleep(POLL);
                 continue;
             }
-            let mut state = service.state.lock().unwrap();
+            let mut state = service.state.lock_or_recover();
             state.phase = if demand.active() {
                 "restarting"
             } else {
@@ -862,12 +880,12 @@ fn run(
                         thread::sleep(POLL);
                         continue;
                     }
-                    let mut state = service.state.lock().unwrap();
+                    let mut state = service.state.lock_or_recover();
                     state.failures += 1;
                     state.last_error = Some("source_idle_failed");
                 }
             }
-            let mut state = service.state.lock().unwrap();
+            let mut state = service.state.lock_or_recover();
             state.phase = if session.is_some() {
                 "idle"
             } else {
@@ -878,7 +896,7 @@ fn run(
             if session.is_none() && Instant::now() >= retry {
                 match Session::spawn(&executable, &home, fake) {
                     Ok(child) => {
-                        let mut state = service.state.lock().unwrap();
+                        let mut state = service.state.lock_or_recover();
                         state.pid = Some(child.child.id());
                         state.process_starts += 1;
                         state.phase = "starting";
@@ -889,7 +907,7 @@ fn run(
                     Err(_) => {
                         retry = Instant::now() + backoff;
                         backoff = (backoff * 2).min(Duration::from_secs(30));
-                        let mut state = service.state.lock().unwrap();
+                        let mut state = service.state.lock_or_recover();
                         state.phase = "unavailable";
                         state.failures += 1;
                         state.last_error = Some("source_start_failed");
@@ -919,7 +937,7 @@ fn run(
                             thread::sleep(POLL);
                             continue;
                         }
-                        let mut state = service.state.lock().unwrap();
+                        let mut state = service.state.lock_or_recover();
                         state.pid = None;
                         state.source = None;
                         state.snapshot = None;
@@ -935,14 +953,14 @@ fn run(
     }
     if let Some(service) = owner.upgrade() {
         if let Err(error) = retire(&mut session, &service) {
-            *service.retained.lock().unwrap() = session.take();
+            *service.retained.lock_or_recover() = session.take();
             return Err(error);
         }
     } else if let Some(mut child) = session {
         child.stop()?;
     }
     if let Some(service) = owner.upgrade() {
-        let mut state = service.state.lock().unwrap();
+        let mut state = service.state.lock_or_recover();
         state.phase = "stopped";
         state.pid = None;
         state.source = None;

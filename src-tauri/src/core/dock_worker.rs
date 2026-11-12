@@ -1,5 +1,6 @@
 //! Supervised dock process. Anonymous inherited pipes carry bounded typed JSON.
 //! The host owns durable profiles; this process owns transport, renders and actions.
+use super::sync::MutexExt;
 use super::{
     frame::{self, FrameError},
     dock_service::{self, DockHooks, DockStatus, DockTimings},
@@ -204,31 +205,34 @@ impl CrossActions {
         let (queue, jobs) = mpsc::sync_channel::<CrossJob>(4);
         std::thread::spawn(move || {
             for job in jobs {
-                let handler = shared.lock().unwrap().handler.clone();
-                let result = handler
-                    .ok_or_else(|| "Cooler host routing is unavailable".to_string())
-                    .and_then(|handler| {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handler(job.action)
-                        }))
-                        .unwrap_or_else(|_| {
-                            Err("Cooler host routing failed; outcome is uncertain".into())
-                        })
-                    });
-                // Delivery belongs to the original session only. Never acquire the
-                // host operation lock here: Shutdown may be draining the executor.
-                enqueue_completion(
-                    &job.input,
-                    Request {
-                        version: VERSION,
-                        id: 0,
-                        request: Op::ActionResult {
-                            action_id: job.action_id,
-                            result,
+                // A crash in one action (now caught: release builds unwind) fails only that
+                // action; `pending` is always released so Quit and disable are not held forever.
+                super::sync::guarded("cross-device action", || {
+                    let handler = shared.lock_or_recover().handler.clone();
+                    let result = handler
+                        .ok_or_else(|| "Cooler host routing is unavailable".to_string())
+                        .and_then(|handler| {
+                            super::sync::guarded("cooler host routing", || handler(job.action))
+                                .unwrap_or_else(|| {
+                                    Err("Cooler host routing failed; outcome is uncertain".into())
+                                })
+                        });
+                    // Delivery belongs to the original session only. Never acquire the
+                    // host operation lock here: Shutdown may be draining the executor.
+                    enqueue_completion(
+                        &job.input,
+                        Request {
+                            version: VERSION,
+                            id: 0,
+                            request: Op::ActionResult {
+                                action_id: job.action_id,
+                                result,
+                            },
                         },
-                    },
-                );
-                shared.lock().unwrap().pending -= 1;
+                    );
+                });
+                let mut state = shared.lock_or_recover();
+                state.pending = state.pending.saturating_sub(1);
             }
         });
         Self { state, queue }
@@ -240,7 +244,7 @@ impl CrossActions {
         input: Arc<mpsc::SyncSender<Request>>,
     ) -> Result<(), String> {
         action.validate()?;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_or_recover();
         if state.closed || state.handler.is_none() {
             return Err("Cooler action admission is closed".into());
         }
@@ -267,7 +271,7 @@ struct CrossBarrier {
 impl CrossBarrier {
     fn close(state: Arc<Mutex<CrossState>>) -> Result<Self, String> {
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock_or_recover();
             if s.pending > 0 {
                 return Err("A cross-device action is still running".into());
             }
@@ -279,7 +283,7 @@ impl CrossBarrier {
 impl Drop for CrossBarrier {
     fn drop(&mut self) {
         if !self.keep {
-            self.state.lock().unwrap().closed = false;
+            self.state.lock_or_recover().closed = false;
         }
     }
 }
@@ -345,37 +349,41 @@ impl Controller {
             cross: Arc::new(CrossActions::new()),
         });
         let weak = Arc::downgrade(&this);
+        // The restart supervisor. A crash in one round is logged and the next round runs,
+        // so a fault here can never leave the dock without restarts.
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(100));
             let Some(this) = weak.upgrade() else { break };
             if this.stopped.load(Ordering::SeqCst) {
                 break;
             }
-            if this.enabled.load(Ordering::SeqCst) && !this.cache.lock().unwrap().alive {
-                let _ = this.ensure_started();
-            }
-            if this.profiles_dirty.load(Ordering::SeqCst)
-                && this.cache.lock().unwrap().alive
-                && !this.quiesced.load(Ordering::SeqCst)
-            {
-                let _ = this.sync_profiles();
-            }
+            super::sync::guarded("dock worker supervisor", || {
+                if this.enabled.load(Ordering::SeqCst) && !this.cache.lock_or_recover().alive {
+                    let _ = this.ensure_started();
+                }
+                if this.profiles_dirty.load(Ordering::SeqCst)
+                    && this.cache.lock_or_recover().alive
+                    && !this.quiesced.load(Ordering::SeqCst)
+                {
+                    let _ = this.sync_profiles();
+                }
+            });
         });
         this
     }
     pub fn set_cooler_handler(&self, handler: CoolerHandler) {
-        self.cross.state.lock().unwrap().handler = Some(handler);
+        self.cross.state.lock_or_recover().handler = Some(handler);
     }
     pub fn cross_action_busy(&self) -> bool {
-        self.cross.state.lock().unwrap().pending > 0
+        self.cross.state.lock_or_recover().pending > 0
     }
     fn ensure_started(&self) -> Result<(), String> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation.lock_or_recover();
         if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
             return Err("Dock worker admission is closed".into());
         }
         {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.lock_or_recover();
             if c.alive {
                 if c.retiring || c.uncertain || c.last_status.elapsed() > Duration::from_secs(3) {
                     return Err("Dock worker is unresponsive; outcome is uncertain".into());
@@ -386,13 +394,13 @@ impl Controller {
                 return Err("Dock worker is waiting to restart".into());
             }
         }
-        let mut retry = self.retry.lock().unwrap();
+        let mut retry = self.retry.lock_or_recover();
         if Instant::now() < retry.0 {
             return Err("Dock worker is waiting to restart".into());
         }
         retry.0 = Instant::now() + retry.1;
         retry.1 = (retry.1 * 2).min(Duration::from_secs(30));
-        let mut slot = self.session.lock().unwrap();
+        let mut slot = self.session.lock_or_recover();
         if let Some(mut old) = slot.take() {
             drop(old.input.take());
             if old
@@ -434,7 +442,7 @@ impl Controller {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (cache, live, waiting) = (self.cache.clone(), alive.clone(), pending.clone());
         let generation = {
-            let mut c = cache.lock().unwrap();
+            let mut c = cache.lock_or_recover();
             c.generation += 1;
             c.restarts = c.generation.saturating_sub(1);
             c.pid = Some(child.id());
@@ -457,7 +465,9 @@ impl Controller {
         std::thread::spawn(move || {
             let mut highest_action = 0;
             let mut reader = BufReader::new(output);
-            loop {
+            // A crash while handling a message counts as pipe loss: the clean-up below still
+            // runs, so the supervisor restarts the worker instead of waiting on a dead reader.
+            super::sync::guarded("dock worker reader", || loop {
                 let Ok(Some(bytes)) = read_frame(&mut reader) else {
                     break;
                 };
@@ -476,7 +486,7 @@ impl Controller {
                         // A duplicate must not complete the original wait with a
                         // spurious failure while its operation is still running.
                         let admitting = {
-                            let c = cache.lock().unwrap();
+                            let c = cache.lock_or_recover();
                             c.generation == generation && c.alive && !c.uncertain && !c.retiring
                         };
                         if !admitting || !claim_action_id(&mut highest_action, action_id) {
@@ -499,11 +509,11 @@ impl Controller {
                         id,
                         result,
                     } if version == VERSION => {
-                        let mut pending = waiting.lock().unwrap();
+                        let mut pending = waiting.lock_or_recover();
                         if let Some(tx) = pending.remove(&id) {
                             let _ = tx.send(result);
                         }
-                        let mut c = cache.lock().unwrap();
+                        let mut c = cache.lock_or_recover();
                         if c.generation == generation && c.hardware_pending == Some(id) {
                             c.hardware_pending = None;
                         }
@@ -518,7 +528,7 @@ impl Controller {
                         usage,
                         hardware,
                     } if version == VERSION => {
-                        let mut c = cache.lock().unwrap();
+                        let mut c = cache.lock_or_recover();
                         if c.generation == generation {
                             c.status = status;
                             c.busy = busy;
@@ -529,10 +539,10 @@ impl Controller {
                     }
                     _ => break,
                 }
-            }
+            });
             live.store(false, Ordering::SeqCst);
             {
-                let mut c = cache.lock().unwrap();
+                let mut c = cache.lock_or_recover();
                 if c.generation == generation {
                     c.alive = false;
                     c.busy = false;
@@ -544,7 +554,7 @@ impl Controller {
                     c.next_start = Instant::now() + Duration::from_millis(500);
                 }
             }
-            for (_, tx) in waiting.lock().unwrap().drain() {
+            for (_, tx) in waiting.lock_or_recover().drain() {
                 let _ = tx.send(Err(
                     "Dock worker disconnected; request was not replayed".into()
                 ));
@@ -556,7 +566,7 @@ impl Controller {
                 if write_frame(&mut input, &request).is_err() {
                     live.store(false, Ordering::SeqCst);
                     {
-                        let mut c = cache.lock().unwrap();
+                        let mut c = cache.lock_or_recover();
                         if c.generation == generation {
                             c.alive = false;
                             c.uncertain = true;
@@ -564,7 +574,7 @@ impl Controller {
                             c.next_start = Instant::now() + Duration::from_millis(500);
                         }
                     }
-                    for (_, tx) in waiting.lock().unwrap().drain() {
+                    for (_, tx) in waiting.lock_or_recover().drain() {
                         let _ = tx.send(Err(
                             "Dock worker pipe write failed; outcome is uncertain".into()
                         ));
@@ -591,7 +601,7 @@ impl Controller {
                 shared_hardware: true,
                 shared_usage: true,
             })?;
-            self.cache.lock().unwrap().profile_revision = Some(snapshot_revision);
+            self.cache.lock_or_recover().profile_revision = Some(snapshot_revision);
             self.rpc_inner(Op::Configure {
                 enabled: self.enabled.load(Ordering::SeqCst),
                 brightness: self.brightness.load(Ordering::SeqCst) as u8,
@@ -599,7 +609,7 @@ impl Controller {
             Ok(())
         })();
         if initialized.is_err() {
-            if let Some(s) = self.session.lock().unwrap().as_mut() {
+            if let Some(s) = self.session.lock_or_recover().as_mut() {
                 drop(s.input.take());
             }
         }
@@ -608,7 +618,7 @@ impl Controller {
     fn rpc_inner(&self, request: Op) -> Result<Value, String> {
         let ephemeral = matches!(request, Op::Hardware { .. } | Op::Usage { .. });
         if !matches!(request, Op::Shutdown {}) {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.lock_or_recover();
             if c.uncertain || c.retiring || c.last_status.elapsed() > Duration::from_secs(3) {
                 return Err("Dock worker is unresponsive; outcome is uncertain".into());
             }
@@ -628,15 +638,15 @@ impl Controller {
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         {
-            let mut slot = self.session.lock().unwrap();
+            let mut slot = self.session.lock_or_recover();
             let s = slot.as_mut().ok_or("Dock worker is unavailable")?;
             if !s.alive.load(Ordering::SeqCst) {
                 return Err("Dock worker is disconnected".into());
             }
             let sender = s.input.as_ref().ok_or("Dock worker pipe is closed")?;
-            s.pending.lock().unwrap().insert(id, tx);
+            s.pending.lock_or_recover().insert(id, tx);
             if ephemeral {
-                self.cache.lock().unwrap().hardware_pending = Some(id);
+                self.cache.lock_or_recover().hardware_pending = Some(id);
             }
             if sender
                 .try_send(Request {
@@ -646,9 +656,9 @@ impl Controller {
                 })
                 .is_err()
             {
-                s.pending.lock().unwrap().remove(&id);
+                s.pending.lock_or_recover().remove(&id);
                 if ephemeral {
-                    self.cache.lock().unwrap().hardware_pending = None;
+                    self.cache.lock_or_recover().hardware_pending = None;
                 } else {
                     drop(s.input.take());
                 }
@@ -665,19 +675,19 @@ impl Controller {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if ephemeral {
-                    if let Some(session) = self.session.lock().unwrap().as_ref() {
-                        session.pending.lock().unwrap().remove(&id);
+                    if let Some(session) = self.session.lock_or_recover().as_ref() {
+                        session.pending.lock_or_recover().remove(&id);
                     }
                     // Keep the single probe gate until the actual late reply.
                     // Ephemeral readings cannot create action uncertainty.
                     return Err("Hardware exchange is deferred".into());
                 }
                 {
-                    let mut c = self.cache.lock().unwrap();
+                    let mut c = self.cache.lock_or_recover();
                     c.uncertain = true;
                     c.retiring = true;
                 }
-                if let Some(s) = self.session.lock().unwrap().as_mut() {
+                if let Some(s) = self.session.lock_or_recover().as_mut() {
                     drop(s.input.take());
                 }
                 Err(
@@ -690,7 +700,7 @@ impl Controller {
     }
     fn rpc(&self, request: Op) -> Result<Value, String> {
         self.ensure_started()?;
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation.lock_or_recover();
         if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
             return Err("Dock worker is stopping".into());
         }
@@ -709,7 +719,7 @@ impl Controller {
         if !enabled && self.cross_action_busy() {
             return Err("A cross-device action is still running".into());
         }
-        if !enabled && self.session.lock().unwrap().is_none() {
+        if !enabled && self.session.lock_or_recover().is_none() {
             self.enabled.store(false, Ordering::SeqCst);
             self.brightness.store(brightness as usize, Ordering::SeqCst);
             return Ok(());
@@ -731,12 +741,12 @@ impl Controller {
         self.configure(self.enabled.load(Ordering::SeqCst), value)
     }
     pub fn notify_profiles_changed(&self) {
-        let _sync = self.profiles_sync.lock().unwrap();
+        let _sync = self.profiles_sync.lock_or_recover();
         self.profiles_dirty.store(true, Ordering::SeqCst);
         let _ = self.sync_profiles_locked();
     }
     fn sync_profiles(&self) -> Result<(), String> {
-        let _sync = self.profiles_sync.lock().unwrap();
+        let _sync = self.profiles_sync.lock_or_recover();
         self.sync_profiles_locked()
     }
     fn sync_profiles_locked(&self) -> Result<(), String> {
@@ -744,7 +754,7 @@ impl Controller {
             return Ok(());
         }
         self.ensure_started()?;
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation.lock_or_recover();
         if self.quiesced.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
             return Err("Dock worker admission is closed".into());
         }
@@ -752,12 +762,12 @@ impl Controller {
             .profiles
             .state_with_revision()
             .map_err(|e| e.to_string())?;
-        if self.cache.lock().unwrap().profile_revision.as_ref() == Some(&revision) {
+        if self.cache.lock_or_recover().profile_revision.as_ref() == Some(&revision) {
             self.profiles_dirty.store(false, Ordering::SeqCst);
             return Ok(());
         }
         self.rpc_inner(Op::Profiles { state })?;
-        self.cache.lock().unwrap().profile_revision = Some(revision.clone());
+        self.cache.lock_or_recover().profile_revision = Some(revision.clone());
         if self
             .profiles
             .state_with_revision()
@@ -770,7 +780,7 @@ impl Controller {
         Ok(())
     }
     pub fn status(&self) -> DockStatus {
-        let c = self.cache.lock().unwrap();
+        let c = self.cache.lock_or_recover();
         if !c.alive || c.uncertain || c.last_status.elapsed() > Duration::from_secs(3) {
             unavailable(self.enabled.load(Ordering::SeqCst), self.fake)
         } else {
@@ -778,7 +788,7 @@ impl Controller {
         }
     }
     pub fn usage_status(&self) -> Value {
-        let c = self.cache.lock().unwrap();
+        let c = self.cache.lock_or_recover();
         let mut usage = c.usage.clone();
         if !c.alive
             || c.uncertain
@@ -810,11 +820,11 @@ impl Controller {
         self.usage_status()
     }
     pub fn worker_status(&self) -> Value {
-        let c = self.cache.lock().unwrap();
+        let c = self.cache.lock_or_recover();
         json!({"pid":c.pid,"generation":c.generation,"restarts":c.restarts,"busy":c.busy,"crossActionBusy":self.cross_action_busy(),"state":if c.alive{"running"}else{"unavailable"}})
     }
     pub fn hardware_state(&self) -> Value {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock_or_recover();
         let mut state = cache.hardware.clone();
         if !state.is_object() {
             state = json!({"shared":true,"fresh":false,"local_polls":null});
@@ -843,12 +853,12 @@ impl Controller {
     ) -> Result<Value, String> {
         let _operation = self
             .operation
-            .try_lock()
-            .map_err(|_| "Dock worker is busy")?;
+            .try_lock_or_recover()
+            .ok_or("Dock worker is busy")?;
         if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
             return Err("Dock worker admission is closed".into());
         }
-        if self.cache.lock().unwrap().hardware_pending.is_some() {
+        if self.cache.lock_or_recover().hardware_pending.is_some() {
             return Err("Hardware exchange is waiting for a reply".into());
         }
         self.rpc_inner(Op::Hardware { snapshot })
@@ -859,12 +869,12 @@ impl Controller {
     ) -> Result<Value, String> {
         let _operation = self
             .operation
-            .try_lock()
-            .map_err(|_| "Dock worker is busy")?;
+            .try_lock_or_recover()
+            .ok_or("Dock worker is busy")?;
         if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
             return Err("Dock worker admission is closed".into());
         }
-        if self.cache.lock().unwrap().hardware_pending.is_some() {
+        if self.cache.lock_or_recover().hardware_pending.is_some() {
             return Err("Shared reading exchange is waiting for a reply".into());
         }
         self.rpc_inner(Op::Usage { batch })
@@ -874,7 +884,7 @@ impl Controller {
             return true;
         }
         let cache_busy = {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.lock_or_recover();
             c.busy
                 || c.alive
                     && (c.retiring
@@ -884,22 +894,22 @@ impl Controller {
         if self.inflight.load(Ordering::SeqCst) > 0 || cache_busy {
             return true;
         }
-        let mut slot = self.session.lock().unwrap();
+        let mut slot = self.session.lock_or_recover();
         slot.as_mut().is_some_and(|s| {
-            !s.pending.lock().unwrap().is_empty()
+            !s.pending.lock_or_recover().is_empty()
                 || !s.alive.load(Ordering::SeqCst) && !matches!(s.child.try_wait(), Ok(Some(_)))
         })
     }
     pub fn previews(&self, faces: Vec<Face>, clock: String) -> Result<Value, String> {
         self.ensure_started()?;
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation.lock_or_recover();
         if self.stopped.load(Ordering::SeqCst) || self.quiesced.load(Ordering::SeqCst) {
             return Err("Dock worker admission is closed".into());
         }
-        let generation = self.cache.lock().unwrap().generation;
+        let generation = self.cache.lock_or_recover().generation;
         let frames = self.rpc_inner(Op::Previews { faces, clock })?;
         {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.lock_or_recover();
             if !c.alive || c.uncertain || c.generation != generation {
                 return Err("Dock preview belongs to a disconnected worker".into());
             }
@@ -916,12 +926,12 @@ impl Controller {
     }
     pub fn prepare_exit(&self) -> Result<(), String> {
         let mut barrier = CrossBarrier::close(self.cross.state.clone())?;
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation.lock_or_recover();
         // A cached busy flag can describe a render which has already finished.
         // The child owns admission; only uncertain transport state is a host
         // refusal before asking it to establish the authoritative barrier.
         {
-            let c = self.cache.lock().unwrap();
+            let c = self.cache.lock_or_recover();
             if c.uncertain
                 || c.retiring
                 || c.alive && c.last_status.elapsed() > Duration::from_secs(3)
@@ -930,15 +940,15 @@ impl Controller {
             }
         }
         {
-            let mut session = self.session.lock().unwrap();
+            let mut session = self.session.lock_or_recover();
             if session.as_mut().is_some_and(|s| {
-                !s.pending.lock().unwrap().is_empty()
+                !s.pending.lock_or_recover().is_empty()
                     || !s.alive.load(Ordering::SeqCst) && !matches!(s.child.try_wait(), Ok(Some(_)))
             }) {
                 return Err("Dock worker is recovering; try again when idle".into());
             }
         }
-        if self.cache.lock().unwrap().alive {
+        if self.cache.lock_or_recover().alive {
             self.rpc_inner(Op::Quiesce {})?;
         } else if self.enabled.load(Ordering::SeqCst) {
             return Err("Dock worker is recovering; try again when idle".into());
@@ -948,28 +958,28 @@ impl Controller {
         Ok(())
     }
     pub fn cancel_exit(&self) {
-        self.cross.state.lock().unwrap().closed = false;
-        let _operation = self.operation.lock().unwrap();
-        if self.cache.lock().unwrap().alive {
+        self.cross.state.lock_or_recover().closed = false;
+        let _operation = self.operation.lock_or_recover();
+        if self.cache.lock_or_recover().alive {
             let _ = self.rpc_inner(Op::Resume {});
         }
         self.quiesced.store(false, Ordering::SeqCst);
     }
     pub fn shutdown(&self) {
-        self.cross.state.lock().unwrap().closed = true;
-        let _operation = self.operation.lock().unwrap();
+        self.cross.state.lock_or_recover().closed = true;
+        let _operation = self.operation.lock_or_recover();
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
         self.enabled.store(false, Ordering::SeqCst);
-        if self.cache.lock().unwrap().alive {
+        if self.cache.lock_or_recover().alive {
             let _ = self.rpc_inner(Op::Shutdown {});
         }
-        if let Some(mut s) = self.session.lock().unwrap().take() {
+        if let Some(mut s) = self.session.lock_or_recover().take() {
             drop(s.input);
             let _ = s.child.wait();
         }
-        let mut c = self.cache.lock().unwrap();
+        let mut c = self.cache.lock_or_recover();
         c.alive = false;
         c.busy = false;
         c.pid = None;
@@ -1025,21 +1035,21 @@ pub fn worker_main() -> Result<(), String> {
         let action_id = action_ids.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         {
-            let mut pending = waiters.lock().unwrap();
+            let mut pending = waiters.lock_or_recover();
             if !callback_alive.load(Ordering::SeqCst) {
                 return Err("Cooler host disconnected".into());
             }
             pending.insert(action_id, tx);
         }
         if let Err(error) = write_frame(
-            &mut *callback_output.lock().unwrap(),
+            &mut *callback_output.lock_or_recover(),
             &Message::CoolerAction {
                 version: VERSION,
                 action_id,
                 action,
             },
         ) {
-            waiters.lock().unwrap().remove(&action_id);
+            waiters.lock_or_recover().remove(&action_id);
             return Err(error);
         }
         let result = rx
@@ -1047,7 +1057,7 @@ pub fn worker_main() -> Result<(), String> {
             .unwrap_or_else(|_| {
                 Err("Cooler action outcome is uncertain; it was not replayed".into())
             });
-        waiters.lock().unwrap().remove(&action_id);
+        waiters.lock_or_recover().remove(&action_id);
         result
     }));
     let controller = Arc::new(dock_service::Controller::new(
@@ -1056,7 +1066,7 @@ pub fn worker_main() -> Result<(), String> {
         fake,
     ));
     write_frame(
-        &mut *output.lock().unwrap(),
+        &mut *output.lock_or_recover(),
         &Message::Reply {
             version: VERSION,
             id: first.id,
@@ -1073,7 +1083,7 @@ pub fn worker_main() -> Result<(), String> {
     let reporter = std::thread::spawn(move || {
         while !s.load(Ordering::SeqCst) {
             if write_frame(
-                &mut *o.lock().unwrap(),
+                &mut *o.lock_or_recover(),
                 &Message::Status {
                     version: VERSION,
                     status: c.status(),
@@ -1106,7 +1116,7 @@ pub fn worker_main() -> Result<(), String> {
                 break;
             }
             if let Op::ActionResult { action_id, result } = request.request {
-                if let Some(waiter) = action_waiters.lock().unwrap().remove(&action_id) {
+                if let Some(waiter) = action_waiters.lock_or_recover().remove(&action_id) {
                     let _ = waiter.send(result);
                 }
                 continue;
@@ -1117,7 +1127,7 @@ pub fn worker_main() -> Result<(), String> {
         }
         live.store(false, Ordering::SeqCst);
         callback_live.store(false, Ordering::SeqCst);
-        for (_, waiter) in action_waiters.lock().unwrap().drain() {
+        for (_, waiter) in action_waiters.lock_or_recover().drain() {
             let _ = waiter.send(Err(
                 "Cooler host disconnected; action was not replayed".into()
             ));
@@ -1131,7 +1141,7 @@ pub fn worker_main() -> Result<(), String> {
         let shutting = matches!(request.request, Op::Shutdown {});
         let result = dispatch(request.request, &controller, &profiles, &resources);
         if write_frame(
-            &mut *output.lock().unwrap(),
+            &mut *output.lock_or_recover(),
             &Message::Reply {
                 version: VERSION,
                 id: request.id,
@@ -1326,6 +1336,42 @@ mod tests {
             2,
             "a fresh request executes once after delivery congestion"
         );
+    }
+    #[test]
+    fn a_crashing_cross_device_action_fails_alone_and_releases_admission() {
+        let cross = CrossActions::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        cross.state.lock().unwrap().handler = Some(Arc::new(move |_| {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("cooler routing crashed");
+            }
+            Ok(())
+        }));
+        let (input, output) = mpsc::sync_channel(4);
+        let input = Arc::new(input);
+        cross
+            .admit(super::super::actions::CoolerAction::ThemeNext {}, 1, input.clone())
+            .unwrap();
+        match output.recv_timeout(Duration::from_secs(3)).unwrap().request {
+            Op::ActionResult { action_id: 1, result: Err(error) } => {
+                assert!(error.contains("uncertain"), "{error}")
+            }
+            _ => panic!("expected a failed result for the crashed action"),
+        }
+        let started = Instant::now();
+        while cross.state.lock_or_recover().pending > 0 {
+            assert!(started.elapsed() < Duration::from_secs(3), "admission is released");
+            std::thread::yield_now();
+        }
+        // The executor thread is still alive and runs the next action.
+        cross
+            .admit(super::super::actions::CoolerAction::ThemeNext {}, 2, input)
+            .unwrap();
+        assert!(matches!(
+            output.recv_timeout(Duration::from_secs(3)).unwrap().request,
+            Op::ActionResult { action_id: 2, result: Ok(()) }
+        ));
     }
     #[test]
     fn cross_action_ids_never_replay_or_complete_a_new_request() {
