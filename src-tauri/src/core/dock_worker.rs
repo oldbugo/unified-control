@@ -1,6 +1,7 @@
 //! Supervised dock process. Anonymous inherited pipes carry bounded typed JSON.
 //! The host owns durable profiles; this process owns transport, renders and actions.
 use super::{
+    frame::{self, FrameError},
     dock_service::{self, DockHooks, DockStatus, DockTimings},
     profiles::{Face, ProfileState, ProfileStore},
     runtime_resources::RuntimeResources,
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
@@ -21,7 +22,7 @@ use std::{
 
 const VERSION: u32 = 1;
 const MAX_FRAME: usize = 64 * 1024 * 1024;
-type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>>;
+type Pending = frame::Pending<String>;
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Op {
@@ -103,29 +104,17 @@ enum Message {
     },
 }
 fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, String> {
-    let mut bytes = Vec::new();
-    let n = reader
-        .take((MAX_FRAME + 1) as u64)
-        .read_until(b'\n', &mut bytes)
-        .map_err(|_| "Dock worker pipe read failed")?;
-    if n == 0 {
-        return Ok(None);
-    }
-    if bytes.len() > MAX_FRAME || bytes.last() != Some(&b'\n') {
-        return Err("Dock worker frame exceeds limit or is incomplete".into());
-    }
-    Ok(Some(bytes))
+    frame::read_frame(reader, MAX_FRAME).map_err(|error| match error {
+        FrameError::Io => "Dock worker pipe read failed".to_string(),
+        FrameError::Limit => "Dock worker frame exceeds limit or is incomplete".to_string(),
+    })
 }
 fn write_frame(writer: &mut impl Write, value: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec(value).map_err(|_| "Dock worker frame encoding failed")?;
-    if bytes.len() >= MAX_FRAME {
-        return Err("Dock worker frame exceeds limit".into());
-    }
-    writer
-        .write_all(&bytes)
-        .and_then(|_| writer.write_all(b"\n"))
-        .and_then(|_| writer.flush())
-        .map_err(|_| "Dock worker pipe write failed".into())
+    frame::write_frame(writer, &bytes, MAX_FRAME).map_err(|error| match error {
+        FrameError::Io => "Dock worker pipe write failed".to_string(),
+        FrameError::Limit => "Dock worker frame exceeds limit".to_string(),
+    })
 }
 fn unavailable(enabled: bool, fake: bool) -> DockStatus {
     DockStatus {
@@ -433,7 +422,7 @@ impl Controller {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(crate::core::process::CREATE_NO_WINDOW);
         }
         let mut child = command.spawn().map_err(|_| "Dock worker could not start")?;
         let mut input = child.stdin.take().ok_or("Dock worker input unavailable")?;

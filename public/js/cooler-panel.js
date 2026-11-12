@@ -43,20 +43,44 @@ export function coolerSummary(state,{native=true,readError=false,now=Date.now()}
   if(state?.enabled!==true)return {status:'Status unknown',description:'Waiting for cooler engine status. The screen connection is unknown.'};
   const worker=Object.hasOwn(WORKER_STATES,state.state)?WORKER_STATES[state.state]:null;
   if(worker)return {status:worker[0],description:worker[1]};
-  if(!['running','ready','connected'].includes(state.state))return {status:'Status unknown',description:'Cooler engine status is unavailable. The screen connection is unknown.'};
+  if(!['running','ready','connected'].includes(state.state))return {
+    status:'Status unknown',description:'Cooler engine status is unavailable. The screen connection is unknown.'
+  };
   const status='Engine running',health=state.health;
   if(state.diagnosticsEnabled===false)return {status,description:'Connection diagnostics are off. The screen connection is unknown.'};
-  if(!health||health.code==='waiting_sample'||health.code==='diagnostics_off')return {status,description:'Waiting for a connection check. The screen connection is unknown.'};
+  if(!health||health.code==='waiting_sample'||health.code==='diagnostics_off')return {
+    status,description:'Waiting for a connection check. The screen connection is unknown.'
+  };
   const check=Object.hasOwn(CHECKS,health.code)?CHECKS[health.code]:null;
   if(!check||!check.states.includes(health.state))return {status,description:'The latest connection check is unavailable. The screen connection is unknown.'};
-  if(!recent(health.lastSampleAt,now,HEALTH_MAX_AGE))return {status,description:'The last connection check is missing or out of date. The screen connection is unknown.'};
+  if(!recent(health.lastSampleAt,now,HEALTH_MAX_AGE))return {
+    status,description:'The last connection check is missing or out of date. The screen connection is unknown.'
+  };
   const fromPnp=health.code==='descriptor_failure'&&health.pnp?.available===true&&health.pnp.normalNodes===0&&health.pnp.exactMatchedDescriptorCount>0;
-  if(fromPnp&&!recent(health.pnpSampledAt,now,PNP_MAX_AGE))return {status,description:'The USB information used by the last connection check is missing or out of date. The screen connection is unknown.'};
+  if(fromPnp&&!recent(health.pnpSampledAt,now,PNP_MAX_AGE))return {
+    status,description:'The USB information used by the last connection check is missing or out of date. The screen connection is unknown.'
+  };
   return {status,description:`Last connection check: ${check.text}`};
 }
 export class CoolerPanel{
   constructor(invoke,native,onState=()=>{}){
-    this.invoke=invoke;this.native=native;this.onState=onState;this.readError=false;this.hasState=false;this.state={enabled:native?null:false,state:native?'unknown':'disabled',diagnosticsEnabled:true};this.frame=null;this.container=null;this.polling=false;this.configuring=false;this.epoch=0;this.pendingLeave=new Map();this.nextLeave=0;this.diagnosticsWrite=Promise.resolve();this.diagnosticsSaving=false;
+    this.invoke=invoke;
+    this.native=native;
+    this.onState=onState;
+    this.readError=false;
+    this.hasState=false;
+    this.state={
+      enabled:native?null:false,state:native?'unknown':'disabled',diagnosticsEnabled:true
+    };
+    this.frame=null;
+    this.container=null;
+    this.polling=false;
+    this.configuring=false;
+    this.epoch=0;
+    this.pendingLeave=new Map();
+    this.nextLeave=0;
+    this.diagnosticsWrite=Promise.resolve();
+    this.diagnosticsSaving=false;
     window.addEventListener('message',e=>this.receive(e));
     this.timer=setInterval(()=>this.refresh(),1500);
   }
@@ -68,29 +92,114 @@ export class CoolerPanel{
     this.settingsContainer=container;if(!container)return;
     const summary=this.summary();
     container.innerHTML=`<div class="device-setting"><span class="device-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span><div class="device-setting-copy"><strong>Cooler screen</strong><span class="hint">Lovingcool SC70</span><p id="cooler-message">${escape(summary.description)}</p></div><div class="device-setting-control"><span id="cooler-state" class="chip">${escape(summary.status)}</span><label class="dock-switch"><span class="sr-only">Enable cooler screen</span><input id="cooler-enabled" type="checkbox" role="switch" aria-label="Enable cooler screen" ${this.state.enabled?'checked':''} ${this.native?'':'disabled'}></label></div></div><details class="device-advanced"><summary>Cooler connection and diagnostics</summary><p class="hint">Close the separate CoolerScreen app before enabling this device. Live continues when you switch pages or close UC to the tray.</p><div class="dock-controls"><label class="dock-switch">Connection diagnostics <input id="cooler-diagnostics" type="checkbox" ${this.state.diagnosticsEnabled!==false?'checked':''} ${this.native?'':'disabled'}></label><button id="cooler-reset" class="btn" ${this.native?'':'disabled'}>Reconnect cooler USB</button></div><p class="hint" id="cooler-health" role="status"></p></details>`;
-    const migration=document.createElement('div');migration.className='cooler-migration';migration.innerHTML='<div><strong>Cooler data migration</strong><p id="cooler-migration-status" class="hint" role="status"></p></div><button id="cooler-migration-verify" class="btn">Verify imported data</button>';container.querySelector('details').before(migration);
+    const migration=document.createElement('div');
+    migration.className='cooler-migration';
+    migration.innerHTML='<div><strong>Cooler data migration</strong><p id="cooler-migration-status" class="hint" role="status"></p></div><button id="cooler-migration-verify" class="btn">Verify imported data</button>';
+    container.querySelector('details').before(migration);
     migration.querySelector('button').addEventListener('click',()=>this.verifyMigration());
     container.querySelector('#cooler-enabled').addEventListener('change',e=>this.configure(e.target.checked));
     container.querySelector('#cooler-diagnostics').addEventListener('change',e=>this.setDiagnostics(e.target.checked));
     container.querySelector('#cooler-reset').addEventListener('click',()=>this.reset());this.paint();
   }
   active(container){return this.container===container&&!!container.querySelector('#cooler-content');}
-  async refresh(){if(!this.native||this.polling||this.configuring||this.diagnosticsSaving)return;this.polling=true;const epoch=this.epoch;try{const state=await this.invoke('cooler_state');if(epoch===this.epoch)this.acceptState(state);}catch{if(epoch===this.epoch){this.readError=true;this.hasState=true;this.paint();this.onState();}}finally{this.polling=false;}}
-  async verifyMigration(){if(this.migrationStarting||!this.native)return;this.migrationStarting=true;this.migrationError='';this.paint();try{await this.invoke('cooler_migration_verify');await this.refresh();}catch{this.migrationError='Verification could not start. Existing files were kept.';}finally{this.migrationStarting=false;this.paint();}}
-  setDiagnostics(enabled){this.resetNote='';this.epoch++;this.diagnosticsSaving=true;this.paint();this.diagnosticsWrite=this.diagnosticsWrite.catch(()=>{}).then(async()=>{try{const result=await this.invoke('settings_update',{patch:{coolerDiagnostics:enabled}});this.acceptState(result.cooler||this.state);}catch(error){this.resetNote='The diagnostics setting could not be saved.';}finally{this.diagnosticsSaving=false;this.paint();}});return this.diagnosticsWrite;}
-  async reset(){if(this.configuring||!this.native)return;this.configuring=true;this.epoch++;this.paint();const note=this.settingsContainer?.querySelector('#cooler-health');try{await this.prepareLeave();if(note)note.textContent='Waiting for Windows approval to reset only the cooler USB port.';const job=await this.invoke('cooler_call',{command:'device_reconnect',args:{}});const deadline=Date.now()+120000;for(;;){const value=await this.invoke('cooler_call',{command:'job_get',args:{jobId:job.jobId}});if(value.status==='done'){this.resetNote='The cooler answered after the USB reset. Check the physical display.';if(note)note.textContent=this.resetNote;break;}if(['error','cancelled'].includes(value.status))throw new Error(value.error||'The cooler reset did not complete.');if(Date.now()>=deadline)throw new Error('The cooler recovery is still running. Check its progress before retrying.');await new Promise(resolve=>setTimeout(resolve,500));}}catch(error){this.resetNote=error?.message||error?.error||'The cooler USB reset could not finish.';if(note)note.textContent=this.resetNote;}finally{this.configuring=false;this.paint();}}
-  async configure(enabled){if(this.configuring)return false;this.configuring=true;this.configureIntent=enabled;this.epoch++;this.resetNote='';this.paint();try{if(!enabled)await this.prepareLeave();this.acceptState(await this.invoke('cooler_configure',{enabled}));return true;}catch(error){this.resetNote='The cooler setting could not be changed. Any active work is preserved.';return false;}finally{this.configuring=false;delete this.configureIntent;this.paint();this.onState();}}
+  async refresh(){
+    if(!this.native||this.polling||this.configuring||this.diagnosticsSaving)return;
+    this.polling=true;
+    const epoch=this.epoch;
+    try{
+      const state=await this.invoke('cooler_state');
+      if(epoch===this.epoch)this.acceptState(state);
+    }catch{
+      if(epoch===this.epoch){this.readError=true;this.hasState=true;this.paint();this.onState();}
+    }finally{this.polling=false;}
+  }
+  async verifyMigration(){
+    if(this.migrationStarting||!this.native)return;
+    this.migrationStarting=true;
+    this.migrationError='';
+    this.paint();
+    try{await this.invoke('cooler_migration_verify');await this.refresh();}catch{
+      this.migrationError='Verification could not start. Existing files were kept.';
+    }finally{this.migrationStarting=false;this.paint();}
+  }
+  setDiagnostics(enabled){
+    this.resetNote='';
+    this.epoch++;
+    this.diagnosticsSaving=true;
+    this.paint();
+    this.diagnosticsWrite=this.diagnosticsWrite.catch(()=>{}).then(async()=>{
+      try{
+        const result=await this.invoke('settings_update',{patch:{coolerDiagnostics:enabled}});this.acceptState(result.cooler||this.state);
+      }catch(error){this.resetNote='The diagnostics setting could not be saved.';}finally{this.diagnosticsSaving=false;this.paint();}
+    });
+    return this.diagnosticsWrite;
+  }
+  async reset(){
+    if(this.configuring||!this.native)return;
+    this.configuring=true;
+    this.epoch++;
+    this.paint();
+    const note=this.settingsContainer?.querySelector('#cooler-health');
+    try{
+      await this.prepareLeave();
+      if(note)note.textContent='Waiting for Windows approval to reset only the cooler USB port.';
+      const job=await this.invoke('cooler_call',{command:'device_reconnect',args:{}});
+      const deadline=Date.now()+120000;
+      for(;;){
+        const value=await this.invoke('cooler_call',{command:'job_get',args:{jobId:job.jobId}});
+        if(value.status==='done'){
+          this.resetNote='The cooler answered after the USB reset. Check the physical display.';
+          if(note)note.textContent=this.resetNote;
+          break;
+        }if(['error','cancelled'].includes(value.status))throw new Error(value.error||'The cooler reset did not complete.');
+        if(Date.now()>=deadline)throw new Error('The cooler recovery is still running. Check its progress before retrying.');
+        await new Promise(resolve=>setTimeout(resolve,500));
+      }
+    }catch(error){
+      this.resetNote=error?.message||error?.error||'The cooler USB reset could not finish.';
+      if(note)note.textContent=this.resetNote;
+    }finally{this.configuring=false;this.paint();}
+  }
+  async configure(enabled){
+    if(this.configuring)return false;
+    this.configuring=true;
+    this.configureIntent=enabled;
+    this.epoch++;
+    this.resetNote='';
+    this.paint();
+    try{
+      if(!enabled)await this.prepareLeave();
+      this.acceptState(await this.invoke('cooler_configure',{enabled}));
+      return true;
+    }catch(error){
+      this.resetNote='The cooler setting could not be changed. Any active work is preserved.';
+      return false;
+    }finally{
+      this.configuring=false;
+      delete this.configureIntent;
+      this.paint();
+      this.onState();
+    }
+  }
   paint(){
     const settings=this.settingsContainer?.isConnected?this.settingsContainer:null;
     const message=settings?.querySelector('#cooler-message'),status=settings?.querySelector('#cooler-state'),control=settings?.querySelector('#cooler-enabled');
-    const summary=this.summary();if(message)message.textContent=summary.description;if(status)status.textContent=summary.status;if(control){control.checked=typeof this.configureIntent==='boolean'?this.configureIntent:!!this.state.enabled;control.disabled=!this.native||this.configuring;}
+    const summary=this.summary();
+    if(message)message.textContent=summary.description;
+    if(status)status.textContent=summary.status;
+    if(control){
+      control.checked=typeof this.configureIntent==='boolean'?this.configureIntent:!!this.state.enabled;
+      control.disabled=!this.native||this.configuring;
+    }
     const diagnostics=settings?.querySelector('#cooler-diagnostics'),health=settings?.querySelector('#cooler-health'),reset=settings?.querySelector('#cooler-reset');
     if(diagnostics){diagnostics.checked=this.state.diagnosticsEnabled!==false;diagnostics.disabled=!this.native||this.diagnosticsSaving;}
     if(health&&!this.configuring)health.textContent=this.resetNote||summary.description;
     if(reset)reset.disabled=!this.native||!this.state.enabled||this.state.state!=='running'||!!this.state.busy||this.configuring;
     const audit=this.state.migration,verification=settings?.querySelector('#cooler-migration-status'),verify=settings?.querySelector('#cooler-migration-verify');
     if(verification){
-      const messages={not_checked:'The imported data has not been verified yet.',checking:'Checking the imported files. Your screen keeps running.',attention:'The migration needs review. Existing files were kept.',not_required:'This is a new setup; no previous library was imported.'};
+      const messages={
+        not_checked:'The imported data has not been verified yet.',checking:'Checking the imported files. Your screen keeps running.',attention:'The migration needs review. Existing files were kept.',not_required:'This is a new setup; no previous library was imported.'
+      };
       const count=value=>Number.isSafeInteger(value)&&value>=0?value:0;
       verification.textContent=this.migrationError||(audit?.state==='complete'&&audit.verified===true?`Last verification${audit.checkedAt ? ` (${new Date(audit.checkedAt).toLocaleString()})` : ""}: ${count(audit.library?.originals)} originals, ${count(audit.library?.themes)} themes and ${count(audit.gallery?.targetFiles)} gallery files. Original data kept; UC edits preserved.`:messages[audit?.state]||messages.not_checked);
     }
@@ -98,8 +207,19 @@ export class CoolerPanel{
     if(!this.container?.isConnected||!this.container.querySelector('#cooler-content'))return;
     const content=this.container.querySelector('#cooler-content');
     const ready=this.state.enabled&&['running','ready','connected'].includes(this.state.state);
-    if(ready&&!this.frame){this.frameReady=false;this.frame=document.createElement('iframe');this.frame.id='cooler-frame';this.frame.title='CoolerScreen controls';this.frame.src='cooler/index.html';this.frame.style.cssText='display:block;width:100%;height:100%;border:0;background:var(--bg)';content.replaceChildren(this.frame);}
-    else if(!ready&&(!this.frame||!this.state.enabled)){this.frame=null;content.innerHTML=`<section class="empty-state"><h2>${this.native?'CoolerScreen controls':'CoolerScreen integration'}</h2><p>${this.native?'Enable the cooler to open its themes, library and live controls here.':'The integrated controls are available in the Windows app.'}</p></section>`;}
+    if(ready&&!this.frame){
+      this.frameReady=false;
+      this.frame=document.createElement('iframe');
+      this.frame.id='cooler-frame';
+      this.frame.title='CoolerScreen controls';
+      this.frame.src='cooler/index.html';
+      this.frame.style.cssText='display:block;width:100%;height:100%;border:0;background:var(--bg)';
+      content.replaceChildren(this.frame);
+    }
+    else if(!ready&&(!this.frame||!this.state.enabled)){
+      this.frame=null;
+      content.innerHTML=`<section class="empty-state"><h2>${this.native?'CoolerScreen controls':'CoolerScreen integration'}</h2><p>${this.native?'Enable the cooler to open its themes, library and live controls here.':'The integrated controls are available in the Windows app.'}</p></section>`;
+    }
   }
   send(message){this.frame?.contentWindow?.postMessage({channel:'uc-cooler-v1',...message},location.origin);}
   event(data){if(data&&EVENTS.has(data.event))this.send({type:'event',event:data.event,payload:data.payload});}
@@ -107,13 +227,40 @@ export class CoolerPanel{
     if(e.origin!==location.origin||e.source!==this.frame?.contentWindow||e.data?.channel!=='uc-cooler-v1')return;
     const m=e.data;
     if(m.type==='bridge-ready'){this.frameReady=true;return;}
-    if(m.type==='leave-ready'){const p=this.pendingLeave.get(m.id);if(p){this.pendingLeave.delete(m.id);clearTimeout(p.timer);m.error?p.reject(new Error(m.error)):p.resolve();}return;}
+    if(m.type==='leave-ready'){
+      const p=this.pendingLeave.get(m.id);
+      if(p){
+        this.pendingLeave.delete(m.id);
+        clearTimeout(p.timer);
+        m.error?p.reject(new Error(m.error)):p.resolve();
+      }return;
+    }
     if(m.type!=='call'||!Number.isSafeInteger(m.id)||m.id<1)return;
-    if(!COOLER_COMMANDS.has(m.command)||!m.args||Array.isArray(m.args)||typeof m.args!=='object'){this.send({type:'result',id:m.id,error:'Unsupported cooler command.'});return;}
+    if(!COOLER_COMMANDS.has(m.command)||!m.args||Array.isArray(m.args)||typeof m.args!=='object'){
+      this.send({type:'result',id:m.id,error:'Unsupported cooler command.'});
+      return;
+    }
     const source=e.source;
-    try{const result=await this.invoke('cooler_call',{command:m.command,args:m.args});if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,result});}
-    catch(error){if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,error:typeof error==='string'?{error}:error&&typeof error==='object'?{error:error.error||error.message||'CoolerScreen request failed.',code:error.code,status:error.status,failedUsb:!!error.failedUsb}:{error:'CoolerScreen request failed.'}});}
+    try{
+      const result=await this.invoke('cooler_call',{command:m.command,args:m.args});
+      if(source===this.frame?.contentWindow)this.send({type:'result',id:m.id,result});
+    }
+    catch(error){
+      if(source===this.frame?.contentWindow)this.send({
+        type:'result',id:m.id,error:typeof error==='string'?{error}:error&&typeof error==='object'?{
+          error:error.error||error.message||'CoolerScreen request failed.',code:error.code,status:error.status,failedUsb:!!error.failedUsb
+        }:{error:'CoolerScreen request failed.'}
+      });
+    }
   }
-  async prepareLeave({navigation=false}={}){await this.diagnosticsWrite;if(!this.frame||!this.frameReady)return;return new Promise((resolve,reject)=>{const id=++this.nextLeave;const timer=setTimeout(()=>{this.pendingLeave.delete(id);reject(new Error('Cooler edits have not finished saving. Keep this page open and retry.'));},120000);this.pendingLeave.set(id,{resolve,reject,timer});this.send({type:'prepare-leave',id,navigation});});}
+  async prepareLeave({navigation=false}={}){
+    await this.diagnosticsWrite;
+    if(!this.frame||!this.frameReady)return;
+    return new Promise((resolve,reject)=>{
+      const id=++this.nextLeave;const timer=setTimeout(()=>{
+        this.pendingLeave.delete(id);reject(new Error('Cooler edits have not finished saving. Keep this page open and retry.'));
+      },120000);this.pendingLeave.set(id,{resolve,reject,timer});this.send({type:'prepare-leave',id,navigation});
+    });
+  }
   unmount(){this.frame=null;this.frameReady=false;this.container=null;}
 }

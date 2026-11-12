@@ -1,11 +1,14 @@
 //! UC-owned music/weather source process. The process has no device engine,
 //! window, account reader or arbitrary-command endpoint. Only leased demand and
 //! bounded typed observations cross its inherited private pipes.
-use super::cooler::Cooler;
+use super::{
+    cooler::Cooler,
+    frame::{self, FrameError},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
@@ -359,18 +362,10 @@ struct TestArgs {
 }
 
 fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, String> {
-    let mut bytes = Vec::new();
-    let n = reader
-        .take((MAX_FRAME + 1) as u64)
-        .read_until(b'\n', &mut bytes)
-        .map_err(|_| "source_pipe_read")?;
-    if n == 0 {
-        return Ok(None);
-    }
-    if n > MAX_FRAME || bytes.last() != Some(&b'\n') {
-        return Err("source_frame_limit".into());
-    }
-    Ok(Some(bytes))
+    frame::read_frame(reader, MAX_FRAME).map_err(|error| match error {
+        FrameError::Io => "source_pipe_read".to_string(),
+        FrameError::Limit => "source_frame_limit".to_string(),
+    })
 }
 struct Session {
     child: Child,
@@ -409,7 +404,7 @@ impl Session {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(crate::core::process::CREATE_NO_WINDOW);
         }
         let mut child = command.spawn().map_err(|_| "source_start_failed")?;
         if cfg!(windows) && !super::jobobject::adopt(&child) {

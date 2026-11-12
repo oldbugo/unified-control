@@ -772,7 +772,7 @@ fn monitor_helper(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
+        .creation_flags(crate::core::process::CREATE_NO_WINDOW)
         .output()
         .map_err(|_| "Monitor Toggle helper could not be started")?;
     if !output.status.success() {

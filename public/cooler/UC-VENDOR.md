@@ -23,3 +23,8 @@ editor view does not disable the saved Live stream; the worker owns its lifetime
 UC0.4.1 checks a fresh worker Live snapshot after UI hydration and skips the automatic firmware check when Live or a
 physical preview owns the connection. Recreating the editor does not pause/reconnect an already-running stream.
 The initialized promise is exported for deterministic fixture readiness; explicit hardware controls remain unchanged.
+
+Checked 2026-11-13 against CoolerScreen `main` (f064123): upstream `public/` changed since
+b68d2e8 only by the screen-brightness line in `app.js` and `<p id="scrBrightness">` in
+`index.html`; this copy already contains both (added by UC in 7c3ee6d). Nothing was copied
+from upstream; the pin above is unchanged.
