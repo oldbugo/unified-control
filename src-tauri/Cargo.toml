@@ -34,5 +34,6 @@ windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInst
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+# Unwind (not abort): a panic in one job or thread is recovered (src/core/sync.rs) instead of ending the app.
+panic = "unwind"
 strip = true

@@ -11,6 +11,7 @@ mod quit_cmd;
 mod relaunch;
 mod window;
 
+use uc_core::core::sync::MutexExt;
 use std::sync::Arc;
 use tauri::{Manager, RunEvent};
 use uc_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
@@ -21,12 +22,17 @@ fn main() {
     // The supervised child has no window, tray, MCP server or durable profile
     // writer. Dispatch before every GUI/single-instance path.
     if args.iter().any(|a| a == "--dock-worker") {
+        // Crashes leave a line in the worker's device.log; an unguarded one ends the worker so the host restarts it.
+        uc_core::core::sync::install_panic_hook("dock worker");
+        uc_core::core::sync::exit_on_unguarded_panic();
         std::process::exit(if uc_core::core::dock_worker::worker_main().is_ok() {
             0
         } else {
             1
         });
     }
+    // Every panic leaves a bounded line in device.log; recovered ones keep the app running (src/core/sync.rs).
+    uc_core::core::sync::install_panic_hook("app");
     // MCP's request-only bridge must never create or focus an application.
     if args.iter().any(|a| a == "--agent-request") {
         std::process::exit(agent_transport::run_request());
@@ -234,7 +240,7 @@ fn main() {
         RunEvent::Exit => {
             live_app::arm_exit_watchdog("exit");
             if let Some(server) = app.try_state::<std::sync::Mutex<Option<agent_transport::Server>>>() {
-                if let Some(mut server) = server.lock().unwrap().take() { server.shutdown(); }
+                if let Some(mut server) = server.lock_or_recover().take() { server.shutdown(); }
             }
             app.state::<Core>().0.shutdown();
             uc_core::device::log("exit");
