@@ -7,6 +7,7 @@
 //! button: it answers HTMAXBUTTON (triggering the flyout) and forwards its mouse state to the page as
 //! `cs-snap` events, so the HTML button can still draw hover / pressed / click.
 //! Size, position and maximised state are remembered in %APPDATA%\UnifiedControl\window.json (`rect`).
+use uc_core::core::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,7 +120,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             let _ = win.maximize(); // un-maximising returns to the rectangle above
         }
     }
-    *CURRENT.lock().unwrap() = saved;
+    *CURRENT.lock_or_recover() = saved;
     let w2 = win.clone();
     win.on_window_event(move |e| match e {
         WindowEvent::Resized(_) => {

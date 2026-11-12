@@ -1,4 +1,5 @@
 //! App-owned normalized pictures. Profiles contain opaque IDs, never file paths.
+use super::sync::MutexExt;
 use super::key_render::{PictureAsset, MAX_PICTURE_BYTES};
 use std::{
     collections::HashMap,
@@ -35,7 +36,7 @@ impl AssetStore {
         Ok(self.directory.join(format!("{id}.png")))
     }
     pub fn import(&self, bytes: &[u8]) -> Result<String, String> {
-        let _guard = self.importing.lock().unwrap();
+        let _guard = self.importing.lock_or_recover();
         let image = Arc::new(PictureAsset::decode(bytes)?);
         std::fs::create_dir_all(&self.directory)
             .map_err(|_| "The picture folder could not be created")?;
@@ -63,7 +64,7 @@ impl AssetStore {
         Ok(id)
     }
     fn remember(&self, id: String, image: Arc<PictureAsset>) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock_or_recover();
         if cache.len() >= 16 {
             cache.clear()
         }
@@ -71,7 +72,7 @@ impl AssetStore {
     }
     pub fn get(&self, id: &str) -> Result<Arc<PictureAsset>, String> {
         let path = self.path(id)?;
-        if let Some(image) = self.cache.lock().unwrap().get(id).cloned() {
+        if let Some(image) = self.cache.lock_or_recover().get(id).cloned() {
             return Ok(image);
         }
         use std::io::Read;

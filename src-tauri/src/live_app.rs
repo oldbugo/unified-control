@@ -5,6 +5,7 @@
 //!
 //! Quiet test instances (`UC_TEST_QUIET=1`) keep the tray logic but do not put an icon in the notification area, so a test
 //! never adds anything to the user's taskbar (`UC_TEST_TRAY_ICON=1` shows it anyway, for a test that needs the real icon).
+use uc_core::core::sync::MutexExt;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -172,7 +173,7 @@ fn build_tray(app: &AppHandle) {
     if tray_icon_hidden() {
         // quiet test run: the same lifecycle, no icon on the user's taskbar
         uc_core::device::log("tray: quiet test run, icon not shown");
-        *TRAY.lock().unwrap() = Some(tray);
+        *TRAY.lock_or_recover() = Some(tray);
         TRAY_ON.store(true, Ordering::SeqCst);
         start_tray_refresh(app);
         return;
@@ -200,7 +201,7 @@ fn build_tray(app: &AppHandle) {
         eprintln!("could not create the tray icon");
         return;
     }
-    *TRAY.lock().unwrap() = Some(tray);
+    *TRAY.lock_or_recover() = Some(tray);
     TRAY_ON.store(true, Ordering::SeqCst);
     start_tray_refresh(app);
 }
@@ -237,7 +238,7 @@ fn start_tray_refresh(app: &AppHandle) {
             if TRAY_DIRTY.swap(false, Ordering::SeqCst) || previous.as_ref() != Some(&next) {
                 let (enabled, label, busy) = next.clone();
                 let _ = app.run_on_main_thread(move || {
-                    if let Some(tray) = TRAY.lock().unwrap().as_ref() {
+                    if let Some(tray) = TRAY.lock_or_recover().as_ref() {
                         let _ = tray.dock_enabled.set_checked(enabled);
                         let _ = tray.dock_enabled.set_enabled(!busy);
                         let _ = tray.profile.set_text(label);
@@ -265,7 +266,7 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
             let app = a.clone();
             std::thread::spawn(move || {
                 // Do not enable a device while an editor flush/exit is pending.
-                if PENDING_EXIT.lock().unwrap().is_none() {
+                if PENDING_EXIT.lock_or_recover().is_none() {
                     let core = app.state::<Core>();
                     let enabled = core.0.settings.load().0["dock"]["enabled"]
                         .as_bool()
@@ -292,7 +293,7 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
 /// The menu labels as they stand (debug test hook).
 #[cfg(debug_assertions)]
 pub fn tray_state() -> String {
-    match TRAY.lock().unwrap().as_ref() {
+    match TRAY.lock_or_recover().as_ref() {
         Some(t) => format!(
             "open_text={:?} dock_enabled={} profile_text={:?} icon_shown={}",
             t.open.text().unwrap_or_default(),
@@ -306,7 +307,7 @@ pub fn tray_state() -> String {
 
 fn remove_tray(app: &AppHandle) {
     let _ = app.remove_tray_by_id(TRAY_ID);
-    *TRAY.lock().unwrap() = None;
+    *TRAY.lock_or_recover() = None;
     TRAY_ON.store(false, Ordering::SeqCst);
 }
 
@@ -320,14 +321,14 @@ fn request_exit(app: &AppHandle, request: crate::quit_cmd::Request, background: 
         uc_core::device::log("quit deferred: an agent layout change is in progress");
         return;
     }
-    *PENDING_EXIT.lock().unwrap() = Some((request, background));
+    *PENDING_EXIT.lock_or_recover() = Some((request, background));
     if EDITOR_READY.load(Ordering::SeqCst) {
         if let Some(window) = app.get_webview_window("main") {
             if tauri::Emitter::emit(&window, "uc:prepare-quit", ()).is_ok() {
                 return;
             }
             // A live editor whose guard cannot be reached must keep its edits.
-            *PENDING_EXIT.lock().unwrap() = None;
+            *PENDING_EXIT.lock_or_recover() = None;
             uc_core::device::log("quit deferred: editor flush guard unavailable");
             return;
         }
@@ -341,9 +342,9 @@ fn request_exit(app: &AppHandle, request: crate::quit_cmd::Request, background: 
 }
 
 fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
-    let _finish = EXIT_FINISH.lock().unwrap();
+    let _finish = EXIT_FINISH.lock_or_recover();
     // A late/unsolicited editor acknowledgement must not stop a live device.
-    if PENDING_EXIT.lock().unwrap().is_none() {
+    if PENDING_EXIT.lock_or_recover().is_none() {
         return Ok(());
     }
     // Refuse before shutdown: a busy scheduler leaves the existing runtime usable.
@@ -353,7 +354,7 @@ fn finish_exit(app: &AppHandle) -> Result<(), CoreError> {
         ));
     }
     app.state::<Core>().0.prepare_cooler_exit()?;
-    let Some((request, background)) = PENDING_EXIT.lock().unwrap().take() else {
+    let Some((request, background)) = PENDING_EXIT.lock_or_recover().take() else {
         app.state::<Core>().0.cancel_cooler_exit();
         return Ok(());
     };
@@ -400,7 +401,7 @@ pub fn editor_session_ready(core: tauri::State<'_, Core>, ready: bool) {
 #[tauri::command]
 pub async fn editor_quit_ready(app: AppHandle, saved: bool) -> Result<(), CoreError> {
     if !saved {
-        *PENDING_EXIT.lock().unwrap() = None;
+        *PENDING_EXIT.lock_or_recover() = None;
         show_main(&app);
         return Ok(());
     }

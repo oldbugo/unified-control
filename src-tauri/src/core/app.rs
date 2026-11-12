@@ -2,6 +2,7 @@
 //! `Events`, `Debounce`, the settings change hook and the scheduler); the library, media, sources, cooler device and live host
 //! are not here. Tauri commands (core/commands.rs) are thin wrappers over `App` methods so everything can be tested without a
 //! window.
+use super::sync::MutexExt;
 use super::error::{CoreError, CoreResult};
 use super::scheduler::{Job, JobSink, Limits, Policy, Scheduler, TaskCtx, TaskSpec};
 use super::settings::SettingsStore;
@@ -125,7 +126,7 @@ impl App {
             base,
             me: Mutex::new(Weak::new()),
         });
-        *app.me.lock().unwrap() = Arc::downgrade(&app);
+        *app.me.lock_or_recover() = Arc::downgrade(&app);
         let ev = events.clone();
         let app_deb = Debounce::new(Duration::from_millis(100), move || ev.app_changed());
         settings.set_on_change(move || app_deb.poke());
@@ -133,7 +134,7 @@ impl App {
     }
 
     pub fn arc(&self) -> Arc<App> {
-        self.me.lock().unwrap().upgrade().expect("App alive")
+        self.me.lock_or_recover().upgrade().expect("App alive")
     }
     /// Called once by the host. It starts disabled unless the user previously
     /// enabled the dock; fake mode never opens native devices or account readers.
@@ -176,7 +177,7 @@ impl App {
         self.dock
             .set(controller.clone())
             .map_err(|_| CoreError::new("Dock is already initialized"))?;
-        let weak = self.me.lock().unwrap().clone();
+        let weak = self.me.lock_or_recover().clone();
         controller.set_cooler_handler(Arc::new(move |action| {
             let app = weak
                 .upgrade()
@@ -225,7 +226,7 @@ impl App {
                     }
                 }
                 Err(_) => {
-                    *self.cooler_migration_report.lock().unwrap() = json!({"state":"attention","verified":false,"code":"migration_setup_failed"});
+                    *self.cooler_migration_report.lock_or_recover() = json!({"state":"attention","verified":false,"code":"migration_setup_failed"});
                 }
             }
         }
@@ -234,8 +235,8 @@ impl App {
     pub fn cooler_state(&self) -> Value {
         let mut state = self.cooler.get().map(|cooler|cooler.status()).unwrap_or_else(||json!({"enabled":false,"state":"disabled","message":"Cooler screen is disabled","busy":false}));
         // Scheduler state only: status never reopens or scans migration files.
-        let current = self.cooler_migration_job.lock().unwrap();
-        let mut cached = self.cooler_migration_report.lock().unwrap();
+        let current = self.cooler_migration_job.lock_or_recover();
+        let mut cached = self.cooler_migration_report.lock_or_recover();
         if cached["state"] == "checking"
             && current.as_ref().is_some_and(|id| {
                 self.sched
@@ -308,7 +309,7 @@ impl App {
     }
 
     fn migration_verified_before(&self) -> bool {
-        let report = self.cooler_migration_report.lock().unwrap();
+        let report = self.cooler_migration_report.lock_or_recover();
         report["reportVersion"] == 1
             && report["migrationVersion"] == 2
             && ((report["state"] == "complete" && report["verified"] == true)
@@ -327,11 +328,11 @@ impl App {
         target: PathBuf,
         gallery: PathBuf,
     ) -> CoreResult<Value> {
-        let _admission = self.cooler_config_lock.lock().unwrap();
+        let _admission = self.cooler_config_lock.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
-        let mut current = self.cooler_migration_job.lock().unwrap();
+        let mut current = self.cooler_migration_job.lock_or_recover();
         if let Some(id) = current.as_ref() {
             if self.sched.job(id).is_some_and(|job| !job.state.finished()) {
                 return Ok(json!({"jobId":id}));
@@ -341,7 +342,7 @@ impl App {
         // Invalidate any previous success before admission. Pending survives
         // cancellation or a failed receipt write, including across restarts.
         super::cooler_migration_audit::begin_receipt(&receipt)?;
-        *self.cooler_migration_report.lock().unwrap() =
+        *self.cooler_migration_report.lock_or_recover() =
             json!({"state":"checking","verified":false});
         let app = self.arc();
         let job = self.sched.submit(
@@ -410,7 +411,7 @@ impl App {
                     report["state"] = json!("attention");
                     report["code"] = json!("receipt_write_failed");
                 }
-                *app.cooler_migration_report.lock().unwrap() = report.clone();
+                *app.cooler_migration_report.lock_or_recover() = report.clone();
                 app.events.app_changed();
                 Ok(report)
             },
@@ -428,7 +429,7 @@ impl App {
                 "A cooler key action is still running; retry when it finishes.",
             ));
         }
-        let _guard = self.cooler_config_lock.lock().unwrap();
+        let _guard = self.cooler_config_lock.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
@@ -473,8 +474,8 @@ impl App {
         }
         let _guard = self
             .cooler_config_lock
-            .try_lock()
-            .map_err(|_| CoreError::coded("busy", "Cooler configuration is busy."))?;
+            .try_lock_or_recover()
+            .ok_or_else(|| CoreError::coded("busy", "Cooler configuration is busy."))?;
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
@@ -535,7 +536,7 @@ impl App {
         value
     }
     pub fn dock_configure(&self, patch: &Value) -> CoreResult<Value> {
-        let _guard = self.dock_config_lock.lock().unwrap();
+        let _guard = self.dock_config_lock.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
@@ -809,8 +810,8 @@ impl App {
     /// Stop cooler admission before preparing a relaunch helper. Refusal leaves
     /// the host and dock usable; a failed helper can restore the cooler engine.
     pub fn prepare_cooler_exit(&self) -> CoreResult<()> {
-        let _guard = self.cooler_config_lock.lock().unwrap();
-        let _dock_guard = self.dock_config_lock.lock().unwrap();
+        let _guard = self.cooler_config_lock.lock_or_recover();
+        let _dock_guard = self.dock_config_lock.lock_or_recover();
         if self.sched.any_visible_job() {
             return Err(CoreError::new("Wait for active jobs before quitting."));
         }
@@ -834,7 +835,7 @@ impl App {
         Ok(())
     }
     pub fn cancel_cooler_exit(&self) {
-        let _guard = self.cooler_config_lock.lock().unwrap();
+        let _guard = self.cooler_config_lock.lock_or_recover();
         self.closing.store(false, Ordering::SeqCst);
         if let Some(dock) = self.dock.get() {
             dock.cancel_exit();
@@ -852,7 +853,7 @@ impl App {
                 return;
             }
         }
-        let _guard = self.dock_config_lock.lock().unwrap();
+        let _guard = self.dock_config_lock.lock_or_recover();
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
         }
