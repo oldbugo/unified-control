@@ -1,4 +1,5 @@
 # Cooler data migration
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 UC 0.5.1 completes the independent cooler data-copy path. Installation and real-data results are recorded separately in acceptance.md.
 

@@ -1,4 +1,5 @@
 # Testing index
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 This page lists every check script in `scripts/`, what it proves and what it needs. Run all commands from the repository root.
 

@@ -1,4 +1,5 @@
 # Cooler connection health and recovery
+*Document type: dated evidence. Facts are true for the date shown. For the current state, read [status](status.md).*
 
 User request, 2026-11-01: the physical cooler freezes repeatedly, cannot connect through UC or original CoolerScreen, and needs recovery plus background evidence. This feature runs inside the visible UC tray app, not a Windows service or a Codex automation.
 

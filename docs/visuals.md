@@ -1,4 +1,5 @@
 # Dock visuals and on-demand metrics
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 Built in the visuals branch; app integration and physical acceptance are separate checks.
 

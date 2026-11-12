@@ -1,4 +1,5 @@
 # Dock-to-cooler controls
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 Plan 2.7. Software implementation verified 2026-11-06 and installed in 0.9.0. Physical controls acceptance remains open. Earlier Live write_timeout also reproduced on 0.8.0; the user confirms recovery after cycling the PC on 2026-11-09 and same 0.9.1 handshake/streaming logs pass. The disconnect cause remains unresolved. No actual device action was used in automated tests. See [installation evidence](../acceptance.md).
 

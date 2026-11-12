@@ -1,4 +1,5 @@
 # Local agent control (MCP)
+*Document type: reference. It describes how the part works. For the current state, read [status](status.md).*
 
 The 0.3.0 checkpoint lets compatible MCP clients inspect UC and configure dock layouts through the running app.
 The same server works with modern MCP discovery and older initialize clients. No model or provider API key is embedded.

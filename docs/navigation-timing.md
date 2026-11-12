@@ -1,4 +1,5 @@
 # Navigation timing checks
+*Document type: dated evidence. Facts are true for the date shown. For the current state, read [status](status.md).*
 
 Available in installed 0.3.2. Read enabled MCP `uc_get_status` and inspect `dock.timing`. Status reads do not navigate or execute
 actions. Keep the installed app running; use its normal Folder/Back keys for a physical navigation sample.

@@ -1,4 +1,5 @@
 # Dock worker boundary
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 Plan 2.4, implemented on 2026-11-04. Installation and verification results are recorded in
 [acceptance](../acceptance.md); this contract alone is not evidence of physical-device acceptance.

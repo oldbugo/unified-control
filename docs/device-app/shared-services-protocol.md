@@ -1,4 +1,5 @@
 # Shared AI, music and weather services
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 Plan 2.6b. Software implementation verified 2026-11-05; installed acceptance is recorded separately.
 

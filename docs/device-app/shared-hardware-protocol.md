@@ -1,4 +1,5 @@
 # Shared hardware readings: implementation contract
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 Plan 2.6a, completed software implementation 2026-11-05. Installed verification belongs in acceptance.
 UC owns one demand-driven collector. Dock and cooler request only hardware readings their enabled displays consume.

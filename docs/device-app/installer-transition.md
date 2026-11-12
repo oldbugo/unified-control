@@ -1,4 +1,5 @@
 # Installer transition: preflight and rehearsal
+*Document type: reference. It describes how the part works. For the current state, read [status](../status.md).*
 
 Phase 2.8 preparation, 2026-11-09. This is a read-only preflight and a synthetic rehearsal. It does not replace or uninstall either installed app and cannot authorize retirement.
 
