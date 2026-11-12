@@ -184,6 +184,20 @@ Codex desktop MCP acceptance now covers actual model-driven status/layout/monito
 apply/readback, stale revision refusal and undo. The temporary face was restored and active dock selection preserved.
 Claude model-client acceptance remains open.
 
+## 0.3.0 — 2026-11-02
+
+Add agent-neutral local MCP control. A bounded same-user RPC channel and a request-only command line let Codex or Claude read status and layout, preview changes and apply them with a revision check.
+
+Editor leases and revision-checked writes keep agent edits and the open editor in step. Native checks cover agent editing and delayed editor recovery.
+
+The installer adds a dedicated request identity for packaged MCP clients. This identity has no legacy GUI fallback.
+
+## 0.2.3 — 2026-11-02
+
+Fix the Monitor Toggle path. Verbatim monitor helper paths are now changed to canonical Windows paths before PowerShell runs them.
+
+Monitor discovery failures now show in the interface, and the user can retry. A native check confirms that discovery passes through normal IPC. The 0.2.2 recovery checkpoint was not tagged.
+
 ## 0.2.1 — 2026-11-01
 
 Add the requested background Connection diagnostics in UC, on with a saved opt-out. Read-only worker health runs every ten seconds; passive Windows USB status every thirty seconds. State transitions and minute snapshots go to bounded local rotating logs. Worker timeouts, USB write failures, matched descriptor failures and intentional holds remain distinct; raw messages, device/account IDs and media paths are excluded. Logging continues with the editor closed and stops when UC exits. No automatic USB resets or elevation.
