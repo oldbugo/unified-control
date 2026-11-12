@@ -685,7 +685,57 @@ impl Worker {
         self.step_inner(now);
         self.shared.status.lock().unwrap().timing = self.timing.clone();
     }
+    /// The dock owner's state machine step. Each `bool` helper returns `false`
+    /// when the step must end early (the original early `return`).
     fn step_inner(&mut self, now: Instant) {
+        self.log_health(now);
+        self.collect_completions(now);
+        if !self.shared.enabled.load(Ordering::SeqCst) {
+            self.release();
+            self.retry_at = now;
+            self.retry_delay = Duration::from_secs(1);
+            self.shared.set_state("disabled", "Dock is disabled");
+            return;
+        }
+        if !self.check_studio(now) {
+            return;
+        }
+        if now < self.retry_at {
+            return;
+        }
+        if !self.update_profile(now) {
+            return;
+        }
+        if !self.connect_if_needed(now) {
+            return;
+        }
+        if self.shared.stop.load(Ordering::SeqCst) || !self.shared.enabled.load(Ordering::SeqCst) {
+            self.release();
+            return;
+        }
+        if !self.sync_brightness(now) {
+            return;
+        }
+        // Service a due keepalive before a potentially slow account render.
+        if !self.keep_alive(now) {
+            return;
+        }
+        if !self.liveness_probe(now) {
+            return;
+        }
+        if now >= self.next_render && !self.render_page(now) {
+            return;
+        }
+        // The initial keepalive follows successful full-page delivery, never
+        // preceding the PNG/SmallViewMode baseline it refers to.
+        if !self.keep_alive(now) {
+            return;
+        }
+        self.fake_heartbeat(now);
+        self.poll_input(now);
+    }
+    /// Periodic health and timing lines in device.log.
+    fn log_health(&mut self, now: Instant) {
         if self.shared.enabled.load(Ordering::SeqCst) && now >= self.next_diagnostic {
             let s = self.shared.status();
             crate::device::log(&format!("dock health state={} frames={} pages={} errors={} inbound={} heartbeat={} ack={} keepalive={} probe={} last_rx_ms={}",s.state,s.frames_sent,s.pages_sent,s.errors,self.inbound,self.heartbeats,self.acknowledgements,s.keep_alives_sent,s.probe_writes,now.saturating_duration_since(self.last_activity).as_millis()));
@@ -694,6 +744,9 @@ impl Worker {
             crate::device::log(&format!("dock timing polls={} nonbutton={} max_poll_gap_us={} nav_started={} nav_completed={} nav_aborted={} nav_receipt_to_delivery_us={} nav_handling_us={} nav_wait_for_render_us={} nav_inputs_us={} nav_faces={} nav_face_render_us={} nav_prepare_us={} nav_zip_and_transfer_us={} nav_preceding_nonbutton={} nav_poll_gap_us={}",t.polls,t.non_button_events,t.max_poll_gap_us,t.navigations_started,t.navigations_completed,t.navigations_aborted,n.receipt_to_delivery_us,n.handling_us,n.wait_for_render_us,n.inputs_us,n.render.faces_rendered,n.render.face_render_us,n.render.delivery_prepare_us,n.render.zip_and_transfer_us,n.preceding_non_button_events,n.poll_gap_before_receipt_us));
             self.next_diagnostic = now + Duration::from_secs(10);
         }
+    }
+    /// Account for key actions the executor has finished.
+    fn collect_completions(&mut self, now: Instant) {
         while let Ok(done) = self.completed.try_recv() {
             let mut status = self.shared.status.lock().unwrap();
             if done.executed {
@@ -715,13 +768,9 @@ impl Worker {
                 self.next_render = now;
             }
         }
-        if !self.shared.enabled.load(Ordering::SeqCst) {
-            self.release();
-            self.retry_at = now;
-            self.retry_delay = Duration::from_secs(1);
-            self.shared.set_state("disabled", "Dock is disabled");
-            return;
-        }
+    }
+    /// Ulanzi Studio ownership check.
+    fn check_studio(&mut self, now: Instant) -> bool {
         // Probe before each connection and at most 250ms apart while connected.
         if self.dock.is_none() || now >= self.next_probe {
             self.next_probe = now + Duration::from_millis(250);
@@ -734,7 +783,7 @@ impl Worker {
                         "blocked",
                         "Ulanzi Studio is running. Quit it from its tray to use the dock here",
                     );
-                    return;
+                    return false;
                 }
                 Err(_) => {
                     self.release();
@@ -742,16 +791,14 @@ impl Worker {
                         "blocked",
                         "Could not check Ulanzi Studio; dock access is paused",
                     );
-                    return;
+                    return false;
                 }
             }
         }
-        if now < self.retry_at {
-            return;
-        }
-        if !self.update_profile(now) {
-            return;
-        }
+        true
+    }
+    /// Open the dock link when none is held.
+    fn connect_if_needed(&mut self, now: Instant) -> bool {
         if self.dock.is_none() {
             self.shared
                 .set_state("connecting", "Connecting to the dock");
@@ -790,14 +837,14 @@ impl Worker {
                 }
                 Err(_) => {
                     self.failed(now, "Dock unavailable or owned by another app; retrying");
-                    return;
+                    return false;
                 }
             }
         }
-        if self.shared.stop.load(Ordering::SeqCst) || !self.shared.enabled.load(Ordering::SeqCst) {
-            self.release();
-            return;
-        }
+        true
+    }
+    /// Write the selected brightness when it differs from the dock's.
+    fn sync_brightness(&mut self, now: Instant) -> bool {
         let value = self.shared.brightness.load(Ordering::SeqCst);
         if self.brightness != Some(value) {
             self.shared.writing.store(true, Ordering::SeqCst);
@@ -805,113 +852,105 @@ impl Worker {
             self.shared.writing.store(false, Ordering::SeqCst);
             if result.is_err() {
                 self.failed(now, "Dock brightness write failed; reconnecting");
-                return;
+                return false;
             }
             self.brightness = Some(value);
             self.last_brightness_write = Some(now);
         }
-        // Service a due keepalive before a potentially slow account render.
-        if !self.keep_alive(now) {
-            return;
+        true
+    }
+    /// Render and deliver the current page, then schedule the next render.
+    fn render_page(&mut self, now: Instant) -> bool {
+        if !self.shared.enabled.load(Ordering::SeqCst) || self.shared.stop.load(Ordering::SeqCst) {
+            return false;
         }
-        if !self.liveness_probe(now) {
-            return;
-        }
-        if now >= self.next_render {
-            if !self.shared.enabled.load(Ordering::SeqCst)
-                || self.shared.stop.load(Ordering::SeqCst)
-            {
-                return;
-            }
-            self.shared.writing.store(true, Ordering::SeqCst);
-            let render_started = Instant::now();
-            let inputs_started = Instant::now();
-            let inputs = self.hooks.inputs();
-            self.timing.last_inputs_us = elapsed_us(inputs_started);
-            let hooks = self.hooks.clone();
-            let flash = self.flash;
-            let shared = self.shared.clone();
-            let revision = self.revision;
-            let result = self.runtime.as_mut().unwrap().render_and_send_measured(
-                self.dock.as_mut().unwrap(),
-                &inputs,
-                |index, face, input| {
-                    if flash[index].is_some_and(|until| now < until) {
-                        render_face("text", "ERROR", index == 13, &RenderInputs::default())
-                    } else {
-                        hooks.render(face, index, input)
-                    }
-                },
-                || shared.safe_to_act() && shared.revision.load(Ordering::SeqCst) == revision,
-                &mut self.timing.last_render,
-            );
-            self.shared.writing.store(false, Ordering::SeqCst);
-            if !self.shared.enabled.load(Ordering::SeqCst)
-                || self.shared.stop.load(Ordering::SeqCst)
-                || !matches!(self.shared.studio(), Ok(false))
-            {
-                self.release();
-                return;
-            }
-            match result {
-                Ok(count) => {
-                    let mut s = self.shared.status.lock().unwrap();
-                    s.frames_sent += count as u64;
-                    if count == 14 {
-                        s.pages_sent += 1;
-                        // Publish the displayed page only after its full transfer
-                        // succeeds, so editor following never leads the dock.
-                        let state = self.runtime.as_ref().unwrap().state();
-                        s.current_profile = Some(state.current_profile.clone());
-                        s.current_page = Some(state.current_page.clone());
-                        if self.next_keep_alive.is_none() {
-                            self.next_keep_alive = Some(now);
-                        }
-                        if let Some(pending) = self.pending_navigation.take() {
-                            self.timing.navigations_completed =
-                                self.timing.navigations_completed.saturating_add(1);
-                            self.timing.last_navigation = Some(NavigationTiming {
-                                receipt_to_delivery_us: elapsed_us(pending.received),
-                                handling_us: pending
-                                    .handled
-                                    .saturating_duration_since(pending.received)
-                                    .as_micros()
-                                    .min(u64::MAX as u128)
-                                    as u64,
-                                wait_for_render_us: render_started
-                                    .saturating_duration_since(pending.handled)
-                                    .as_micros()
-                                    .min(u64::MAX as u128)
-                                    as u64,
-                                inputs_us: self.timing.last_inputs_us,
-                                render: self.timing.last_render.clone(),
-                                preceding_non_button_events: pending.preceding_non_button_events,
-                                poll_gap_before_receipt_us: pending.poll_gap_before_receipt_us,
-                            });
-                        }
-                    }
+        self.shared.writing.store(true, Ordering::SeqCst);
+        let render_started = Instant::now();
+        let inputs_started = Instant::now();
+        let inputs = self.hooks.inputs();
+        self.timing.last_inputs_us = elapsed_us(inputs_started);
+        let hooks = self.hooks.clone();
+        let flash = self.flash;
+        let shared = self.shared.clone();
+        let revision = self.revision;
+        let result = self.runtime.as_mut().unwrap().render_and_send_measured(
+            self.dock.as_mut().unwrap(),
+            &inputs,
+            |index, face, input| {
+                if flash[index].is_some_and(|until| now < until) {
+                    render_face("text", "ERROR", index == 13, &RenderInputs::default())
+                } else {
+                    hooks.render(face, index, input)
                 }
-                Err(_) => {
-                    self.failed(now, "Dock picture update failed; reconnecting");
-                    return;
-                }
-            }
-            self.next_render = now + Duration::from_secs(1);
-            if let Some(until) = self
-                .flash
-                .iter()
-                .flatten()
-                .filter(|until| **until > now)
-                .min()
-            {
-                self.next_render = self.next_render.min(*until);
+            },
+            || shared.safe_to_act() && shared.revision.load(Ordering::SeqCst) == revision,
+            &mut self.timing.last_render,
+        );
+        self.shared.writing.store(false, Ordering::SeqCst);
+        if !self.shared.enabled.load(Ordering::SeqCst)
+            || self.shared.stop.load(Ordering::SeqCst)
+            || !matches!(self.shared.studio(), Ok(false))
+        {
+            self.release();
+            return false;
+        }
+        match result {
+            Ok(count) => self.record_delivery(now, render_started, count),
+            Err(_) => {
+                self.failed(now, "Dock picture update failed; reconnecting");
+                return false;
             }
         }
-        // The initial keepalive follows successful full-page delivery, never
-        // preceding the PNG/SmallViewMode baseline it refers to.
-        if !self.keep_alive(now) {
-            return;
+        self.next_render = now + Duration::from_secs(1);
+        if let Some(until) = self
+            .flash
+            .iter()
+            .flatten()
+            .filter(|until| **until > now)
+            .min()
+        {
+            self.next_render = self.next_render.min(*until);
         }
+        true
+    }
+    /// Status and navigation timing after a render delivered `count` frames.
+    fn record_delivery(&mut self, now: Instant, render_started: Instant, count: usize) {
+        let mut s = self.shared.status.lock().unwrap();
+        s.frames_sent += count as u64;
+        if count == 14 {
+            s.pages_sent += 1;
+            // Publish the displayed page only after its full transfer
+            // succeeds, so editor following never leads the dock.
+            let state = self.runtime.as_ref().unwrap().state();
+            s.current_profile = Some(state.current_profile.clone());
+            s.current_page = Some(state.current_page.clone());
+            if self.next_keep_alive.is_none() {
+                self.next_keep_alive = Some(now);
+            }
+            if let Some(pending) = self.pending_navigation.take() {
+                self.timing.navigations_completed =
+                    self.timing.navigations_completed.saturating_add(1);
+                self.timing.last_navigation = Some(NavigationTiming {
+                    receipt_to_delivery_us: elapsed_us(pending.received),
+                    handling_us: pending
+                        .handled
+                        .saturating_duration_since(pending.received)
+                        .as_micros()
+                        .min(u64::MAX as u128) as u64,
+                    wait_for_render_us: render_started
+                        .saturating_duration_since(pending.handled)
+                        .as_micros()
+                        .min(u64::MAX as u128) as u64,
+                    inputs_us: self.timing.last_inputs_us,
+                    render: self.timing.last_render.clone(),
+                    preceding_non_button_events: pending.preceding_non_button_events,
+                    poll_gap_before_receipt_us: pending.poll_gap_before_receipt_us,
+                });
+            }
+        }
+    }
+    /// The fake dock sends a heartbeat every ten seconds.
+    fn fake_heartbeat(&mut self, now: Instant) {
         if self.shared.fake
             && now.duration_since(self.last_fake_heartbeat) >= Duration::from_secs(10)
         {
@@ -920,6 +959,9 @@ impl Worker {
             }
             self.last_fake_heartbeat = now;
         }
+    }
+    /// Poll one inbound event and dispatch it (or detect a silent/lost dock).
+    fn poll_input(&mut self, now: Instant) {
         let poll_started = Instant::now();
         self.timing.last_poll_gap_us = self.last_poll_finished.map_or(0, |at| {
             poll_started
@@ -941,101 +983,102 @@ impl Worker {
         self.timing.polls = self.timing.polls.saturating_add(1);
         self.last_poll_finished = Some(received);
         match result {
-            Ok(Some(event)) => {
-                if !matches!(event, Event::Button(_)) {
-                    self.timing.non_button_events = self.timing.non_button_events.saturating_add(1);
-                    self.non_button_since_button = self.non_button_since_button.saturating_add(1);
-                }
-                let preceding_non_button_events = self.non_button_since_button;
-                if matches!(event, Event::Button(_)) {
-                    self.non_button_since_button = 0;
-                }
-                self.inbound += 1;
-                match &event {
-                    Event::Heartbeat(_) => self.heartbeats += 1,
-                    Event::In010b(_) | Event::BrightnessAck(_) => self.acknowledgements += 1,
-                    Event::DeviceInfo(_) => {
-                        crate::device::log("dock inbound device-info (payload omitted)")
-                    }
-                    _ => {}
-                }
-                self.last_activity = now;
-                self.probe_sent = false;
-                // Studio can start between periodic probes. Recheck before handling
-                // a physical event and again inside the serial action executor.
-                if !matches!(self.shared.studio(), Ok(false)) {
-                    self.release();
-                    self.shared.set_state(
-                        "blocked",
-                        "Ulanzi Studio is running or cannot be checked; dock access is paused",
-                    );
-                    return;
-                }
-                let index = match &event {
-                    Event::Button(b) if b.action == ButtonAction::Press && b.index < 14 => {
-                        Some(b.index as usize)
-                    }
-                    _ => None,
-                };
-                let runtime = self.runtime.as_mut().unwrap();
-                let before = runtime.state().current_page.clone();
-                match runtime.handle_event(&event) {
-                    Ok(action) => {
-                        let page = runtime.state().current_page.clone();
-                        if let (Some(action), Some(index)) = (action, index) {
-                            self.shared.queued_actions.fetch_add(1, Ordering::SeqCst);
-                            if self
-                                .actions
-                                .try_send(Job {
-                                    action,
-                                    index,
-                                    page,
-                                    generation: self.generation,
-                                    epoch: self.shared.action_epoch.load(Ordering::SeqCst),
-                                })
-                                .is_err()
-                            {
-                                self.shared.queued_actions.fetch_sub(1, Ordering::SeqCst);
-                                self.flash[index] = Some(now + Duration::from_millis(900));
-                                let mut s = self.shared.status.lock().unwrap();
-                                s.errors += 1;
-                                s.message = "Key action queue is full".into();
-                            }
-                        }
-                        if before != self.runtime.as_ref().unwrap().state().current_page {
-                            self.abort_navigation();
-                            self.flash = [None; 14];
-                            self.activity(true);
-                            self.timing.navigations_started =
-                                self.timing.navigations_started.saturating_add(1);
-                            self.pending_navigation = Some(PendingNavigation {
-                                received,
-                                handled: Instant::now(),
-                                preceding_non_button_events,
-                                poll_gap_before_receipt_us: self.timing.last_poll_gap_us,
-                            });
-                        }
-                        if matches!(event, Event::Button(_)) {
-                            self.next_render = now;
-                        }
-                    }
-                    Err(_) => {
-                        self.shared.status.lock().unwrap().errors += 1;
-                        self.shared
-                            .set_state("error", "Key navigation failed; review the page action");
-                    }
-                }
-            }
+            Ok(Some(event)) => self.handle_inbound(now, received, event),
             Ok(None) => {
                 if now.duration_since(self.last_activity) >= Duration::from_secs(35) {
                     self.failed(now, "Dock stopped responding; reconnecting");
-                    return;
                 }
             }
             Err(error) => {
                 crate::device::log(&format!("dock input failure kind={:?}", error.kind()));
                 self.failed(now, "Dock disconnected; reconnecting");
-                return;
+            }
+        }
+    }
+    /// Count, recheck Studio ownership, then route a received event to the
+    /// page runtime and the serial action executor.
+    fn handle_inbound(&mut self, now: Instant, received: Instant, event: Event) {
+        if !matches!(event, Event::Button(_)) {
+            self.timing.non_button_events = self.timing.non_button_events.saturating_add(1);
+            self.non_button_since_button = self.non_button_since_button.saturating_add(1);
+        }
+        let preceding_non_button_events = self.non_button_since_button;
+        if matches!(event, Event::Button(_)) {
+            self.non_button_since_button = 0;
+        }
+        self.inbound += 1;
+        match &event {
+            Event::Heartbeat(_) => self.heartbeats += 1,
+            Event::In010b(_) | Event::BrightnessAck(_) => self.acknowledgements += 1,
+            Event::DeviceInfo(_) => {
+                crate::device::log("dock inbound device-info (payload omitted)")
+            }
+            _ => {}
+        }
+        self.last_activity = now;
+        self.probe_sent = false;
+        // Studio can start between periodic probes. Recheck before handling
+        // a physical event and again inside the serial action executor.
+        if !matches!(self.shared.studio(), Ok(false)) {
+            self.release();
+            self.shared.set_state(
+                "blocked",
+                "Ulanzi Studio is running or cannot be checked; dock access is paused",
+            );
+            return;
+        }
+        let index = match &event {
+            Event::Button(b) if b.action == ButtonAction::Press && b.index < 14 => {
+                Some(b.index as usize)
+            }
+            _ => None,
+        };
+        let runtime = self.runtime.as_mut().unwrap();
+        let before = runtime.state().current_page.clone();
+        match runtime.handle_event(&event) {
+            Ok(action) => {
+                let page = runtime.state().current_page.clone();
+                if let (Some(action), Some(index)) = (action, index) {
+                    self.shared.queued_actions.fetch_add(1, Ordering::SeqCst);
+                    if self
+                        .actions
+                        .try_send(Job {
+                            action,
+                            index,
+                            page,
+                            generation: self.generation,
+                            epoch: self.shared.action_epoch.load(Ordering::SeqCst),
+                        })
+                        .is_err()
+                    {
+                        self.shared.queued_actions.fetch_sub(1, Ordering::SeqCst);
+                        self.flash[index] = Some(now + Duration::from_millis(900));
+                        let mut s = self.shared.status.lock().unwrap();
+                        s.errors += 1;
+                        s.message = "Key action queue is full".into();
+                    }
+                }
+                if before != self.runtime.as_ref().unwrap().state().current_page {
+                    self.abort_navigation();
+                    self.flash = [None; 14];
+                    self.activity(true);
+                    self.timing.navigations_started =
+                        self.timing.navigations_started.saturating_add(1);
+                    self.pending_navigation = Some(PendingNavigation {
+                        received,
+                        handled: Instant::now(),
+                        preceding_non_button_events,
+                        poll_gap_before_receipt_us: self.timing.last_poll_gap_us,
+                    });
+                }
+                if matches!(event, Event::Button(_)) {
+                    self.next_render = now;
+                }
+            }
+            Err(_) => {
+                self.shared.status.lock().unwrap().errors += 1;
+                self.shared
+                    .set_state("error", "Key navigation failed; review the page action");
             }
         }
     }
