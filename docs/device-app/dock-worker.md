@@ -8,10 +8,10 @@ Plan 2.4, implemented on 2026-11-04. Installation and verification results are r
 UC owns the visible window/tray, settings, scheduler, MCP/editor leases and the only durable profile store.
 The same executable runs a separate `--dock-worker` process before any GUI or single-instance initialization.
 That child owns the dock driver, rendering, A/B and folder runtime, keepalive/reconnect, reviewed native actions and
-AI pixel consumption. Since0.7.0 it consumes host-collected shared hardware snapshots with their original expiry rather than
-polling CPU/RAM/NVIDIA locally. Since0.8.0 AI reading/rasterization belongs to the host; the dock consumes bounded guarded frames and never starts a local account helper. See [shared providers](shared-services-protocol.md).
+AI pixel consumption. Since 0.7.0 it consumes host-collected shared hardware snapshots with their original expiry rather than
+polling CPU/RAM/NVIDIA locally. Since 0.8.0 AI reading/rasterization belongs to the host; the dock consumes bounded guarded frames and never starts a local account helper. See [shared providers](shared-services-protocol.md).
 The host's dormant rendering resources serve assets, read-only monitor discovery and MCP's explicitly static preview.
-Normal editor previews go to the child. Since0.9.0 typed cooler actions return through a host-owned bounded callback queue to the independent cooler worker. Correlated completion bypasses ordinary child dispatch; host busy ownership survives requester loss, with bounded completion and no replay. See [cross-device controls](cross-device-controls.md).
+Normal editor previews go to the child. Since 0.9.0 typed cooler actions return through a host-owned bounded callback queue to the independent cooler worker. Correlated completion bypasses ordinary child dispatch; host busy ownership survives requester loss, with bounded completion and no replay. See [cross-device controls](cross-device-controls.md).
 
 The child receives validated profile snapshots in a memory-only replica. It cannot write the profile journal,
 startup backup or index. After a crash the replacement receives the latest durable host snapshot, brightness and

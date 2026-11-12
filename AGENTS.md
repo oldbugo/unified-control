@@ -13,7 +13,7 @@ Start with its advertised `uc_get_status` and `uc_get_layout` tools. Use MCP for
 computer use for visual review or a capability gap. Do not claim a tool connection that is not exposed in the current session.
 If the tools are absent, check the registered connection and reload MCP/start a fresh client session as needed.
 
-UC must remain running in its visible tray. Installed0.9.2/source8c194f2 and engine4.21.1/source77c9086 retain cross-device controls and shared
+UC must remain running in its visible tray. Installed 0.9.2 / source 8c194f2 and engine 4.21.1 / source 77c9086 retain cross-device controls and shared
 hardware/AI/music/weather ownership. UC owns one hardware collector and one account reader; a host-supervised device-free
 provider supplies music/weather. Worker caches/pixels retain original expiry, replaced local readers stay off, and an idle
 provider can retain bounded weather cache without native/network polling. Host-only profiles, independent supervised
@@ -29,13 +29,13 @@ AppData profile files directly. No physical action, USB reset or firmware comman
 
 ## Resume safely
 
-The user requested stand-down and handoff on2026-11-13. Read docs/handoff-current.md.
+The user requested stand-down and handoff on 2026-11-13. Read docs/handoff-current.md.
 Current MCP reports dock connected but cooler Live disconnected with write_timeout.
-The2026-11-09 physical recovery is historical. Connection diagnostics remain on.
-Temporary host heartbeat is installed in0.9.2 but its saved switch is off and no
+The 2026-11-09 physical recovery is historical. Connection diagnostics remain on.
+Temporary host heartbeat is installed in 0.9.2 but its saved switch is off and no
 real heartbeat trace exists. Windows startup Run entry targets the installed app
-with --tray; actual sign-in startup is untested. Plan2.4/shared-services2.6/software2.7
-are complete; physical2.7 acceptance remains open. Installer transition2.8 remains
+with --tray; actual sign-in startup is untested. Plan 2.4 / shared-services 2.6 / software 2.7
+are complete; physical 2.7 acceptance remains open. Installer transition 2.8 remains
 the wider next feature step. Preserve the standalone fallback and existing
 rollback gates. No automatic reset is authorized.
 Read the current branch/status before new edits and create a `codex/` branch for new work. Do not retag or reinstall an app

@@ -20,6 +20,6 @@ The old standalone installation is retained as fallback. Quit UC before opening 
 
 The original phase 2.8 proposal to replace the standalone installer in place remains a separate release step, after the outstanding phase 2 architecture/release gates. This data migration does not claim dock-worker extraction, shared providers, cross-device actions, both-device sleep/resume or a one-hour release soak. Sleep/resume remains deferred by the user.
 
-## Installer preparation2026-11-09
+## Installer preparation 2026-11-09
 
-[Installer-transition tooling](installer-transition.md) adds a read-only shell inventory and owned synthetic upgrade/backup/rollback rehearsal.33 checks pass. It cannot retire either real installation, does not audit real AppData, and never treats a historical migration result as current authorization. Actual immutable snapshot, identity/shortcut transition and NSIS/real4.x rollback acceptance remain separate work behind the release gate.
+[Installer-transition tooling](installer-transition.md) adds a read-only shell inventory and owned synthetic upgrade/backup/rollback rehearsal.33 checks pass. It cannot retire either real installation, does not audit real AppData, and never treats a historical migration result as current authorization. Actual immutable snapshot, identity/shortcut transition and NSIS/real 4.x rollback acceptance remain separate work behind the release gate.

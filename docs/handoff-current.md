@@ -25,7 +25,7 @@ These records show host-thread liveness. They do not directly detect frozen pixe
 
 ## Current device state and unresolved cause
 
-Read-only MCP on 2026-11-13 reports UC0.9.2, agent access enabled, dock connected, cooler worker running, connection diagnostics enabled, cooler health **write_timeout**, and Live connected **false**. The earlier 2026-11-09 user-confirmed recovery after cycling the PC is historical. The recurrence remains unresolved.
+Read-only MCP on 2026-11-13 reports UC 0.9.2, agent access enabled, dock connected, cooler worker running, connection diagnostics enabled, cooler health **write_timeout**, and Live connected **false**. The earlier 2026-11-09 user-confirmed recovery after cycling the PC is historical. The recurrence remains unresolved.
 
 The user cannot identify the moment a freeze starts. They notice it later. Which display/window the latest report referred to was never confirmed. Do not assume a PC GPU freeze and cooler connection failure are the same event.
 
@@ -35,7 +35,7 @@ Correction to the earlier chat diagnosis. Windows reported LiveKernelEvent141 en
 
 1. Resume only on the user's next direction. Check current diagnostics switches and health. The heartbeat remains available for temporary use.
 2. Preserve connection evidence for the recurring cooler write timeout. Keep existing connection diagnostics on unless the user changes it.
-3. The wider feature queue remains installer transition2.8, combined release gates2.9, then Dial. Read project-status.md and the installer transition contract. Standalone CoolerScreen remains the fallback.
+3. The wider feature queue remains installer transition 2.8, combined release gates 2.9, then Dial. Read project-status.md and the installer transition contract. Standalone CoolerScreen remains the fallback.
 4. Physical cross-device controls, full device acceptance, real freeze diagnosis and sign-in startup acceptance remain open. Sleep/resume remains deferred.
 
 No automatic resets, elevation, guessed USB/firmware commands or profile edits. Use the running app's MCP for supported changes. Test with isolated quiet debug/fake instances. Use the idle-safe updater for authorized app updates. No background agent watch or scheduled task was created.

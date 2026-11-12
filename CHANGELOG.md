@@ -11,7 +11,7 @@ startup function.
 
 ## 0.9.1 — 2026-11-06
 
-Add finite per-step connection and shutdown results/timings from cooler engine4.21.1. Traces are buffered until a transaction finishes, delivered through a bounded nonblocking private event queue and validated again by UC. The existing diagnostics opt-out and migration guard control persistence in the rotated local health log. No device identities, reply payloads or arbitrary error text are recorded.
+Add finite per-step connection and shutdown results/timings from cooler engine 4.21.1. Traces are buffered until a transaction finishes, delivered through a bounded nonblocking private event queue and validated again by UC. The existing diagnostics opt-out and migration guard control persistence in the rotated local health log. No device identities, reply payloads or arbitrary error text are recorded.
 
 Preserve commands, delays, timeouts, original errors and best-effort shutdown continuation. No new device probe, recovery operation or public RPC is added. Stop messages describe requested Embedded playback/screen-off, rather than claiming a verified physical result. This is diagnostic instrumentation, not a cooler recovery fix.
 
@@ -23,13 +23,13 @@ A generation-bound child-to-host route delivers each admitted physical action on
 before ordinary worker dispatch. Bounded completion delivery and host busy counts survive requester loss, preventing
 shutdown deadlock or replay after restart. Disabled/busy targets refuse without auto-enablement or queued work.
 
-Cooler engine4.21.0 resolves relative actions atomically, preserves Embedded and uses a dedicated reviewed serialized
+Cooler engine 4.21.0 resolves relative actions atomically, preserves Embedded and uses a dedicated reviewed serialized
 brightness operation. Fresh readback supplies relative baselines; missing/mismatched confirmation remains explicit and
 never automatically retries. Existing cooler UI events reflect theme/Live changes; Screen settings displays brightness.
 No physical-action MCP method, arbitrary worker command, generic raw device access, reset or firmware operation is added.
 
 
-Installed0.9.0/source7c3ee6d, engine4.21.0/sourceda2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of0.8.0/engine4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
+Installed 0.9.0 / source 7c3ee6d, engine 4.21.0 / source da2cb2c, passed quiet startup/new-process, actual MCP version, connected dock, both verified AI providers and unchanged selected fourteen-key layout checks. Cooler Live remains disconnected with write_timeout. A quiet comparison install of 0.8.0 / engine 4.20.0 reproduced the same timeout;0.9.0 was restored. The initiating cause is unknown. Windows reports two normal USB nodes/problem 0; no resets, elevation, firmware or actual cooler actions were performed. Physical switching/brightness acceptance remains open.
 
 ## 0.8.0 — 2026-11-05
 
@@ -43,26 +43,26 @@ weather times; forecasts/retries are keyed by place. An already-started idle pro
 cache while stopping source interests, avoiding extra requests on quick widget changes. No cold empty-demand process starts.
 
 Failure, expiry, replay, worker replacement and configuration changes cannot relabel old values as current. This completes
-shared-services slice2.6b; cross-device controls remain next and cooler workspace issue23 remains separate. No standalone
+shared-services slice 2.6b; cross-device controls remain next and cooler workspace issue 23 remains separate. No standalone
 CoolerScreen installation/data, device opt-ins or authentication settings are replaced.
-Installed source5dfec54 passed quiet startup, actual MCP0.8.0/engine4.20.0, one account-reader/one provider child, device reconnection and unchanged fourteen-key layout checks.
+Installed source 5dfec54 passed quiet startup, actual MCP 0.8.0 / engine 4.20.0, one account-reader/one provider child, device reconnection and unchanged fourteen-key layout checks.
 
 
 ## 0.7.0 — 2026-11-05
 
 Collect CPU, RAM and full NVIDIA GPU readings once for interested dock/cooler displays. Expiring per-consumer demand
-selects the required source families and fastest1/2/4Hz rate; unused sources stop. Cooler engine4.19.0 consumes injected
+selects the required source families and fastest 1/2/4 Hz rate; unused sources stop. Cooler engine 4.19.0 consumes injected
 readings through both legacy stats and modern widgets, with replaced local aggregate readers disabled.
 
 Preserve original observation/expiry through worker exchanges, cached status and dock pixel delivery. Missing, failed
 or expired readings remain unknown; validated generation/sequence checks prevent replay. Independent coalescing delivery
 keeps a stalled consumer from blocking its peer. Ephemeral probes cannot create durable-action uncertainty.
 
-This is shared-services slice2.6a. AI usage, music, weather and other data sources retain existing ownership for now.
-Cooler workspace entry delay remains separately tracked in issue23.
-Installed clean sourceb5b0140 through the idle-safe updater; startup/newPID, actual MCP0.7.0/engine4.19.0, connected
-devices and unchanged selected fourteen-key page verified. Real cooler demand drives one1Hz collector, with equal
-CPU/RAM/GPU read counts and no source failures. Source/tag and private PR25 identify the release.
+This is shared-services slice 2.6a. AI usage, music, weather and other data sources retain existing ownership for now.
+Cooler workspace entry delay remains separately tracked in issue 23.
+Installed clean source b5b0140 through the idle-safe updater; startup/newPID, actual MCP 0.7.0 / engine 4.19.0, connected
+devices and unchanged selected fourteen-key page verified. Real cooler demand drives one 1 Hz collector, with equal
+CPU/RAM/GPU read counts and no source failures. Source/tag and private PR 25 identify the release.
 
 ## 0.6.0 — 2026-11-04
 
@@ -71,9 +71,9 @@ UC remains the only durable profile writer; the child uses validated memory-only
 with the latest saved layout and never replays button actions. Editor previews share the child reader and preserve
 freshness deadlines through IPC. Quiesce/acknowledgement coordinates busy-safe disable, Quit and updates.
 The cooler worker remains independent. Shared providers and cross-device actions follow in later milestones.
-Installed clean source0117a5f through the idle-safe updater. Startup/newPID, separate dock child, actual MCP0.6.0,
+Installed clean source 0117a5f through the idle-safe updater. Startup/newPID, separate dock child, actual MCP 0.6.0,
 device reconnection, expected-only proxy marker substitution and unchanged selected fourteen-key page verified.
-165 core/11 host/62 reader tests and relevant headless/quiet native checks pass. PR22 is merged; v0.6.0 pins the build source.
+165 core/11 host/62 reader tests and relevant headless/quiet native checks pass. PR 22 is merged; v0.6.0 pins the build source.
 
 Record the separately reported cooler workspace entry delay. The engine already stays running; repeated interface
 hydration is a possible cost to measure. No warm timer or cooler-entry performance fix is claimed in this release.
@@ -84,13 +84,13 @@ Complete cooler data migration verification while preserving UC edits and origin
 definitions replace the old default-folder dependency. General offers a cancellable app-owned comparison and historical
 summary; MCP reads cached finite counts without scanning. Atomic bounded receipts invalidate older success during interruption.
 Generated theme previews are counted separately from original media; missing media and stale active paths still fail.
-Installed sourceb67d928, startup/MCP/proxy/reconnection/layout verified. Actual286 library/22 gallery files and23 references
+Installed source b67d928, startup/MCP/proxy/reconnection/layout verified. Actual 286 library/22 gallery files and 23 references
 pass; user confirms themes/settings and physical Live.155 core/11 host and relevant headless/native checks pass.
 
 ## 0.5.0 — 2026-11-04
 
 Introduce copy-once V2 source-definition migration and host-side data comparison. The real-data check conservatively
-flags two changed generated previews, corrected in0.5.1. Original files and UC edits are preserved throughout.
+flags two changed generated previews, corrected in 0.5.1. Original files and UC edits are preserved throughout.
 
 
 ## 0.4.1 — 2026-11-03
@@ -101,8 +101,8 @@ retain their connection too. An actually-off screen still gets its initial check
 
 The user grants standing permission to install tested UC updates as needed without repeated approval questions;
 the idle-safe updater, quiet restart and verification remain mandatory.
-Installed from clean sourcebc9a864 through the idle-safe updater; startup/newPID, actual MCP0.4.1, packaged proxy and
-unchanged selected profile/page/all14keys verified. Real reentry smoothness remains separate from the automated check.
+Installed from clean source bc9a864 through the idle-safe updater; startup/newPID, actual MCP 0.4.1, packaged proxy and
+unchanged selected profile/page/all 14 keys verified. Real reentry smoothness remains separate from the automated check.
 
 ## 0.4.0 — 2026-11-03
 
@@ -115,7 +115,7 @@ Preserve saved cooler Live across editor page changes and close-to-tray. Claim t
 enabled, clear stale temporary ownership after explicit off, and detach only the temporary stream being cleaned up.
 Explicit Live off/device disable/Quit retain their behavior; autosave/import guards and local diagnostics remain.
 
-Installed from clean sourceb18a4a1 with startup/newPID, actual MCP0.4/engine4.18.2, packaged proxy and unchanged14-key
+Installed from clean source b18a4a1 with startup/newPID, actual MCP 0.4 / engine 4.18.2, packaged proxy and unchanged 14-key
 layout verified. User confirms physical Live continues across page changes and close-to-tray; repeated entry is fixed above.
 
 ## 0.3.5 — 2026-11-02
@@ -126,8 +126,8 @@ Loading frames can be left before their bridge is ready. Idle visits do not enqu
 The embedded view is removed on exit, stopping its visual loops; enabled worker Live/diagnostics remain independent.
 Disable, reset and Quit retain their full cleanup checks. No USB recovery or hardware fix is claimed.
 
-Installed with user approval through the idle-safe updater. NewPID/startup version, actual MCP0.3.5, packaged proxy,
-dock/provider reconnection and unchanged active14-key layout verified. Hardware recovery and user navigation feel remain open.
+Installed with user approval through the idle-safe updater. NewPID/startup version, actual MCP 0.3.5, packaged proxy,
+dock/provider reconnection and unchanged active 14-key layout verified. Hardware recovery and user navigation feel remain open.
 
 ## 0.3.4 — 2026-11-02
 
@@ -137,7 +137,7 @@ Keyboard focus skips hidden results. Compact sidebars expose a search button and
 Closing compact search clears its filter; resizing with an active query keeps search visible instead of hiding pages
 behind an invisible filter.
 
-Installed corrected source95a68ee through the idle-safe updater, with newPID/startup version, actual MCP version,
+Installed corrected source 95a68ee through the idle-safe updater, with newPID/startup version, actual MCP version,
 packaged proxy identity, unchanged active layout and dock/provider recovery verified. The earlier draft package was not installed.
 
 ## 0.3.3 — 2026-11-02
@@ -150,10 +150,10 @@ Expose a strict cached cooler-health summary through enabled MCP status, without
 Worker and Windows USB sample timestamps are separate. Identifiers, paths, PIDs and arbitrary error messages are excluded.
 
 Installed with startup/new PID, actual MCP version, packaged proxy identity and unchanged active layout verified. Dock
-and both usage providers recovered. The last cooler sample still reports descriptor failure43; no hardware recovery.
+and both usage providers recovered. The last cooler sample still reports descriptor failure 43; no hardware recovery.
 
-Physical0.3.2 retest: the user reported three Test/Back cycles responsive; six navigations completed without aborts.
-The latest host-receipt-to-transfer duration was72.44ms. No before/after speedup or physical pixel timing is claimed.
+Physical 0.3.2 retest: the user reported three Test/Back cycles responsive; six navigations completed without aborts.
+The latest host-receipt-to-transfer duration was 72.44 ms. No before/after speedup or physical pixel timing is claimed.
 
 ## 0.3.2 — 2026-11-02
 
@@ -168,7 +168,7 @@ host-receipt-to-delivery sample and navigation completion/abort counts. No sched
 Preserve guarded Codex error/stale states while continuing to hide all unverified numbers. Missing account identity still
 suppresses otherwise valid readings. Simulated regressions cover throttling, recovery and history/token clearing.
 
-Installed through the idle-safe updater during the user's requested continuation. New process/startup version, MCP0.3.2,
+Installed through the idle-safe updater during the user's requested continuation. New process/startup version, MCP 0.3.2,
 dock reconnection, unchanged active-page keys and both providers verified. Numerical timings are readable; physical
 navigation capture/feel remains separate from automated checks.
 
@@ -190,7 +190,7 @@ Add the requested background Connection diagnostics in UC, on with a saved opt-o
 
 Add explicit Reset cooler USB for a normally enumerated but unresponsive screen. It saves edits, uses the exclusive device job, requests Windows approval, selects one exact cooler parent/port/interface, resets once and checks for a genuine firmware reply. Failed enumeration keeps the existing exact remembered-port recovery path. Successful reset request alone is never reported as recovered hardware.
 
-Current incident remains unresolved: initial PnP nodes were OK while writes timed out before the session's first successful Live connection. One user-approved targeted reset was accepted, but normal enumeration did not return; Windows then reported code43. Physical USB reconnect is the next recovery step. This does not establish development work, firmware, power or a cable as the initiating cause.
+Current incident remains unresolved: initial PnP nodes were OK while writes timed out before the session's first successful Live connection. One user-approved targeted reset was accepted, but normal enumeration did not return; Windows then reported code 43. Physical USB reconnect is the next recovery step. This does not establish development work, firmware, power or a cable as the initiating cause.
 
 ## 0.2.0 — 2026-11-01
 

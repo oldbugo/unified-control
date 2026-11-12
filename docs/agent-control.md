@@ -61,7 +61,7 @@ Host receipt-to-delivery excludes the earlier physical press-to-host interval. N
 readings are added to timing. Disabled access still exposes only version/capabilities. These diagnostics do not establish
 a measured physical bottleneck or speedup. [Capture guide](navigation-timing.md).
 
-Installed0.3.3 adds `cooler.diagnosticsEnabled` and `cooler.lastHealthSample`. The existing `cooler.state` describes the
+Installed 0.3.3 adds `cooler.diagnosticsEnabled` and `cooler.lastHealthSample`. The existing `cooler.state` describes the
 supervised worker, while the new object is a strict projection of already cached diagnostics. `lastSampleAt` timestamps
 the worker-health result; `pnpSampledAt` timestamps the separately cached Windows USB result. Neither is renewed by an
 MCP read. Finite state/error codes, booleans and bounded counts are included; PIDs, device/account identifiers, paths,
@@ -104,7 +104,7 @@ Run `scripts/check-agent-mcp.cjs`, `scripts/check-agent-editor.cjs` (with `UC_PL
 `scripts/check-native-agent.cjs` (with `UC_TEST_EXE` pointing to a debug build). Native tests refuse release/installed executables
 and use their own temporary home plus quiet/multi/fake flags.
 
-Installed 0.3.0/source `0909429` through the idle-safe updater; startup/version/new process verified. The dedicated proxy
+Installed 0.3.0 / source `0909429` through the idle-safe updater; startup/version/new process verified. The dedicated proxy
 has the same SHA-256 as the installed app and reports 0.3.0 in both the packaged shell and normal filesystem view. The
 installed bundled Node/production adapter connected through the official SDK, listed seven tools, returned 0.3.0 and
 correctly rejected layout access with `agent-disabled` while the opt-in was off. No GUI automation was used for this check.

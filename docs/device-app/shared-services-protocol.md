@@ -1,6 +1,6 @@
 # Shared AI, music and weather services
 
-Plan2.6b. Software implementation verified2026-11-05; installed acceptance is recorded separately.
+Plan 2.6b. Software implementation verified 2026-11-05; installed acceptance is recorded separately.
 
 ## Ownership and activation
 
@@ -16,9 +16,9 @@ All messages reject unknown fields and enforce bounds. Channel generation, incre
 
 AI frames include their guarded UsageSnapshot and original earliest numerical deadline: five-minute quota freshness, quota reset and applicable token-history expiry. Publication, receipt, rendering and delivery each retain the account/freshness gate. Cached numeric images are replaced on source failure/logout, and are suppressed after transport expiry. No render command accepts snapshots from a user interface.
 
-Music transports position at its original successful observation, playing/paused state and the original state-change time. Receipt does not restart position extrapolation, the paused-panel minute or track identity. Known no-session and failed reads are distinct. Artwork stays bounded, with decoded dimensions at most640x640 and PNG at most2MiB; services frames are at most8MiB.
+Music transports position at its original successful observation, playing/paused state and the original state-change time. Receipt does not restart position extrapolation, the paused-panel minute or track identity. Known no-session and failed reads are distinct. Artwork stays bounded, with decoded dimensions at most 640x640 and PNG at most 2 MiB; services frames are at most 8 MiB.
 
-Weather keeps Celsius data and forecast detail, a15-minute refresh cache,60-second retry and120-second idle fetch-thread policy, with at most eight place entries retained in memory. The cache is keyed by explicit place; a changed city cannot briefly display the previous city's data. Fetch failure can retain only matching-place data with its stale marker and original observation time. Pipe delivery never claims a new weather fetch.
+Weather keeps Celsius data and forecast detail, a 15-minute refresh cache, 60-second retry and 120-second idle fetch-thread policy, with at most eight place entries retained in memory. The cache is keyed by explicit place; a changed city cannot briefly display the previous city's data. Fetch failure can retain only matching-place data with its stale marker and original observation time. Pipe delivery never claims a new weather fetch.
 
 ## Verification boundary
 
