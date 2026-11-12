@@ -272,3 +272,4 @@ npx tauri build
 
 Debug build only: `cargo build --manifest-path src-tauri/Cargo.toml`. Tests: `cargo test --manifest-path src-tauri/Cargo.toml`.
 Test instances must follow the quiet-test rules in `CLAUDE.md`.
+Index of every check script, its env vars and the quiet-test setup: [docs/testing.md](docs/testing.md).
