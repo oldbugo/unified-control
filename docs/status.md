@@ -37,9 +37,9 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 
 ## Next work, in order
 
-1. **2.8 Installer replacement.** Done so far: read-only check and a synthetic backup, upgrade and rollback test (33 checks pass). Next: a verified backup and a reviewed registration and shortcut change. Done when the real NSIS retirement and a real 4.x rollback are tested. Keep the standalone CoolerScreen as the fallback. See [installer transition](device-app/installer-transition.md).
-2. **2.9 Release gate.** Done when two-way worker crash isolation and busy-safe Quit are checked, privacy checks are finished, and a one-hour CPU and memory soak matches the standalone baseline. Sleep and resume stay deferred.
-3. **Phase 3 Dial.** Done when host-mode switching is shown by documented or captured evidence (never guess commands), the controls are mapped, and a worker, a page and reconnect are tested.
+1. **2.8 Installer replacement** ([issue 38](https://github.com/oldbugo/unified-control/issues/38)). Done so far: read-only check and a synthetic backup, upgrade and rollback test (33 checks pass). Next: a verified backup and a reviewed registration and shortcut change. Done when the real NSIS retirement and a real 4.x rollback are tested. Keep the standalone CoolerScreen as the fallback. See [installer transition](device-app/installer-transition.md).
+2. **2.9 Release gate** ([issue 39](https://github.com/oldbugo/unified-control/issues/39)). Done when two-way worker crash isolation and busy-safe Quit are checked, privacy checks are finished, and a one-hour CPU and memory soak matches the standalone baseline. Sleep and resume stay deferred.
+3. **Phase 3 Dial** ([issue 40](https://github.com/oldbugo/unified-control/issues/40)). Done when host-mode switching is shown by documented or captured evidence (never guess commands), the controls are mapped, and a worker, a page and reconnect are tested.
 
 ## Open acceptance items
 
@@ -49,7 +49,7 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 - Cross-device controls: physical theme, Live and brightness checks.
 - Combined devices: wider Live and Embedded changes, crash recovery and soak test.
 - Cooler hardware: find the cause of write_timeout. Keep diagnostics on. Do not do repeat resets or firmware commands as routine tests.
-- Real freeze diagnosis and sign-in start test.
+- Real freeze diagnosis ([issue 41](https://github.com/oldbugo/unified-control/issues/41)) and sign-in start test.
 - Later work: update, privacy and diagnostics-export pages, signed updates, Studio profile import, physical-action MCP tools.
 - Sleep and resume are deferred. Do not test them by default.
 
