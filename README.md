@@ -195,7 +195,7 @@ bounded PNG/JPEG imports, 13 fixed icons, text/clock/date and on-demand CPU/RAM/
 direct launch/URL and preserved Monitor Toggle adapters are wired to physical presses. Usage readers render all 16 views
 through a managed Node helper; account provenance/freshness gates run before publication, rendering, receipt and delivery.
 The dock remains disabled until explicitly enabled. Studio detection, ownership, reconnect, brightness and tray controls
-are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/dock-mvp.md).
+are implemented. A fresh render replaces cached-image replay after reconnect. [MVP evidence and acceptance](docs/archive/dock-mvp.md).
 
 Checked: 97 UC library tests pass (one helper ignored), five app lifecycle tests, 61 reader tests and the original 105
 Toolkit tests pass. The separate driver has 30 passing fake-transport tests from the foundation checkpoint. Browser checks
@@ -220,7 +220,7 @@ User-reported: the layout stayed visible for about ten idle minutes on 0.1.2, an
 screen. Diagnostics qualify that result: keepalives continued but passive heartbeats stopped, causing receive-timeout
 reconnects roughly every minute. This is visible idle stability, not a clean connection pass. Version 0.1.3 adds a bounded
 brightness-response probe before the receive timeout while retaining failure/reconnect when no response arrives.
-See [idle-fallback evidence](docs/dock-mvp.md#idle-fallback-retest). Broader physical acceptance remains pending.
+See [idle-fallback evidence](docs/archive/dock-mvp.md#idle-fallback-retest). Broader physical acceptance remains pending.
 The first 100 seconds of 0.1.3 live diagnostics show three acknowledged response probes, one initial full page and no
 errors/reconnects, with Background keepalive continuing. This is bounded connection evidence, not full hardware acceptance.
 Version 0.1.4 fixes physical edit refresh: editing one face selects and redraws that edited face immediately, without an
