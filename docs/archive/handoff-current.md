@@ -1,3 +1,5 @@
+Archived 2026-11-13; superseded by [docs/status.md](../status.md).
+
 # Stand-down handoff
 
 Checkpoint **2026-11-13**, Australia/Sydney. The user asked to wrap up, push reviewed work to private GitHub, update the vault and hand over. Development is stood down. Leave the installed tray app running.

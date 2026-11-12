@@ -1,3 +1,5 @@
+Archived 2026-11-13; superseded by [docs/status.md](../status.md).
+
 # Project scope and next work
 
 Updated 2026-11-13. The user requested stand-down and handoff. Installed UC 0.9.2 / source 8c194f2
@@ -48,11 +50,11 @@ account/history barriers, playback timing and weather cache/rates remain. The pr
 Latest 0.9.1 gate:206 core/11 host tests, eight session/trace and ten worker/source cases plus quiet native cooler/lifetime checks pass. Prior 0.9.0 software gate:202 core/11 host/62 reader tests passed, with three existing ignored checks; cooler five dock-action/19 scheduler/nine worker cases pass. Headless and native cross-device/profile/MCP/hardware/worker/cooler/lifetime/migration/shared-provider suites pass. The earlier shared receiver/music/weather gates also passed. A prior opaque lifecycle poll failure passed unchanged-binary retry; initiating cause is unconfirmed.
 Bounded normal pipe admission and improved fixture errors were added; final affected native reruns pass.
 Worker Rust modules and diff whitespace pass. Whole-repository formatting still has unrelated existing differences.
-See [acceptance evidence](acceptance.md), [functional follow-ups](function-failures.md) and [migration contract](device-app/cooler-migration.md).
+See [acceptance evidence](../acceptance.md), [functional follow-ups](../function-failures.md) and [migration contract](../device-app/cooler-migration.md).
 
 ## Next implementation order
 
-[Installer transition contract and tooling](device-app/installer-transition.md): no binary/version change or installed-app effect. Shell inventory is explicitly unverified; shared registry-view observations are not proof of duplicate installations. A historical migration receipt cannot authorize retirement.
+[Installer transition contract and tooling](../device-app/installer-transition.md): no binary/version change or installed-app effect. Shell inventory is explicitly unverified; shared registry-view observations are not proof of duplicate installations. A historical migration receipt cannot authorize retirement.
 
 This follows the existing build plan. Acceptance items below can be closed alongside the relevant feature work;
 they do not authorize device tests while the user is away.
