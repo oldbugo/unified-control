@@ -1,7 +1,7 @@
 //! Validated profiles -> rendered PNGs -> transport-independent dock. No native
 //! transport is constructed here. External actions are returned as inert data.
 use super::{
-    key_render::{render_face, FrameCache, RenderInputs, RenderedFace},
+    key_render::{FrameCache, RenderInputs, RenderedFace},
     profiles::{Face, ProfileState},
 };
 use std::time::Instant;
@@ -148,15 +148,17 @@ impl PageRuntime {
     }
     /// Successful unchanged frames produce no packets. A failed write leaves no
     /// accepted cache state; reconnect must use a new transport and a full page.
+    #[cfg(test)]
     pub fn render_and_send<T: Transport>(
         &mut self,
         dock: &mut Dock<T>,
         inputs: &RenderInputs,
     ) -> Result<usize, String> {
         self.render_and_send_with(dock, inputs, |index, face, input| {
-            render_face(&face.kind, &face.text, index == 13, input)
+            super::key_render::render_face(&face.kind, &face.text, index == 13, input)
         })
     }
+    #[cfg(test)]
     pub fn render_and_send_with<
         T: Transport,
         F: FnMut(usize, &Face, &RenderInputs) -> Result<RenderedFace, String>,
@@ -259,6 +261,7 @@ impl PageRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::key_render::render_face;
     use crate::core::profiles::{Page, ProfileStore};
     use std::{io, time::Duration};
     use ulanzi_dock::{

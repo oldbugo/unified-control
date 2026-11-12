@@ -9,8 +9,8 @@ pub fn built_at() -> u64 {
 pub fn title(version: &str) -> String {
     format!("Unified Control {version} ({HASH}){}", screen_note())
 }
-/// `UC_FAKE_DEVICE`: the fake devices are used instead of real hardware (tests). Phase 0 has no device code at all, so this
-/// is only reported; the dock page (phase 1) must honour it and never open the real dock when it is set.
+/// `UC_FAKE_DEVICE`: the fake devices are used instead of real hardware (tests); the dock and cooler pages honour it and
+/// never open real hardware when it is set.
 pub fn fake_device() -> Option<String> {
     std::env::var("UC_FAKE_DEVICE").ok().filter(|v| !v.is_empty() && v != "0")
 }

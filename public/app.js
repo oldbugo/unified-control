@@ -103,7 +103,6 @@ const field = (label, id, control) => `<div class="field"><label for="${id}">${l
 function deviceCard(id, title, description, status) {
   return `<button class="device-card" data-go="${esc(id)}"><span class="device-icon">${icon(id)}</span><span class="device-info"><strong>${esc(title)}</strong><span data-device-description>${esc(description)}</span></span><span class="chip" data-device-status>${esc(status)}</span><span aria-hidden="true">›</span></button>`;
 }
-function coolerHomeCard(){const summary=coolerPanel.summary();return deviceCard('cooler','Cooler screen',summary.description,summary.status);}
 function homeDockSummary(){
   if(!T)return {description:'Ulanzi D200H · editable layout preview',status:'Preview'};
   if(dockStatusUnavailable)return {description:'Dock status could not be refreshed.',status:'Status unavailable'};

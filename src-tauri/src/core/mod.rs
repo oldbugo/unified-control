@@ -23,6 +23,7 @@ pub mod jobobject;
 pub mod js;
 pub mod key_render;
 pub mod paths;
+pub mod process;
 pub mod profiles;
 pub mod runtime_resources;
 pub mod scheduler;

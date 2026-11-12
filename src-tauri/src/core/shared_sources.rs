@@ -409,7 +409,7 @@ impl Session {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(crate::core::process::CREATE_NO_WINDOW);
         }
         let mut child = command.spawn().map_err(|_| "source_start_failed")?;
         if cfg!(windows) && !super::jobobject::adopt(&child) {

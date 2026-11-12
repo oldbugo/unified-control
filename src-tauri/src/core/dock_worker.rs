@@ -433,7 +433,7 @@ impl Controller {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(crate::core::process::CREATE_NO_WINDOW);
         }
         let mut child = command.spawn().map_err(|_| "Dock worker could not start")?;
         let mut input = child.stdin.take().ok_or("Dock worker input unavailable")?;
