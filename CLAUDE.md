@@ -8,6 +8,14 @@ The user is not a programmer: report in plain language.
 
 ## Standing user instructions (read in full at every session start)
 
+- 2026-11-13: UC is the app we maintain from now on; the standalone CoolerScreen app is legacy. There is no rule to keep
+  files copied from CoolerScreen identical ("I have no attachment to keep the files identical"). The user prefers one
+  repository where one is enough; any repository restructure is its own task, decided with the user.
+- 2026-11-13: Crash handling uplift approved: a fault in one device program should be recovered, not take the whole program
+  down ("Yes, let's do uplift").
+- 2026-11-13: "Never close CoolerScreen" was never a hard requirement. The intent is correct behaviour (the standalone app
+  kept relaunching when the user went back to it). An agent may quit the standalone CoolerScreen cleanly with
+  `CoolerScreen.exe --quit` when it is idle; never force-close it. Ulanzi Studio: still ask the user to quit it.
 - 2026-11-09: The user reports the cooler works after cycling the PC. Give special attention to evidence of disconnect causes while continuing the project. Keep connection diagnostics on unless the user changes the setting; preserve failure/recovery evidence and distinguish confirmed recovery from an identified cause.
 
 - 2026-11-03: Install tested UC builds as needed without asking again. Use the idle-safe updater; defer while busy and
@@ -31,7 +39,8 @@ Carried over from CoolerScreen's standing list (user-stated, 2026-10-10 to 2026-
 - Every option is a setting the user can change. Nothing new turns on by itself.
 - Testing must never intrude on the user's desktop (they may be in a fullscreen game): no test window may appear, take focus,
   go fullscreen or come to the front, and tests never play sound.
-- Never close, restart or kill the user's running CoolerScreen or Ulanzi Studio. Ask the user to quit Studio themselves.
+- Never force-close, restart or kill the user's running CoolerScreen or Ulanzi Studio. Ask the user to quit Studio themselves.
+  A clean `CoolerScreen.exe --quit` while it is idle is allowed (2026-11-13 above).
 - Do not launch installed apps from a Claude shell. Claude shells see a private MSIX copy of %APPDATA%, so an app started from
   one saves into a hidden folder, and reads of %APPDATA% from a Claude shell may be stale. After an install, tell the user to
   open UC from the Start menu.
@@ -74,5 +83,5 @@ App name "Unified Control"; exe `UnifiedControl.exe`; bundle identifier `com.old
 
 ## Copied shell
 
-The app shell was copied from CoolerScreen (commit in `README.md`). Phase 2 merges back, so keep the copied code close to the
-original: no renames or rewrites for taste.
+The app shell was first copied from CoolerScreen (commit in `README.md`). Since 2026-11-13 UC is the maintained copy:
+clean up and rename freely, with tests. Do not port changes back to the legacy CoolerScreen app.
