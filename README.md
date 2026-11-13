@@ -48,7 +48,7 @@ App name "Unified Control"; exe `UnifiedControl.exe`; bundle identifier `com.old
 
 ## Where the shell came from
 
-Copied from CoolerScreen (`oldbugo/coolerscreen`) at commit `52f1eec79815fe33046279d6969f55ec52013d5f` (4.18.0), app shell only:
+History only: since 2026-11-13 UC is the maintained copy and these files may change freely. Copied from CoolerScreen (`oldbugo/coolerscreen`) at commit `52f1eec79815fe33046279d6969f55ec52013d5f` (4.18.0), app shell only:
 
 | UC file | CoolerScreen source | Changes |
 |---|---|---|
