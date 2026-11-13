@@ -12,8 +12,9 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION};
 
 /// The argument that puts this exe into helper mode (also what `tools/install-when-idle.ps1` looks for to know a build can update).
 pub const HELPER_FLAG: &str = "--relaunch-after";
@@ -78,6 +79,68 @@ fn wait_gone(pid: u32) -> bool {
     r == WAIT_OBJECT_0
 }
 
+/// Other processes that run from one of `files` (the installed exe and its agent-request copy). The dock worker runs from the
+/// installed exe and can still be closing after the host has gone; while any of them runs, the installer cannot replace the file.
+fn running_from(files: &[PathBuf]) -> Vec<u32> {
+    let me = std::process::id();
+    let mut found = Vec::new();
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return found;
+    }
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut ok = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while ok != 0 {
+        let pid = entry.th32ProcessID;
+        if pid != me && pid != 0 {
+            if let Some(path) = image_path(pid) {
+                if files.iter().any(|f| same_file_path(f, &path)) {
+                    found.push(pid);
+                }
+            }
+        }
+        ok = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+    unsafe { CloseHandle(snapshot) };
+    found
+}
+
+fn image_path(pid: u32) -> Option<PathBuf> {
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u16; 1024];
+    let mut len = buf.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) };
+    unsafe { CloseHandle(h) };
+    (ok != 0).then(|| PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+}
+
+fn same_file_path(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy().replace('/', "\\").eq_ignore_ascii_case(&b.to_string_lossy().replace('/', "\\"))
+}
+
+/// Before an install: wait (up to `limit`) until nothing else runs from the installed files. Never ends a process. True when free.
+fn wait_files_free(files: &[PathBuf], limit: Duration) -> bool {
+    let t0 = Instant::now();
+    loop {
+        let busy = running_from(files);
+        if busy.is_empty() {
+            if t0.elapsed() >= Duration::from_millis(250) {
+                log(&format!("installed files are free after {} ms", t0.elapsed().as_millis()));
+            }
+            return true;
+        }
+        if t0.elapsed() >= limit {
+            log(&format!("{} process(es) still run from the installed files after {} s", busy.len(), limit.as_secs()));
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 /// The helper process: `--relaunch-after <pid> <plain|background> <exe> [<setup>]`. Returns its exit code (0 started the app again).
 pub fn run_helper(args: &[String]) -> i32 {
     let i = args.iter().position(|a| a == HELPER_FLAG).unwrap_or(0);
@@ -98,8 +161,13 @@ pub fn run_helper(args: &[String]) -> i32 {
         return 1;
     }
     if let Some(s) = &setup {
+        let installed = PathBuf::from(exe);
+        let files = [installed.clone(), installed.with_file_name("UC-AgentRequest-v1.exe")];
         if !valid_installer(s) {
             log("the installer is not valid any more: not run");
+        } else if !wait_files_free(&files, Duration::from_secs(30)) {
+            // A half install (new engine, old app) is worse than none: keep the current version and start it again.
+            log("not installed: the app files are still in use (nothing was ended); try the update again later");
         } else {
             log(&format!("running {} /S", s.display()));
             match Command::new(s).arg("/S").creation_flags(CREATE_NO_WINDOW).spawn() {
@@ -144,6 +212,25 @@ pub fn run_helper(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn install_waits_for_every_process_running_from_the_installed_files() {
+        assert!(same_file_path(Path::new("C:/Users/x/AppData/Local/Unified Control/UnifiedControl.exe"), Path::new(r"c:\users\x\appdata\local\unified control\unifiedcontrol.exe")));
+        assert!(!same_file_path(Path::new(r"C:\a\UnifiedControl.exe"), Path::new(r"C:\b\UnifiedControl.exe")));
+        // A real, quiet child process is found by its image path while it runs, and the wait gives up without ending it.
+        let ping = PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join(r"System32\PING.EXE");
+        let mut child = Command::new(&ping).args(["-n", "4", "127.0.0.1"]).creation_flags(CREATE_NO_WINDOW).stdout(std::process::Stdio::null()).spawn().unwrap();
+        assert!(running_from(std::slice::from_ref(&ping)).contains(&child.id()));
+        assert!(!wait_files_free(std::slice::from_ref(&ping), Duration::from_millis(300)));
+        assert!(child.try_wait().unwrap().is_none(), "waiting never ends the process");
+        child.wait().unwrap();
+        assert!(wait_files_free(std::slice::from_ref(&ping), Duration::from_secs(5)));
+        // This process itself is never counted, and files nothing runs from are free at once.
+        let me = std::env::current_exe().unwrap();
+        assert!(running_from(std::slice::from_ref(&me)).is_empty());
+        let t0 = Instant::now();
+        assert!(wait_files_free(&[PathBuf::from(r"C:\definitely\missing\UnifiedControl.exe")], Duration::from_secs(5)));
+        assert!(t0.elapsed() < Duration::from_secs(1));
+    }
     #[test]
     fn only_the_installer_file_name_of_this_app_is_accepted() {
         assert!(installer_name_ok("UnifiedControl_4.10.1_x64-setup.exe"));

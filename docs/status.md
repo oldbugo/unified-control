@@ -9,9 +9,10 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 
 ## State on 2026-11-13
 
-- Installed UC: 0.10.0. Source: 0ee343c. Tag: v0.10.0. The dock works on 0.10.0 (user-reported 2026-11-13).
-- Crash handling: UC recovers from a fault in one part. The cooler engine 4.21.1 does not yet; UC restarts it.
-- Cooler engine: 4.21.1. Source: 77c9086.
+- Installed UC: 0.11.0 (2026-11-13). Source: ea5f298. Tag v0.11.0 after merge. The dock was user-checked on 0.10.0.
+- Known updater race: the first 0.11.0 install replaced the engine but not `UnifiedControl.exe`, because the updater waits only for the host, not the dock worker that runs from the same exe. A second idle install worked. Fixed in 0.11.1: the updater waits until no process runs from the installed files (the fix takes effect for updates made from 0.11.1 on).
+- Crash handling: UC and the cooler engine recover from a fault in one part. An unguarded crash ends only that worker; UC restarts it.
+- Cooler engine: 4.22.0. Source: d84b30f. Tag: v4.22.0 (coolerscreen repo).
 - The dock is connected.
 - The cooler worker is running. Cooler Live is disconnected with a write_timeout error. The cause is open ([issue 9](https://github.com/oldbugo/unified-control/issues/9)).
 - On 2026-11-09 the cooler worked after the user restarted the PC. That does not show the cause. Do not treat it as a fix.
@@ -31,7 +32,7 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 | Dock | Profiles, pages, 14 displays, A/B faces, editing, undo, actions and reconnect work. Edit refresh and Monitor Toggle are user-confirmed. Preview and page-follow fixes are installed. Final user confirmation is open. |
 | AI usage | Both providers refresh past five minutes. Account-panel match, logout and switch, and physical gauges are not accepted yet. Claude needs the Desktop Code companion. |
 | MCP | Codex client tests passed (read, preview, apply, conflict, undo). Claude client tests and physical-action tools are open. |
-| Cooler | Separate engine 4.21.1 with themes, library, settings and safe lifecycle. Live is disconnected now (see above). Physical switching and brightness checks are open. |
+| Cooler | Separate engine 4.22.0 with themes, library, settings and safe lifecycle. Live is disconnected now (see above). Physical switching and brightness checks are open. |
 | Shared services | One hardware collector, one account reader and one music and weather provider serve both workers. Verified in the installed app. |
 | Cooler data | 286 library files, 22 gallery files and 23 references verified. No missing media. Original data kept as rollback. |
 | Shell | Home cards, sidebar search, General switches and enabled-only navigation are installed. More visual review is open. |
