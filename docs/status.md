@@ -10,7 +10,7 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 ## State on 2026-11-13
 
 - Installed UC: 0.11.0 (2026-11-13). Source: ea5f298. Tag v0.11.0 after merge. The dock was user-checked on 0.10.0.
-- Known updater race: the first 0.11.0 install replaced the engine but not `UnifiedControl.exe`, because the updater waits only for the host, not the dock worker that runs from the same exe. A second idle install worked. Fix is open.
+- Known updater race: the first 0.11.0 install replaced the engine but not `UnifiedControl.exe`, because the updater waits only for the host, not the dock worker that runs from the same exe. A second idle install worked. Fixed in 0.11.1: the updater waits until no process runs from the installed files (the fix takes effect for updates made from 0.11.1 on).
 - Crash handling: UC and the cooler engine recover from a fault in one part. An unguarded crash ends only that worker; UC restarts it.
 - Cooler engine: 4.22.0. Source: d84b30f. Tag: v4.22.0 (coolerscreen repo).
 - The dock is connected.
