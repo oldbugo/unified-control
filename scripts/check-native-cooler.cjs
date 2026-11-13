@@ -63,6 +63,13 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
     // on an unavailable screen. The parent keeps the RPC alive after unmount.
     await page.locator('.nav-item[data-page="cooler"]').click();
     await page.frameLocator('#cooler-frame').locator('#navMine').waitFor();
+    // #navMine is static HTML, so it exists before the cooler app module has run. Leaving before
+    // that point has no flush handler and nothing to clean up (issue 49): wait for the app first.
+    await page.frameLocator('#cooler-frame').locator('body').evaluate(()=>new Promise((resolve,reject)=>{
+      const until=performance.now()+10000;
+      const check=()=>typeof window.__UC_COOLER_FLUSH__==='function'?resolve():performance.now()>until?reject(new Error('cooler app did not start')):setTimeout(check,20);
+      check();
+    }));
     await page.evaluate(async()=>{
       const {CoolerPanel}=await import('./js/cooler-panel.js'),original=CoolerPanel.prototype.receive;
       window.__nativeCoolerReceive=original;window.__heldCoolerCleanup=[];
