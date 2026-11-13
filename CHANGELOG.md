@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0 — 2026-11-13
+
+Cooler engine 4.22.0 adds the same crash recovery as UC 0.10.0. A fault in one
+part of the cooler engine no longer stops it. Locks recover, background
+samplers and fetchers restart with a back-off, and an unguarded crash ends only
+the worker, which UC restarts. The USB command order and timings are
+unchanged. A new slow record, devices/cooler/connection-changes.jsonl, keeps
+each change of cooler connection health, every Live stop, changed connect
+outcomes and the app version at each start, for weeks. The full health log
+keeps about two days, so the start of a long screen hang was lost (issue 9).
+
 ## 0.10.0 — 2026-11-13
 
 Crash recovery and cleanup after the agent handover. A fault in one part now
