@@ -1,5 +1,6 @@
 //! One host-owned account reader and rasterizer. Workers receive only bounded
 //! guarded frames; they never activate a second account helper in shared mode.
+use super::sync::{MutexExt, RecoverResult};
 use super::{
     dock_worker::Controller,
     key_render::{render_face, RenderInputs, RenderedFace, KEY_SIZE, WIDE_SIZE},
@@ -302,7 +303,20 @@ impl Service {
             wake: Condvar::new(),
         });
         let running = shared.clone();
-        let thread = thread::spawn(move || run(running, home, resource_dir, fake, dock));
+        // A crash in the reader loop is logged and the loop starts again (its reader child is
+        // stopped by Drop while unwinding), so shared usage never stops silently.
+        let thread = thread::spawn(move || {
+            let stopped = || running.control.lock_or_recover().stopped;
+            super::sync::restarting("shared usage service", stopped, || {
+                run(
+                    running.clone(),
+                    home.clone(),
+                    resource_dir.clone(),
+                    fake,
+                    dock.clone(),
+                )
+            });
+        });
         Arc::new(Self {
             shared,
             thread: Mutex::new(Some(thread)),
@@ -310,7 +324,7 @@ impl Service {
         })
     }
     pub fn status(&self) -> Value {
-        let c = self.shared.control.lock().unwrap();
+        let c = self.shared.control.lock_or_recover();
         let mut value = c.status.clone();
         value["paused"] = json!(c.paused);
         value["stopped"] = json!(c.stopped);
@@ -324,7 +338,7 @@ impl Service {
             return Err("Invalid synthetic usage mode".into());
         }
         {
-            let mut c = self.shared.control.lock().unwrap();
+            let mut c = self.shared.control.lock_or_recover();
             if c.stopped {
                 return Err("Shared usage is stopped".into());
             }
@@ -336,13 +350,13 @@ impl Service {
     }
     pub fn shutdown(&self) {
         {
-            let mut c = self.shared.control.lock().unwrap();
+            let mut c = self.shared.control.lock_or_recover();
             c.stopped = true;
             c.status["readerRunning"] = json!(false);
             c.status["activeProviders"] = json!(0);
         }
         self.shared.wake.notify_one();
-        if let Some(thread) = self.thread.lock().unwrap().take() {
+        if let Some(thread) = self.thread.lock_or_recover().take() {
             let until = Instant::now() + Duration::from_millis(250);
             while !thread.is_finished() && Instant::now() < until {
                 thread::sleep(Duration::from_millis(1));
@@ -478,7 +492,7 @@ fn run(shared: Arc<Shared>, home: PathBuf, resources: PathBuf, fake: bool, dock:
     let mut code = "inactive".to_string();
     loop {
         let (paused, mode) = {
-            let c = shared.control.lock().unwrap();
+            let c = shared.control.lock_or_recover();
             if c.stopped {
                 break;
             }
@@ -723,7 +737,7 @@ fn run(shared: Arc<Shared>, home: PathBuf, resources: PathBuf, fake: bool, dock:
         }
         let reader_running = source.as_ref().is_some_and(|s| s.is_running());
         {
-            let mut c = shared.control.lock().unwrap();
+            let mut c = shared.control.lock_or_recover();
             c.status = json!({"shared":true,"fake":fake,"readerRunning":reader_running,
             "readerStarts":starts,"sourceEpochs":source_epochs,"ownerGeneration":generation,"activeProviders":active.len(),"specCount":demand.renders.len(),"renders":renders,"batches":sequence,
             "publishedUntil":batch.as_ref().map(|b|b.expires_at_ms),"mode":if fake{mode.as_str()}else{"account"}});
@@ -734,7 +748,7 @@ fn run(shared: Arc<Shared>, home: PathBuf, resources: PathBuf, fake: bool, dock:
                 shared
                     .wake
                     .wait_timeout(c, Duration::from_millis(200))
-                    .unwrap(),
+                    .recover(),
             );
         }
     }

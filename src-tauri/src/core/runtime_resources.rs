@@ -1,4 +1,5 @@
 //! Shared rendering and reviewed action adapters. Construction activates no source.
+use super::sync::MutexExt;
 use super::{
     actions::{ActionSink, NativeActions},
     assets::AssetStore,
@@ -157,7 +158,7 @@ impl RuntimeResources {
         &self,
         handler: Arc<dyn Fn(super::actions::CoolerAction) -> Result<(), String> + Send + Sync>,
     ) {
-        *self.cooler_handler.lock().unwrap() = Some(handler);
+        *self.cooler_handler.lock_or_recover() = Some(handler);
     }
     pub fn usage_exchange(
         &self,
@@ -168,8 +169,7 @@ impl RuntimeResources {
         }
         if let Some(batch) = batch {
             self.usage_receiver
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .accept(batch, super::scheduler::now_ms())?;
         }
         Ok(json!({"demand":self.usage_demand(),"state":self.usage_state()}))
@@ -178,9 +178,9 @@ impl RuntimeResources {
         if !self.enabled.load(Ordering::SeqCst) {
             return super::shared_usage::Demand::default();
         }
-        let providers = self.providers.lock().unwrap().clone();
-        let mut renders = self.usage_physical.lock().unwrap().clone();
-        let mut recent = self.usage_recent.lock().unwrap();
+        let providers = self.providers.lock_or_recover().clone();
+        let mut renders = self.usage_physical.lock_or_recover().clone();
+        let mut recent = self.usage_recent.lock_or_recover();
         recent
             .retain(|(_, at)| at.elapsed() < Duration::from_millis(super::shared_usage::LEASE_MS));
         for (spec, _) in recent.iter().rev() {
@@ -201,9 +201,8 @@ impl RuntimeResources {
     pub fn usage_state(&self) -> Value {
         let mut state = self
             .usage_receiver
-            .lock()
-            .unwrap()
-            .status(&self.providers.lock().unwrap(), super::scheduler::now_ms());
+            .lock_or_recover()
+            .status(&self.providers.lock_or_recover(), super::scheduler::now_ms());
         state["shared"] = json!(self.shared_usage);
         state
     }
@@ -216,14 +215,13 @@ impl RuntimeResources {
         }
         if let Some(snapshot) = snapshot {
             self.hardware
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .accept(snapshot, super::scheduler::now_ms())?;
         }
         Ok(json!({"demand":self.hardware_demand(),"state":self.hardware_state()}))
     }
     fn hardware_demand(&self) -> super::hardware::Demand {
-        let needs = *self.needs.lock().unwrap();
+        let needs = *self.needs.lock_or_recover();
         let enabled = self.enabled.load(Ordering::SeqCst);
         super::hardware::Demand {
             cpu: enabled && needs.cpu,
@@ -235,8 +233,7 @@ impl RuntimeResources {
     pub fn hardware_state(&self) -> Value {
         let mut state = self
             .hardware
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .state(super::scheduler::now_ms());
         state["shared"] = json!(self.shared_hardware);
         state["demand"] = json!(self.hardware_demand());
@@ -244,17 +241,16 @@ impl RuntimeResources {
         state
     }
     pub fn shutdown(&self) {
-        let _activation = self.activation.lock().unwrap();
+        let _activation = self.activation.lock_or_recover();
         self.enabled.store(false, Ordering::SeqCst);
-        self.providers.lock().unwrap().clear();
+        self.providers.lock_or_recover().clear();
         self.usage.shutdown();
-        self.usage_receiver.lock().unwrap().clear();
-        self.usage_physical.lock().unwrap().clear();
-        self.usage_recent.lock().unwrap().clear();
-        *self.usage_diagnostics.lock().unwrap() = UsageDiagnostics::default();
+        self.usage_receiver.lock_or_recover().clear();
+        self.usage_physical.lock_or_recover().clear();
+        self.usage_recent.lock_or_recover().clear();
+        *self.usage_diagnostics.lock_or_recover() = UsageDiagnostics::default();
         self.sampler
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .sample(Needs::default(), self.started.elapsed());
     }
     /// Sanitized diagnostics only; inspecting this never activates a source or
@@ -263,11 +259,11 @@ impl RuntimeResources {
         if self.shared_usage {
             return self.usage_state();
         }
-        let diagnostics = self.usage_diagnostics.lock().unwrap();
+        let diagnostics = self.usage_diagnostics.lock_or_recover();
         json!({"reader":{"code":diagnostics.reader_code,"message":diagnostics.reader_message},"providers":diagnostics.providers})
     }
     fn reader_result(&self, result: Result<(), UsageError>) {
-        let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+        let mut diagnostics = self.usage_diagnostics.lock_or_recover();
         let (code,message)=match result {
             Ok(())=>("ready","AI usage reader is running; each provider still needs a current verified observation."),
             Err(error)=>(error.code(),error.message()),
@@ -292,16 +288,16 @@ impl RuntimeResources {
         if self.shared_usage || self.fake || !self.enabled.load(Ordering::SeqCst) {
             return;
         }
-        let _activation = self.activation.lock().unwrap();
+        let _activation = self.activation.lock_or_recover();
         if !self.enabled.load(Ordering::SeqCst) {
             return;
         }
-        let desired = self.providers.lock().unwrap().clone();
+        let desired = self.providers.lock_or_recover().clone();
         if desired.is_empty() {
             return;
         }
         let now = Instant::now();
-        let mut health = self.health.lock().unwrap();
+        let mut health = self.health.lock_or_recover();
         if now < health.next {
             return;
         }
@@ -337,11 +333,11 @@ impl RuntimeResources {
             if self.shared_usage {
                 if self.enabled.load(Ordering::SeqCst) {
                     if let Some(spec) = super::shared_usage::RenderSpec::from_face(face, index) {
-                        let selected = self.providers.lock().unwrap().iter().any(|p| {
+                        let selected = self.providers.lock_or_recover().iter().any(|p| {
                             p.provider == provider && (spec.view != "tokens" || p.token_history)
                         });
                         if selected {
-                            let mut recent = self.usage_recent.lock().unwrap();
+                            let mut recent = self.usage_recent.lock_or_recover();
                             recent.retain(|(_, at)| {
                                 at.elapsed() < Duration::from_millis(super::shared_usage::LEASE_MS)
                             });
@@ -356,8 +352,7 @@ impl RuntimeResources {
                             drop(recent);
                             if let Some(frame) = self
                                 .usage_receiver
-                                .lock()
-                                .unwrap()
+                                .lock_or_recover()
                                 .render(&spec, super::scheduler::now_ms())
                             {
                                 return Ok(frame);
@@ -375,7 +370,7 @@ impl RuntimeResources {
                 };
                 let result = self.usage.render(provider, view, width, height);
                 {
-                    let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+                    let mut diagnostics = self.usage_diagnostics.lock_or_recover();
                     let diagnostic = diagnostics
                         .providers
                         .iter_mut()
@@ -431,8 +426,7 @@ impl DockHooks for RuntimeResources {
         if self.enabled.load(Ordering::SeqCst) && self.shared_hardware {
             if let Some(snapshot) = self
                 .hardware
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .current(super::scheduler::now_ms())
             {
                 inputs.hardware_valid_until_ms = Some(snapshot.expires_at_ms);
@@ -451,9 +445,8 @@ impl DockHooks for RuntimeResources {
             self.local_sensor_polls.fetch_add(1, Ordering::SeqCst);
             let readings = self
                 .sampler
-                .lock()
-                .unwrap()
-                .sample(*self.needs.lock().unwrap(), self.started.elapsed());
+                .lock_or_recover()
+                .sample(*self.needs.lock_or_recover(), self.started.elapsed());
             inputs.cpu = readings.cpu;
             inputs.gpu = readings.gpu;
             inputs.ram = readings.ram;
@@ -469,7 +462,7 @@ impl DockHooks for RuntimeResources {
         self.render_one(face, index, input)
     }
     fn active_profile(&self, state: &ProfileState, enabled: bool) {
-        let _activation = self.activation.lock().unwrap();
+        let _activation = self.activation.lock_or_recover();
         self.enabled.store(enabled, Ordering::SeqCst);
         let mut needs = Needs::default();
         let mut claude = false;
@@ -507,9 +500,9 @@ impl DockHooks for RuntimeResources {
                 }
             }
         }
-        *self.needs.lock().unwrap() = needs;
+        *self.needs.lock_or_recover() = needs;
         {
-            let mut diagnostics = self.usage_diagnostics.lock().unwrap();
+            let mut diagnostics = self.usage_diagnostics.lock_or_recover();
             for (provider, selected) in [(Provider::Claude, claude), (Provider::Codex, codex)] {
                 let diagnostic = diagnostics
                     .providers
@@ -564,14 +557,14 @@ impl DockHooks for RuntimeResources {
                     }
                 }
             }
-            *self.usage_physical.lock().unwrap() = physical;
-            *self.providers.lock().unwrap() = providers;
+            *self.usage_physical.lock_or_recover() = physical;
+            *self.providers.lock_or_recover() = providers;
             if !enabled {
-                self.usage_recent.lock().unwrap().clear();
+                self.usage_recent.lock_or_recover().clear();
             }
             return;
         }
-        let mut previous = self.providers.lock().unwrap();
+        let mut previous = self.providers.lock_or_recover();
         if *previous != providers || !providers.is_empty() && !self.usage.is_running() {
             *previous = providers.clone();
             let activation = self.usage.set_active_providers(&providers);
@@ -579,7 +572,7 @@ impl DockHooks for RuntimeResources {
                 self.reader_result(activation);
             }
             let ok = activation.is_ok();
-            let mut health = self.health.lock().unwrap();
+            let mut health = self.health.lock_or_recover();
             health.delay = Duration::from_secs(1);
             health.next = Instant::now()
                 + if ok {
@@ -590,8 +583,7 @@ impl DockHooks for RuntimeResources {
         }
         if !enabled {
             self.sampler
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .sample(Needs::default(), self.started.elapsed());
         }
     }
@@ -599,8 +591,7 @@ impl DockHooks for RuntimeResources {
         if let super::actions::ActionPlan::Cooler(action) = super::actions::plan_action(action)? {
             let handler = self
                 .cooler_handler
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .clone()
                 .ok_or("Cooler host routing is unavailable")?;
             return handler(action);
@@ -608,7 +599,7 @@ impl DockHooks for RuntimeResources {
         if self.fake {
             super::actions::plan_action(action).map(|_| ())
         } else {
-            self.actions.lock().unwrap().execute(action)
+            self.actions.lock_or_recover().execute(action)
         }
     }
 }

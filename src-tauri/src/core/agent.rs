@@ -1,5 +1,6 @@
 //! Agent-neutral, validated host operations. No device actions, shell execution,
 //! authentication files or direct client-side storage access are exposed here.
+use super::sync::{MutexExt, RecoverResult};
 use super::{
     app::App,
     error::{CoreError, CoreResult},
@@ -305,7 +306,7 @@ struct EditorLease<'a> {
 }
 impl Drop for EditorLease<'_> {
     fn drop(&mut self) {
-        let mut control = self.app.agent.control.lock().unwrap();
+        let mut control = self.app.agent.control.lock_or_recover();
         if control
             .lease
             .as_ref()
@@ -327,10 +328,10 @@ impl App {
             .unwrap_or(false)
     }
     pub fn agent_busy(&self) -> bool {
-        self.agent.control.lock().unwrap().lease.is_some()
+        self.agent.control.lock_or_recover().lease.is_some()
     }
     pub fn agent_begin_close(&self) -> CoreResult<()> {
-        let control = self.agent.control.lock().unwrap();
+        let control = self.agent.control.lock_or_recover();
         if control.lease.is_some() {
             return Err(busy());
         }
@@ -338,7 +339,7 @@ impl App {
         Ok(())
     }
     pub fn agent_editor_present(&self, present: bool) -> CoreResult<Value> {
-        let mut control = self.agent.control.lock().unwrap();
+        let mut control = self.agent.control.lock_or_recover();
         control.editor_present = present;
         if !present {
             if let Some(lease) = &mut control.lease {
@@ -349,7 +350,7 @@ impl App {
         Ok(json!({"present":present}))
     }
     pub fn agent_editor_ready(&self, lease_id: String, saved: bool) -> CoreResult<Value> {
-        let mut control = self.agent.control.lock().unwrap();
+        let mut control = self.agent.control.lock_or_recover();
         let lease = control
             .lease
             .as_mut()
@@ -370,7 +371,7 @@ impl App {
         Ok(json!({"accepted":true}))
     }
     fn agent_lease(&self) -> CoreResult<EditorLease<'_>> {
-        let mut control = self.agent.control.lock().unwrap();
+        let mut control = self.agent.control.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) || control.lease.is_some() {
             return Err(busy());
         }
@@ -387,7 +388,7 @@ impl App {
         };
         if present {
             self.events.agent("prepare", json!({"leaseId":id}));
-            let control = self.agent.control.lock().unwrap();
+            let control = self.agent.control.lock_or_recover();
             let (control, timeout) = self
                 .agent
                 .changed
@@ -396,7 +397,7 @@ impl App {
                         .as_ref()
                         .is_some_and(|lease| lease.id == id && lease.saved.is_none())
                 })
-                .unwrap();
+                .recover();
             let saved = control
                 .lease
                 .as_ref()
@@ -561,7 +562,7 @@ impl App {
             .map_err(|_| CoreError::coded("profiles", "Dock layout is unavailable."))
     }
     fn agent_apply(&self, changes: Changes) -> CoreResult<Value> {
-        let _serial = self.agent.serial.try_lock().map_err(|_| busy())?;
+        let _serial = self.agent.serial.try_lock_or_recover().ok_or_else(busy)?;
         let lease = self.agent_lease()?;
         let (before, revision) = self.agent_snapshot()?;
         if revision != changes.expected_revision {
@@ -571,7 +572,7 @@ impl App {
         let result = self.save_profiles_if_revision(state, revision)?;
         let revision = result["revision"].as_str().unwrap().to_string();
         let undo_token = token("undo");
-        *self.agent.undo.lock().unwrap() = Some(Undo {
+        *self.agent.undo.lock_or_recover() = Some(Undo {
             token: undo_token.clone(),
             revision: revision.clone(),
             state: before,
@@ -585,10 +586,10 @@ impl App {
         )
     }
     fn agent_undo(&self, request: UndoRequest) -> CoreResult<Value> {
-        let _serial = self.agent.serial.try_lock().map_err(|_| busy())?;
+        let _serial = self.agent.serial.try_lock_or_recover().ok_or_else(busy)?;
         let lease = self.agent_lease()?;
         let state = {
-            let undo = self.agent.undo.lock().unwrap();
+            let undo = self.agent.undo.lock_or_recover();
             let undo = undo
                 .as_ref()
                 .filter(|undo| undo.token == request.undo_token)
@@ -604,7 +605,7 @@ impl App {
             undo.state.clone()
         };
         let result = self.save_profiles_if_revision(state, request.expected_revision)?;
-        *self.agent.undo.lock().unwrap() = None;
+        *self.agent.undo.lock_or_recover() = None;
         self.events.agent(
             "committed",
             json!({"leaseId":lease.id,"state":result["state"],"revision":result["revision"]}),

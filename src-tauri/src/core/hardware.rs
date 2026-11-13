@@ -1,5 +1,6 @@
 //! One demand-driven hardware collector. Native calls run only on its own
 //! thread; readers and worker exchanges never take a lock held by a source.
+use super::sync::{MutexExt, RecoverResult};
 use super::sensors::{self, NativeSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -525,7 +526,7 @@ impl Service {
         demand.validate()?;
         let index = consumer_index(consumer)?;
         let now = Instant::now();
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock_or_recover();
         if state.stopped {
             return Err("Shared hardware is stopped".into());
         }
@@ -546,7 +547,7 @@ impl Service {
         let _ = self.update_demand(consumer, Demand::default());
     }
     pub fn snapshot(&self) -> Option<Snapshot> {
-        let state = self.shared.state.lock().unwrap();
+        let state = self.shared.state.lock_or_recover();
         if state.stopped || !state.union(Instant::now()).active() {
             return None;
         }
@@ -557,7 +558,7 @@ impl Service {
             .cloned()
     }
     pub fn status(&self) -> Value {
-        let state = self.shared.state.lock().unwrap();
+        let state = self.shared.state.lock_or_recover();
         let now = Instant::now();
         let union = state.union(now);
         let demand = |index: usize| {
@@ -577,7 +578,7 @@ impl Service {
         if !cfg!(debug_assertions) || !self.fake {
             return Err("Hardware failure injection requires a debug fake source".into());
         }
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock_or_recover();
         if state.stopped {
             return Err("Shared hardware is stopped".into());
         }
@@ -592,14 +593,14 @@ impl Service {
     }
     pub fn shutdown(&self) {
         {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = self.shared.state.lock_or_recover();
             state.stopped = true;
             state.interests = [None, None];
             state.snapshot = None;
             state.revision = state.revision.wrapping_add(1);
         }
         self.shared.wake.notify_one();
-        if let Some(thread) = self.thread.lock().unwrap().take() {
+        if let Some(thread) = self.thread.lock_or_recover().take() {
             // No native source can hold UI/status locks. Do not force-stop a DLL
             // call or wait without a bound when the driver itself is stuck.
             let until = Instant::now() + Duration::from_millis(250);
@@ -623,7 +624,7 @@ fn run(shared: Arc<Shared>, source: Box<dyn Source>, generation: u64) {
     let mut last_failure = false;
     loop {
         let (demand, revision, failed) = {
-            let s = shared.state.lock().unwrap();
+            let s = shared.state.lock_or_recover();
             if s.stopped {
                 drop(s);
                 collector.stop();
@@ -636,8 +637,12 @@ fn run(shared: Arc<Shared>, source: Box<dyn Source>, generation: u64) {
             collector.last_at = None;
             last_failure = failed;
         }
-        let sampled = collector.sample(started.elapsed(), now_ms(), failed);
-        let mut state = shared.state.lock().unwrap();
+        // A crash inside one sensor read loses that sample only; the collector keeps running.
+        let sampled = super::sync::guarded("hardware sample", || {
+            collector.sample(started.elapsed(), now_ms(), failed)
+        })
+        .flatten();
+        let mut state = shared.state.lock_or_recover();
         if state.stopped {
             drop(state);
             collector.stop();
@@ -666,14 +671,14 @@ fn run(shared: Arc<Shared>, source: Box<dyn Source>, generation: u64) {
                 let _ = shared
                     .wake
                     .wait_timeout(state, duration.max(Duration::from_millis(1)))
-                    .unwrap();
+                    .recover();
             }
             None => {
-                drop(shared.wake.wait(state).unwrap());
+                drop(shared.wake.wait(state).recover());
             }
         }
     }
-    shared.state.lock().unwrap().diagnostics = collector.diagnostics;
+    shared.state.lock_or_recover().diagnostics = collector.diagnostics;
 }
 
 #[cfg(test)]

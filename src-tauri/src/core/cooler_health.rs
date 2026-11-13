@@ -1,5 +1,6 @@
 //! Opt-out local diagnostics. Whitelisted counters only; never device commands,
 //! identifiers, media paths, account data, raw RPC payloads or arbitrary errors.
+use super::sync::MutexExt;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::PathBuf;
@@ -54,7 +55,7 @@ impl Diagnostics {
         self.enabled.load(Ordering::SeqCst)
     }
     pub fn set_enabled(&self, enabled: bool) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         self.epoch.fetch_add(1, Ordering::SeqCst);
         self.enabled.store(enabled, Ordering::SeqCst);
         inner.next_sample = Instant::now();
@@ -65,13 +66,13 @@ impl Diagnostics {
         inner.status = json!({"state":if enabled{"waiting"}else{"disabled"},"code":if enabled{"waiting_sample"}else{"diagnostics_off"},"message":if enabled{"Waiting for a connection sample"}else{"Connection diagnostics are off"},"lastSampleAt":null,"pnpSampledAt":null,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures});
     }
     pub fn status(&self) -> Value {
-        self.inner.lock().unwrap().status.clone()
+        self.inner.lock_or_recover().status.clone()
     }
     /// A completed engine transaction is evidence only, never a health update or
     /// a command. Serialize persistence with opt-out, and keep the same migration
     /// ownership gate as periodic health samples.
     pub fn record_trace(&self, value: &Value) {
-        let _inner = self.inner.lock().unwrap();
+        let _inner = self.inner.lock_or_recover();
         if !self.enabled()
             || !self
                 .path
@@ -91,7 +92,7 @@ impl Diagnostics {
         if !self.enabled() {
             return None;
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if !self.enabled() || now < inner.next_sample {
             return None;
         }
@@ -113,7 +114,7 @@ impl Diagnostics {
         pnp: Option<Value>,
         now: Instant,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if !self.enabled() || ticket.epoch != self.epoch.load(Ordering::SeqCst) {
             return;
         }

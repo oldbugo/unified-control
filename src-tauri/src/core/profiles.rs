@@ -5,6 +5,7 @@
 //! crash between files therefore recovers one complete state, never a mixed page set.
 //! At the first successful load in a process, a validated full snapshot is kept as
 //! the startup backup. A corrupt current file never replaces that backup.
+use super::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -351,6 +352,19 @@ pub struct ProfileStore {
 }
 
 impl ProfileStore {
+    /// The in-memory copy. After a crash while it was held, a save may have reached disk without
+    /// updating memory (or the reverse), so the cached layout is dropped and read again from the
+    /// journaled files, with a new revision so stale editors must re-read. A worker replica has no
+    /// files: it keeps its last whole snapshot (each update replaces it in one assignment).
+    fn memory(&self) -> std::sync::MutexGuard<'_, Memory> {
+        let replica = self.replica;
+        self.memory.lock_or_reset(|memory| {
+            if !replica {
+                memory.state = None;
+                memory.revision = new_id("revision");
+            }
+        })
+    }
     /// `base` is UC_HOME, not its profiles subdirectory. This constructor does no I/O.
     pub fn new(base: impl Into<PathBuf>) -> Self {
         Self {
@@ -376,7 +390,7 @@ impl ProfileStore {
             return Err(invalid("Only a worker replica can be replaced"));
         }
         state.validate()?;
-        let mut memory = self.memory.lock().unwrap();
+        let mut memory = self.memory();
         memory.state = Some(state);
         memory.revision = new_id("revision");
         Ok(())
@@ -385,18 +399,18 @@ impl ProfileStore {
         &self.dir
     }
     pub fn recovery_notice(&self) -> Option<String> {
-        self.memory.lock().unwrap().notice.clone()
+        self.memory().notice.clone()
     }
     pub fn state(&self) -> Result<ProfileState> {
         self.load()
     }
     pub fn state_with_revision(&self) -> Result<(ProfileState, String)> {
-        let mut memory = self.memory.lock().unwrap();
+        let mut memory = self.memory();
         let state = self.load_locked(&mut memory)?;
         Ok((state, memory.revision.clone()))
     }
     pub fn load(&self) -> Result<ProfileState> {
-        self.load_locked(&mut self.memory.lock().unwrap())
+        self.load_locked(&mut self.memory())
     }
 
     /// Every successful call persists the whole validated state; no separate Save action exists.
@@ -423,7 +437,7 @@ impl ProfileStore {
             return Err(invalid("Worker profiles are read-only"));
         }
         state.validate()?;
-        let mut memory = self.memory.lock().unwrap();
+        let mut memory = self.memory();
         self.load_locked(&mut memory)?; // establish a valid startup backup before the first edit
         if expected.is_some_and(|revision| revision != memory.revision) {
             return Err(invalid(
@@ -1017,5 +1031,24 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .ends_with(".tmp")));
+    }
+    #[test]
+    fn a_crash_while_the_layout_is_held_reloads_it_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(ProfileStore::new(dir.path()));
+        let (saved, revision) = store.state_with_revision().unwrap();
+        let held = store.clone();
+        let _ = std::thread::spawn(move || {
+            let mut memory = held.memory.lock().unwrap();
+            // a half-finished update: memory no longer matches the files
+            memory.state.as_mut().unwrap().profiles.clear();
+            panic!("crash mid-update");
+        })
+        .join();
+        assert!(store.memory.is_poisoned());
+        let (reloaded, new_revision) = store.state_with_revision().unwrap();
+        assert_eq!(reloaded, saved, "the files, not the half-updated memory, are used");
+        assert_ne!(new_revision, revision, "editors holding the old revision must re-read");
+        assert!(!store.memory.is_poisoned());
     }
 }

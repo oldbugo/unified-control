@@ -1,5 +1,6 @@
 //! settings.json: the app's settings, saved on every change (no Save button). Copied from CoolerScreen's
 //! `core/settings.rs` (the `SettingsStore` is unchanged); the cooler fields are not here, only Unified Control's own.
+use super::sync::MutexExt;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -70,7 +71,7 @@ impl SettingsStore {
         &self.file
     }
     pub fn set_on_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        *self.on_change.lock().unwrap() = Some(Box::new(f));
+        *self.on_change.lock_or_recover() = Some(Box::new(f));
     }
 
     /// Current settings. Missing file: defaults. Unreadable/unparsable file: retried briefly, then the last good
@@ -83,7 +84,7 @@ impl SettingsStore {
                 Ok(t) => {
                     if let Ok(v) = serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')) {
                         let s = sanitize(&v);
-                        *self.last_good.lock().unwrap() = Some(s.clone());
+                        *self.last_good.lock_or_recover() = Some(s.clone());
                         return s;
                     }
                 }
@@ -96,7 +97,7 @@ impl SettingsStore {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         eprintln!("settings.json could not be read; using the last good settings");
-        if let Some(s) = self.last_good.lock().unwrap().clone() {
+        if let Some(s) = self.last_good.lock_or_recover().clone() {
             return s;
         }
         let mut bad = self.file.as_os_str().to_owned();
@@ -107,7 +108,7 @@ impl SettingsStore {
 
     /// Sanitise and write (as 1.2 `save`). Returns what was written.
     pub fn save(&self, s: &Value) -> std::io::Result<Settings> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.lock.lock_or_recover();
         self.save_locked(s)
     }
 
@@ -117,8 +118,8 @@ impl SettingsStore {
             std::fs::create_dir_all(d)?;
         }
         super::js::write_atomic(&self.file, super::js::pretty(&clean.0).as_bytes())?;
-        *self.last_good.lock().unwrap() = Some(clean.clone());
-        if let Some(f) = self.on_change.lock().unwrap().as_ref() {
+        *self.last_good.lock_or_recover() = Some(clean.clone());
+        if let Some(f) = self.on_change.lock_or_recover().as_ref() {
             f();
         }
         Ok(clean)
@@ -126,7 +127,7 @@ impl SettingsStore {
 
     /// Load, change, save atomically with respect to other `update` calls.
     pub fn update(&self, f: impl FnOnce(&mut Value)) -> std::io::Result<Settings> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.lock.lock_or_recover();
         let mut v = self.load().0;
         f(&mut v);
         self.save_locked(&v)
