@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.1 — 2026-11-13
+
+Fix a half update. The updater waited only for the main UC process. The dock
+worker runs from the same exe and can still be closing, so the installer could
+not replace UnifiedControl.exe while the new cooler engine was installed. The
+updater now waits up to 30 s until no other process runs from the installed
+exe or its agent-request copy. It never ends a process. If the files are still
+in use, it installs nothing and starts the current version again.
+
 ## 0.11.0 — 2026-11-13
 
 Cooler engine 4.22.0 adds the same crash recovery as UC 0.10.0. A fault in one
