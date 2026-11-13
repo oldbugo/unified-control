@@ -11,6 +11,11 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const LOG_LIMIT: u64 = 2 * 1024 * 1024;
+/// The change record keeps only health transitions, Live stops and changes of
+/// connect outcome. It grows slowly, so it keeps weeks of history where the
+/// full health log keeps about two days. Same two-file rotation.
+const CHANGES_LIMIT: u64 = 512 * 1024;
+const CHANGES_FILE: &str = "connection-changes.jsonl";
 pub struct Ticket {
     epoch: u64,
     pub sample_pnp: bool,
@@ -25,6 +30,7 @@ struct Inner {
     pnp_sampled_at: Option<String>,
     last_success: Option<String>,
     failures: u64,
+    connect_outcome: String,
 }
 pub struct Diagnostics {
     enabled: AtomicBool,
@@ -47,6 +53,7 @@ impl Diagnostics {
                 pnp_sampled_at: None,
                 last_success: None,
                 failures: 0,
+                connect_outcome: String::new(),
             }),
             path,
         }
@@ -63,7 +70,22 @@ impl Diagnostics {
         inner.signature.clear();
         inner.pnp = json!({"available":false});
         inner.pnp_sampled_at = None;
+        inner.connect_outcome.clear();
+        if enabled && self.may_log() {
+            let line = json!({"ts":super::super::device::log::iso_now(),"kind":"diagnostics_on","appVersion":env!("CARGO_PKG_VERSION")});
+            let _ = append(&self.changes_path(), &line, CHANGES_LIMIT);
+        }
         inner.status = json!({"state":if enabled{"waiting"}else{"disabled"},"code":if enabled{"waiting_sample"}else{"diagnostics_off"},"message":if enabled{"Waiting for a connection sample"}else{"Connection diagnostics are off"},"lastSampleAt":null,"pnpSampledAt":null,"lastSuccessAt":inner.last_success,"consecutiveFailures":inner.failures});
+    }
+    /// Only the completed migration marker authorizes disk logging inside the
+    /// worker folder.
+    fn may_log(&self) -> bool {
+        self.path
+            .parent()
+            .is_some_and(|parent| parent.join("migration.json").is_file())
+    }
+    fn changes_path(&self) -> PathBuf {
+        self.path.with_file_name(CHANGES_FILE)
     }
     pub fn status(&self) -> Value {
         self.inner.lock_or_recover().status.clone()
@@ -72,13 +94,8 @@ impl Diagnostics {
     /// a command. Serialize persistence with opt-out, and keep the same migration
     /// ownership gate as periodic health samples.
     pub fn record_trace(&self, value: &Value) {
-        let _inner = self.inner.lock_or_recover();
-        if !self.enabled()
-            || !self
-                .path
-                .parent()
-                .is_some_and(|parent| parent.join("migration.json").is_file())
-        {
+        let mut inner = self.inner.lock_or_recover();
+        if !self.enabled() || !self.may_log() {
             return;
         }
         let Some(trace) = sanitize_trace(value) else {
@@ -87,6 +104,19 @@ impl Diagnostics {
         let line =
             json!({"ts":super::super::device::log::iso_now(),"kind":"live_steps","trace":trace});
         let _ = append(&self.path, &line, LOG_LIMIT);
+        // Keep every stop, and a connect only when its outcome differs from
+        // the previous connect (first failing step, or "ok").
+        let keep = if trace["operation"] == "connect" {
+            let outcome = connect_outcome(&trace);
+            let changed = outcome != inner.connect_outcome;
+            inner.connect_outcome = outcome;
+            changed
+        } else {
+            true
+        };
+        if keep {
+            let _ = append(&self.changes_path(), &line, CHANGES_LIMIT);
+        }
     }
     pub fn begin(&self, now: Instant) -> Option<Ticket> {
         if !self.enabled() {
@@ -154,21 +184,28 @@ impl Diagnostics {
         let due = inner
             .last_log
             .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(60));
-        // Before first enable, health stays in memory. Only the completed
-        // migration marker authorizes disk logging inside the worker folder.
-        if (changed || due)
-            && self
-                .path
-                .parent()
-                .is_some_and(|parent| parent.join("migration.json").is_file())
-        {
+        // Before first enable, health stays in memory.
+        if (changed || due) && self.may_log() {
             let line = json!({"ts":timestamp,"kind":if changed{"transition"}else{"snapshot"},"health":inner.status});
+            if changed {
+                let _ = append(&self.changes_path(), &line, CHANGES_LIMIT);
+            }
             if append(&self.path, &line, LOG_LIMIT).is_ok() {
                 inner.signature = signature;
                 inner.last_log = Some(now);
             }
         }
     }
+}
+/// "ok", or the first failing step and its result, of a sanitized connect trace.
+fn connect_outcome(trace: &Value) -> String {
+    trace["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["result"] != "ok"))
+        .map_or_else(
+            || "ok".to_string(),
+            |step| format!("{}:{}", step["step"], step["result"]),
+        )
 }
 /// Reject the entire transaction when an unreviewed field or value appears.
 /// In particular, arbitrary transport errors and firmware replies never become
@@ -837,7 +874,9 @@ mod tests {
             LOG_LIMIT - 1
         );
         assert!(std::fs::metadata(&path).unwrap().len() < LOG_LIMIT);
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        // migration.json, the health log and its .old, and the change record.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
+        assert!(path.with_file_name(CHANGES_FILE).is_file());
         let line: Value =
             serde_json::from_str(std::fs::read_to_string(path).unwrap().trim()).unwrap();
         assert_eq!(line["kind"], "live_steps");
@@ -1029,6 +1068,57 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&log).unwrap(), text);
         assert_eq!(d.status()["code"], "diagnostics_off");
+    }
+    #[test]
+    fn change_record_keeps_start_transitions_stops_and_new_connect_outcomes_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("connection-health.jsonl");
+        let changes = dir.path().join(CHANGES_FILE);
+        let d = Diagnostics::new(log.clone());
+        d.set_enabled(true);
+        d.record_trace(&trace());
+        assert!(!changes.exists(), "no record before the migration marker");
+        std::fs::write(dir.path().join("migration.json"), b"{}").unwrap();
+        d.set_enabled(true);
+        // Same failing connect three times: one change line, three log lines.
+        for _ in 0..3 {
+            d.record_trace(&trace());
+        }
+        let mut good = trace();
+        good["steps"][1]["result"] = json!("ok");
+        d.record_trace(&good);
+        d.record_trace(&good);
+        let mut stop = trace();
+        stop["operation"] = json!("stop");
+        d.record_trace(&stop);
+        // Same failing health twice: one transition.
+        let now = Instant::now();
+        for n in 0..2u64 {
+            let at = now + Duration::from_secs(10 * n);
+            let t = d.begin(at).unwrap();
+            d.finish(t, &worker(), Ok(probe()), None, at);
+        }
+        let kinds: Vec<String> = std::fs::read_to_string(&changes)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let v: Value = serde_json::from_str(line).unwrap();
+                format!("{}:{}", v["kind"].as_str().unwrap(), v["trace"]["operation"].as_str().unwrap_or("-"))
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "diagnostics_on:-",
+                "live_steps:connect",
+                "live_steps:connect",
+                "live_steps:stop",
+                "transition:-"
+            ]
+        );
+        assert!(std::fs::read_to_string(&changes).unwrap().contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 7);
+        assert_eq!(connect_outcome(&trace()), "\"end_stream\":\"write_timeout\"");
     }
     #[test]
     fn rotation_is_bounded_to_two_files_and_fake_probe_deterministic() {
