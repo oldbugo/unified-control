@@ -9,8 +9,10 @@ The user is not a programmer: report in plain language.
 ## Standing user instructions (read in full at every session start)
 
 - 2026-11-13: UC is the app we maintain from now on; the standalone CoolerScreen app is legacy. There is no rule to keep
-  files copied from CoolerScreen identical ("I have no attachment to keep the files identical"). The user prefers one
-  repository where one is enough; any repository restructure is its own task, decided with the user.
+  files copied from CoolerScreen identical ("I have no attachment to keep the files identical"). Do not keep two copies
+  of one thing where one is enough.
+- 2026-11-13: Keep UC and CoolerScreen as separate repositories ("having two separate repositories might work well ...
+  I don't want the one repo to get messier and messier"). No merge of the repositories; UC pins the cooler engine.
 - 2026-11-13: Crash handling uplift approved: a fault in one device program should be recovered, not take the whole program
   down ("Yes, let's do uplift").
 - 2026-11-13: "Never close CoolerScreen" was never a hard requirement. The intent is correct behaviour (the standalone app
