@@ -9,7 +9,8 @@ Devices are opt-in. Settings save as you change them. Quit stops the devices saf
 
 ## State on 2026-11-13
 
-- Installed UC: 0.9.2. Source: 8c194f2. Tag: v0.9.2.
+- Installed UC: 0.10.0. Source: 0ee343c. Tag: v0.10.0. The dock works on 0.10.0 (user-reported 2026-11-13).
+- Crash handling: UC recovers from a fault in one part. The cooler engine 4.21.1 does not yet; UC restarts it.
 - Cooler engine: 4.21.1. Source: 77c9086.
 - The dock is connected.
 - The cooler worker is running. Cooler Live is disconnected with a write_timeout error. The cause is open ([issue 9](https://github.com/oldbugo/unified-control/issues/9)).
