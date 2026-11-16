@@ -1,6 +1,7 @@
 // Ulanzi AU05 Vibe Key: the General switch, the Home summary and the device page.
 // Settings stored on the key are sent as they are changed (no Save button). UC's own settings
 // (the switch and a UC action per key) are saved in settings.json at once.
+import {ICON as IC,actionIcon,SHORT,SECTIONS} from './au05-icons.js';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="7.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16.5" cy="12" r="1.5"/><path d="M12 4v3"/></svg>';
 export const AU05_ICON=ICON;
@@ -36,6 +37,8 @@ export class Au05Panel{
     this.readError=false;this.container=null;this.settingsContainer=null;
     this.note='';this.noteAttention=false;this.sending=0;this.polling=false;this.epoch=0;
     this.selected='k1';this.lastFlashAt=null;this.lastChange={};
+    // View-only state: which mode tab a panel shows, the menu card picker, profile renaming.
+    this.modeView={};this.turnView=null;this.menuPick=null;this.renaming=false;this.dragPath=null;
     this.timer=setInterval(()=>this.refresh(),1000);
   }
   get enabled(){return this.state?.enabled===true;}
@@ -82,7 +85,18 @@ export class Au05Panel{
       container.addEventListener('keydown',e=>{
         const z=e.target.closest?.('[data-au05-zone]');
         if(z&&(e.key==='Enter'||e.key===' ')){e.preventDefault();this.select(z.dataset.au05Zone);}
+        if(e.key==='Escape'&&this.menuPick){this.menuPick=null;this.paint(true);}
+        if(e.key==='Enter'&&e.target.matches?.('[data-au05-profile-name]'))e.target.blur();
       });
+      container.addEventListener('focusout',e=>{if(e.target.matches?.('[data-au05-profile-name]')&&this.renaming){this.renaming=false;setTimeout(()=>this.paint(true),0);}});
+      const parent=p=>String(p).split('.').slice(0,-1).join('.');
+      const rowOf=e=>e.target.closest?.('[data-qm-row]');
+      container.addEventListener('dragstart',e=>{const g=e.target.closest?.('[data-qm-drag]');if(!g)return;this.dragPath=g.dataset.qmDrag;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',this.dragPath);rowOf(e)?.classList.add('is-dragging');});
+      container.addEventListener('dragover',e=>{const r=rowOf(e);if(!r||this.dragPath==null||parent(r.dataset.qmRow)!==parent(this.dragPath))return;e.preventDefault();
+        for(const x of container.querySelectorAll('.au05-menu-row.drop-target'))if(x!==r)x.classList.remove('drop-target');r.classList.add('drop-target');});
+      container.addEventListener('drop',e=>{const r=rowOf(e);const from=this.dragPath;this.dragPath=null;if(!r||from==null||parent(r.dataset.qmRow)!==parent(from))return;e.preventDefault();
+        const to=Number(r.dataset.qmRow.split('.').pop());this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,from);if(i===to||!l[i])return;const [x]=l.splice(i,1);l.splice(to,0,x);});});
+      container.addEventListener('dragend',()=>{this.dragPath=null;for(const x of container.querySelectorAll('.is-dragging,.drop-target'))x.classList.remove('is-dragging','drop-target');});
     }
     this.paint(true);this.refresh();this.claudeRefresh();
   }
@@ -98,7 +112,7 @@ export class Au05Panel{
   }
   select(zone){
     if(!Object.hasOwn(ZONES,zone))return;
-    this.selected=zone;this.paint(true);
+    this.selected=zone;this.modeView={};this.turnView=null;this.paint(true);
     this.container?.querySelector(`.au05-diagram [data-au05-zone="${zone}"][tabindex]`)?.focus();
   }
   // A short flash on the diagram for each new key or knob message, and for each action UC ran on a hotkey.
@@ -127,11 +141,11 @@ export class Au05Panel{
     if(!root.firstChild)root.innerHTML=this.skeleton();
     const chip=root.querySelector('#au05-page-state'),msg=root.querySelector('#au05-page-message');
     const sum=this.summary();chip.textContent=sum.status;msg.textContent=s.message||sum.description;
-    root.querySelector('#au05-battery').textContent=s.battery?`${s.battery.percent} % (${(s.battery.millivolts/1000).toFixed(2)} V)`:'Not read yet';
+    root.querySelector('#au05-battery').textContent=s.battery?`${s.battery.percent} %`:'—';root.querySelector('#au05-battery').parentElement.title=s.battery?`Battery ${s.battery.percent} % (${(s.battery.millivolts/1000).toFixed(2)} V)`:'Battery: not read yet';
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
+    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(force||(sig!==this.lastSig&&!typing)){
@@ -142,71 +156,107 @@ export class Au05Panel{
     this.flash();
   }
   skeleton(){
-    return `<div class="page-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1><p>Three keys, a knob and a microphone. Changes go to the key as you make them.</p></div><span id="au05-page-state" class="chip"></span></div>
-    <p class="au05-status"><span id="au05-page-message"></span> · Battery <span id="au05-battery"></span></p>
-    <p id="au05-note" class="hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+    return `<div class="page-heading au05-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1></div><div class="au05-head-pills"><span class="au05-pill" title="Battery">${IC.power}<span id="au05-battery"></span></span><span id="au05-page-state" class="chip"></span></div></div>
+    <p class="au05-status"><span id="au05-page-message"></span></p>
+    <p id="au05-note" class="au05-note${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
     <div id="au05-controls"></div>
-    <div class="settings-section-heading"><h2>Live events</h2><p>Key and knob messages as the key sends them. The newest is first.</p></div>
-    <section class="settings-list"><ul id="au05-events" class="au05-events" aria-live="polite"></ul></section>
-    <div class="settings-section-heading"><h2>Coming later</h2></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Light follows Claude Code</strong><p>The light will show when Claude is working or needs your approval. This is planned and not active.</p></div><span class="chip">Planned</span></div></section>`;
+    <details class="au05-box au05-events-box"><summary><span class="au05-box-title"><span class="au05-box-icon">${IC.keyboard}</span>Recent events</span></summary><ul id="au05-events" class="au05-events" aria-live="polite"></ul></details>`;
   }
   eventsMarkup(){
     const ev=this.state?.events||[];
-    if(!ev.length)return '<li class="hint">No events yet. Press a key or turn the knob.</li>';
+    if(!ev.length)return '<li class="au05-muted">No events yet.</li>';
     return ev.slice(0,20).map(e=>`<li><span>${esc(new Date(e.at).toLocaleTimeString('en-AU',{hour12:false}))}</span> <strong>${esc(e.control)}</strong> ${e.pressed?'down':'up'} <span class="hint">${esc(e.code)}</span>${e.action?` <span class="chip">${esc(e.action)}</span>`:''}</li>`).join('');
   }
   // Every setting can be sent; the ones not yet checked on the real key carry an "Untested" label.
-  untested(name){return this.state?.checked?.[name]===true?'':' <span class="chip attention">Untested</span>';}
+  untested(name){return this.state?.checked?.[name]===true?'':' <span class="chip attention au05-untested">Untested</span>';}
   controlsMarkup(){
     const s=this.state||{};const off=!this.native||s.enabled!==true||this.sending>0;
     const dis=off?' disabled':'';
+    const native=this.native?'':' disabled';
+    const live=this.native&&s.enabled===true?'':' disabled';
     const opt=(v,label,sel)=>`<option value="${esc(v)}"${String(v)===String(sel)?' selected':''}>${esc(label)}</option>`;
-    const raw=v=>v==null?'':` <span class="hint">raw ${esc(v)}</span>`;
+    const raw=v=>v==null?'':`<span class="au05-raw">${esc(v)}</span>`;
     const cat=s.catalogue?.actions||[];
+    const m=s.menu||{};
+    const keyOf=id=>(s.keys||[]).find(k=>k.key===id);
+    const shortName=e=>SHORT[e.id]||e.label.replace(/\s*\(.*\)$/,'');
+    const compactKeys=k=>String(k||'').replace(/\s*\+\s*/g,'+');
     const actionName=a=>{
       if(!a||a.kind==='none')return 'Nothing';
-      if(a.kind==='quickMenu')return 'Open quick menu';
+      if(a.kind==='quickMenu')return 'Quick menu';
       if(a.kind==='hotkey'){const app=(s.catalogue?.apps||[]).find(x=>x.id===a.app);return a.value?`${a.value}${app?` in ${app.name}`:''}`:'Custom (not set)';}
       const e=cat.find(x=>x.id===a.kind);return e?`${e.group==='Windows / media'?'':`${e.group} `}${e.label}`:a.kind;
     };
-    const keyOf=id=>(s.keys||[]).find(k=>k.key===id);
+    const mark=sec=>`<span class="au05-mark" aria-hidden="true" style="--hue:${sec.hue}">${sec.mark?esc(sec.mark):IC[sec.glyph]}</span>`;
+    // One action card. `attrs` carries the data attributes of the picker it belongs to.
+    const card=(attrs,value,icon,name,selected,{keys='',unverified=false,title=''}={})=>
+      `<button type="button" class="au05-card${selected?' is-selected':''}" ${attrs} data-value="${esc(value)}" aria-pressed="${selected}" title="${esc(title||name)}"${native}>
+        <span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span>
+        ${keys?`<span class="au05-kbd">${esc(keys)}</span>`:''}${unverified?'<span class="au05-unv" aria-label="unverified">?</span>':''}</button>`;
+    // The catalogue as card sections (Claude, ChatGPT, Target app, Windows & media), plus extra sections.
+    const catalogueSections=(attrs,prefix,selectedValue,extra='')=>`<div class="au05-sections">${SECTIONS.filter(sec=>cat.some(e=>e.group===sec.group)).map(sec=>
+      `<section class="au05-section"><h3 class="au05-sec">${mark(sec)}<span class="au05-sec-title">${esc(sec.title)}</span></h3><div class="au05-grid">${cat.filter(e=>e.group===sec.group).map(e=>
+        card(attrs,`${prefix}${e.id}`,actionIcon(e.id),shortName(e),selectedValue===`${prefix}${e.id}`,{
+          keys:e.keys&&e.keys!==e.label&&e.keys!==shortName(e)&&e.keys!=='Follows the target app'&&!/^(Play|Next|Previous|Volume|Mute)/.test(e.keys)?e.keys:'',
+          unverified:e.status!=='verified',title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}${extra}</div>`;
+    const pill=(text,kind='',cls='')=>`<span class="au05-pill ${kind} ${cls}">${esc(text)}</span>`;
+
+    // ---- the side panel for one key ----
     const keyEditor=k=>{
       const a=s.actions?.[k.key]||{kind:'none',value:'',app:''};
       const job=k.job;
-      // The choice shows what the user chose, even while the key change is still waiting.
       const pendingMode=job&&job.state!=='done'&&job.state!=='failed'?(job.label===k.ownCode?'uc':job.label?.startsWith('Factory')?'factory':'keys'):null;
       const effective=pendingMode||k.mode;
       const value=(effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
-      const groups=[...new Set(cat.map(e=>e.group))];
-      const options=`${value==='unknown'?opt('unknown','Not read yet: choose to set it','unknown'):''}
-        <optgroup label="Unified Control action">${opt('uc:none','Nothing (harmless: the key does nothing)',value)}${opt('uc:quickMenu','Open quick menu',value)}${opt('uc:hotkey','Custom shortcut…',value)}</optgroup>
-        ${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(e=>e.group===g).map(e=>opt(`uc:${e.id}`,`${e.label}${e.keys&&e.keys!==e.label?` (${e.keys})`:''}${e.status==='verified'?'':' · unverified'}`,value)).join('')}</optgroup>`).join('')}
-        <optgroup label="Stored on the key (works without Unified Control)">${opt('keys','Types keys…',value)}${opt('factory',`Factory default (${k.factory})`,value)}</optgroup>`;
-      const entry=cat.find(e=>e.id===a.kind);
-      const custom=value==='uc:hotkey'?`<div class="au05-key-controls"><input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}">
-        <select data-au05-action-app="${k.key}" aria-label="Send to">${opt('','Send to the focused app',a.app||'')}${(s.catalogue?.apps||[]).map(x=>opt(x.id,`Bring ${x.name} forward first${x.verified?'':' (unverified)'}`,a.app||'')).join('')}</select></div>`:'';
-      const hot=value.startsWith('uc:')&&a.kind!=='none'?(k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:''):'';
-      const jobLine=job?`<p class="au05-job${job.state==='failed'?' attention':''}" role="status">${job.state==='done'?'Key updated.':esc(job.message)}${job.state==='failed'?` <button class="btn" type="button" data-au05-retry="${k.key}">Try again</button>`:''}</p>`:'';
-      // An action without the key typing its own code yet (for example after a restart): offer to finish it.
-      const finish=!job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<p class="attention">The key does not type ${esc(k.ownCode)} yet, so the action cannot run. <button class="btn" type="button" data-au05-retry="${k.key}">Set it up</button></p>`:'';
-      // The knob press chooses in the menu only when it types its own code (F19).
+      const view=this.modeView[k.key]||(value==='keys'?'keys':value==='factory'?'factory':'uc');
+      const seg=(id,label)=>`<button type="button" data-au05-segment="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
+      const pills=[
+        k.checked?'':`<span class="chip attention au05-untested">Untested</span>`,
+        value.startsWith('uc:')&&a.kind!=='none'&&k.hotkey?.state==='ready'?pill(`Ready · ${k.ownCode}`,'ok'):'',
+        value.startsWith('uc:')&&a.kind!=='none'&&k.hotkey?.state==='failed'?pill(k.hotkey.message||'Not available','bad'):'',
+        job?(job.state==='done'?pill('Key updated','ok','au05-job'):job.state==='failed'?`<span class="au05-pill bad au05-job" title="${esc(job.message)}">Failed <button class="au05-link" type="button" data-au05-retry="${k.key}">Try again</button></span>`:pill(job.state==='sending'?'Sending…':'Waiting for key','warn','au05-job')):'',
+        !job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<span class="au05-pill warn">Not set up <button class="au05-link" type="button" data-au05-retry="${k.key}">Set up</button></span>`:'',
+      ].join('');
+      const ucExtra=`<section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" style="--hue:var(--accent)">${IC.dot}</span><span class="au05-sec-title">Unified Control</span></h3><div class="au05-grid">
+        ${card(`data-au05-pick="${k.key}"`,'uc:quickMenu',actionIcon('quickMenu'),'Quick menu',value==='uc:quickMenu',{title:'Open the quick menu'})}
+        ${card(`data-au05-pick="${k.key}"`,'uc:hotkey',actionIcon('hotkey'),'Custom',value==='uc:hotkey',{title:'Any key combination'})}
+        ${card(`data-au05-pick="${k.key}"`,'uc:none',actionIcon('none'),'Nothing',value==='uc:none',{title:'The key does nothing'})}</div></section>`;
+      const custom=value==='uc:hotkey'?`<div class="au05-inline"><input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}">
+        <select data-au05-action-app="${k.key}" aria-label="Send to">${opt('','To the focused app',a.app||'')}${(s.catalogue?.apps||[]).map(x=>opt(x.id,`To ${x.name}${x.verified?'':' (unverified)'}`,a.app||'')).join('')}</select></div>`:'';
       const press=keyOf('knobPress');
-      const menuHint=a.kind==='quickMenu'?`<p class="hint">Opens the quick menu. Turn the knob to move, press the knob to choose, press this key again, Esc or wait ${s.menu?.closeAfterS||8} seconds to close.</p>${press&&press.mode!=='uc'&&k.key!=='knobPress'?'<p class="attention">To choose with the knob press, set the knob press to a Unified Control action (Nothing is fine).</p>':''}`:'';
-      const read=`<button class="btn" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
-      return `<div class="au05-editor-head"><h2>${esc(ZONES[k.key])}</h2>${k.checked?'':' <span class="chip attention">Untested</span>'}</div>
-      <p>Types now: ${esc(k.label||'Not read yet')}</p>
-      <div class="field"><label for="au05-mode-${k.key}">What it does</label><select id="au05-mode-${k.key}" data-au05-mode="${k.key}"${this.native&&s.enabled===true?'':' disabled'}>${options}</select></div>
-      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${value==='keys'?'':'hidden'}>
-      ${custom}${hot}${entry&&entry.status!=='verified'?`<p class="hint">Unverified shortcut: ${esc(entry.note)}. Check it in the app (Ctrl + / shows its shortcut list).</p>`:entry?`<p class="hint">${esc(entry.note)}.</p>`:''}
-      ${menuHint}${jobLine}${finish}<p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
-      <p class="hint">A Unified Control action: the key types its own unused code (${esc(k.ownCode)}) and Unified Control runs the action in any app. Keys and Factory default are stored on the key.</p>
-      ${read}`;
+      const menuLine=a.kind==='quickMenu'&&press&&press.mode!=='uc'&&k.key!=='knobPress'?'<p class="au05-line attention">Set the knob press to a Unified Control action (Nothing is fine) to choose with it.</p>':'';
+      const body=view==='keys'?`<div class="au05-inline"><input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}"></div>`
+        :view==='factory'?`<p class="au05-line">${esc(k.name)} types ${esc(k.factory)}, stored on the key.</p>`
+        :`${custom}${menuLine}${catalogueSections(`data-au05-pick="${k.key}"`,'uc:',value,ucExtra)}`;
+      return `<div class="au05-panel-head"><div><h2>${esc(ZONES[k.key])}</h2>
+          <span class="au05-types">Types ${esc(k.label?k.label.replace(/^Factory default \((.*)\)$/,'$1'):'—')} <button class="au05-link" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button></span></div>
+        <div class="au05-pills">${pills}</div></div>
+        <div class="au05-seg au05-mode" data-au05-mode="${k.key}" data-value="${esc(value)}" role="group" aria-label="What ${esc(k.name)} does">${seg('uc','UC action')}${seg('keys','Types keys')}${seg('factory','Factory')}</div>
+        <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+        ${body}`;
     };
-    const m=s.menu||{};
+
+    // ---- the knob turn panel ----
     const anyMenu=Object.values(s.actions||{}).some(a=>a?.kind==='quickMenu');
+    const turnAct=m.knobTurnAction||'scroll';
+    const knobEditor=()=>{
+      const view=this.turnView||(m.knobTurn==='uc'?'uc':'factory');
+      const seg=(id,label)=>`<button type="button" data-au05-turn-mode="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
+      const dir=t=>{const j=t.job;return `<div class="au05-dir"><span>${t.key==='knobRight'?'Right':'Left'} · ${esc(t.mode==='unknown'?'not read':t.mode==='uc'?t.ownCode:t.mode==='factory'?'factory':t.label)}</span>
+        ${t.checked?'':'<span class="chip attention au05-untested">Untested</span>'}
+        ${j?(j.state==='done'?pill('Key updated','ok'):j.state==='failed'?pill('Failed','bad'):pill(j.state==='sending'?'Sending…':'Waiting for key','warn')):''}
+        <button class="au05-link" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read':'Read again'}</button></div>`;};
+      const choice=(v,icon,name,title)=>`<button type="button" class="au05-card${m.knobTurn==='uc'&&turnAct===v?' is-selected':''}" data-au05-turn-pick="uc:${v}" aria-pressed="${m.knobTurn==='uc'&&turnAct===v}" title="${esc(title)}"${live}><span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span></button>`;
+      return `<div class="au05-panel-head"><div><h2>Knob turn</h2><span class="au05-types">${m.knobTurn==='uc'?'Types F23 / F24':'Factory scroll'}${anyMenu?' · moves the quick menu':''}</span></div></div>
+        <div class="au05-seg" data-au05-turn-seg role="group" aria-label="What turning the knob does">${seg('uc','UC action')}${seg('factory','Factory scroll')}</div>
+        <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+        ${view==='uc'?`<div class="au05-grid">${choice('scroll',actionIcon('scroll'),'Scroll','One notch per click, in the window under the mouse')}${choice('volume',actionIcon('volume'),'Volume','Volume up and down')}${choice('none',actionIcon('none'),'Nothing','Only moves the quick menu')}</div>`:''}
+        <div class="au05-dirs">${(s.turns||[]).map(dir).join('')}</div>`;
+    };
+
+    // ---- the drawing ----
     const assignment=id=>{
-      if(id==='knobTurn'){const act={scroll:'UC scroll',volume:'Volume',none:'Nothing'}[m.knobTurnAction]||'UC scroll';return m.knobTurn==='uc'?`${act}${anyMenu?' · moves the menu':''}`:`Factory scroll${anyMenu?' · moves the menu':''}`;}
+      if(id==='knobTurn'){const act={scroll:'UC scroll',volume:'Volume',none:'Nothing'}[turnAct]||'UC scroll';return m.knobTurn==='uc'?`${act}${anyMenu?' · menu':''}`:`Factory scroll${anyMenu?' · menu':''}`;}
       const k=keyOf(id),a=s.actions?.[id];
       const waiting=k?.job&&(k.job.state==='waiting'||k.job.state==='sending')?' (waiting)':'';
       if(a&&a.kind!=='none'&&(!k||k.mode==='uc'||k.mode==='unknown'||waiting))return actionName(a)+waiting;
@@ -225,101 +275,106 @@ export class Au05Panel{
       <circle cx="85" cy="140" r="56" class="au05-light"/>
       ${zone('knobTurn','<ZONE circle cx="85" cy="140" r="46"/>')}
       ${zone('knobPress','<ZONE circle cx="85" cy="140" r="33"/>')}
-      <path d="M62 117l4 4M108 117l-4 4M62 163l4-4M108 163l-4-4" class="au05-mark"/>
+      <path d="M62 117l4 4M108 117l-4 4M62 163l4-4M108 163l-4-4" class="au05-mark-line"/>
       ${[['k1',215],['k2',307],['k3',399]].map(([id,y])=>`${zone(id,`<ZONE rect x="37" y="${y}" width="96" height="84" rx="12"/>`)}<circle cx="85" cy="${y+42}" r="25" class="au05-cap"/>`).join('')}
       <rect x="80" y="243" width="10" height="17" rx="5" class="au05-icon"/><path d="M76 255a9 9 0 0 0 18 0M85 264v5" class="au05-icon"/>
       <path d="M76 349l6 6 12-12" class="au05-icon"/>
       <path d="M78 434l14 14M92 434l-14 14" class="au05-icon"/>
       ${callout('knobTurn',78,131,110)}${callout('knobPress',126,118,140)}${callout('k1',240,133,257)}${callout('k2',332,133,349)}${callout('k3',424,133,441)}
     </svg>`;
-    const hk=s.menuHotkeys||{};
-    const hkText=h=>h?.state==='ready'?'claimed':h?.state==='failed'?esc(h.message||'not available'):'not claimed';
-    const turnValue=m.knobTurn==='uc'?`uc:${m.knobTurnAction||'scroll'}`:'factory';
-    const turnLine=t=>{const j=t.job;const now=t.mode==='unknown'?'not read yet':t.mode==='uc'?`${t.ownCode} (Unified Control)`:t.mode==='factory'?`factory ${t.key==='knobRight'?'scroll down':'scroll up'}`:t.label;
-      return `<div class="setting-row au05-turn-row"><div><strong>${esc(t.name)}</strong>${t.checked?'':' <span class="chip attention">Untested</span>'}<p>Types now: ${esc(now)}${j?` · <span class="${j.state==='failed'?'attention':''}">${j.state==='done'?'Key updated':esc(j.message)}</span>`:''}</p></div>
-        <button class="btn" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read from key':'Read again'}</button></div>`;};
-    const knobEditor=`<div class="au05-editor-head"><h2>Knob turn</h2></div>
-      <div class="field"><label for="au05-turn">What turning does</label><select id="au05-turn" data-au05-turn${this.native&&s.enabled===true?'':' disabled'}>
-        <optgroup label="Unified Control (the knob types F23 / F24)">${opt('uc:scroll','Scroll (one notch per click)',turnValue)}${opt('uc:volume','Volume up / down',turnValue)}${opt('uc:none','Nothing (only moves the quick menu)',turnValue)}</optgroup>
-        <optgroup label="Stored on the key">${opt('factory','Factory scroll',turnValue)}</optgroup></select></div>
-      <p class="hint">${m.knobTurn==='uc'?'The knob types its own codes F23 (right) and F24 (left). Unified Control turns them into scrolling or volume, and moves the quick menu while it is open. Nothing scrolls behind the menu.':'Factory scroll: turning right scrolls down, left scrolls up, in the app under the mouse. While the quick menu is open, turning also moves its highlight (the window behind may scroll too).'}</p>
-      ${m.knobTurn==='uc'?`<p class="hint">F23: ${hkText(hk.knobRight)} · F24: ${hkText(hk.knobLeft)}</p>`:''}
-      <section class="settings-list">${(s.turns||[]).map(turnLine).join('')}</section>`;
-    const editor=this.selected==='knobTurn'
-      ?knobEditor
-      :keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="hint">Wake the key to read its controls.</p>';
+    const editor=this.selected==='knobTurn'?knobEditor():keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+
+    // ---- profiles and target app ----
+    const profiles=m.profiles||[];
+    const profileCards=profiles.map((p,i)=>{
+      const active=p.id===m.profile;
+      const inner=active&&this.renaming?`<input id="au05-profile-name" class="au05-profile-input" data-au05-profile-name maxlength="60" value="${esc(p.name)}" aria-label="Profile name"${native}>`
+        :`<button type="button" class="au05-profile-btn" data-au05-profile-pick="${esc(p.id)}" aria-pressed="${active}"${native}><span class="au05-dot"></span>${esc(p.name)}</button>`;
+      return `<div class="au05-profile${active?' is-active':''}" style="--hue:var(--hue-${i%6+1})">${inner}${active&&!this.renaming?`<button type="button" class="au05-mini" data-au05-profile-op="rename" title="Rename" aria-label="Rename ${esc(p.name)}"${native}>${IC.edit}</button>${profiles.length>1?`<button type="button" class="au05-mini" data-au05-profile-op="remove" title="Remove" aria-label="Remove ${esc(p.name)}"${native}>${IC.trash}</button>`:''}`:''}</div>`;
+    }).join('');
+    const targetMarks={claude:SECTIONS[0],chatgpt:SECTIONS[1]};
+    const topBar=`<div class="au05-top">
+      <div class="au05-profiles" role="group" aria-label="Profiles">${profileCards}<button type="button" class="au05-profile au05-profile-add" data-au05-profile-op="add" title="New profile (a copy of this one)" aria-label="New profile"${native}>${IC.plus}</button></div>
+      <div class="au05-target" title="What the Target app actions use"><span class="au05-target-label">Target</span><div class="au05-seg" role="group" aria-label="Target app">${(m.targets||[]).map(t=>`<button type="button" data-au05-target-pick="${esc(t.id)}" aria-pressed="${t.id===m.target}"${native}>${targetMarks[t.id]?mark(targetMarks[t.id]):''}${esc(t.name)}</button>`).join('')}</div></div></div>`;
+
+    // ---- the quick menu editor ----
+    const typeOf=e=>({action:'Action',profile:'Profile',target:'App',submenu:'Sub-menu',claudeSessions:'Sessions',claudeSession:'Session'})[e.type]||e.type;
+    const whatOf=e=>e.type==='action'?(e.action?.kind==='hotkey'?`Keys ${e.action.value}`:actionName(e.action)):e.type==='profile'?((profiles.find(p=>p.id===e.profile)||{}).name||e.profile):e.type==='target'?((m.targets||[]).find(t=>t.id===e.target)?.name||e.target):e.type==='submenu'?`${(e.entries||[]).length} entries`:e.type==='claudeSessions'?'Live list':'One session';
+    const iconOf=e=>e.type==='action'?actionIcon(e.action?.kind):e.type==='profile'?IC.profile:e.type==='target'?IC.target:e.type==='submenu'?IC.folder:IC.sessions;
+    const thenSelect=(e,p)=>e.type==='claudeSessions'?`<select id="qm-then-${p}" data-qm-then="${p}" aria-label="After opening the session"${native}>${opt('none','Then nothing',e.then||'none')}${cat.filter(x=>x.group==='Claude'&&x.id!=='claudeStop').map(x=>opt(x.id,`Then ${x.label}`,e.then||'none')).join('')}</select>`:'';
+    const rows=[];
+    const walk=(list,path,depth)=>list.forEach((e,i)=>{
+      const p=[...path,i].join('.');
+      rows.push(`<li class="au05-menu-row" style="--depth:${depth}" data-qm-row="${p}">
+        <span class="au05-grip" draggable="true" data-qm-drag="${p}" title="Drag to move" aria-hidden="true">${IC.grip}</span>
+        <span class="au05-card-icon">${iconOf(e)}</span>
+        <input id="qm-label-${p}" data-qm-label="${p}" maxlength="60" value="${esc(e.label)}" aria-label="Name of menu entry ${esc(e.label)}"${native}>
+        <button type="button" class="au05-what" data-qm-op="change" data-qm-path="${p}" title="Change what it does"${native}><span class="au05-type">${esc(typeOf(e))}</span><span class="au05-what-text">${esc(whatOf(e))}</span></button>
+        ${thenSelect(e,p)}
+        <span class="au05-menu-tools">${e.type==='submenu'&&depth<1?`<button type="button" class="au05-mini" data-qm-op="add" data-qm-path="${p}" title="Add inside" aria-label="Add inside ${esc(e.label)}"${native}>${IC.plus}</button>`:''}<button type="button" class="au05-mini" data-qm-op="up" data-qm-path="${p}" aria-label="Move ${esc(e.label)} up"${i===0?' disabled':native}>${IC.up}</button><button type="button" class="au05-mini" data-qm-op="down" data-qm-path="${p}" aria-label="Move ${esc(e.label)} down"${i===list.length-1?' disabled':native}>${IC.down}</button><button type="button" class="au05-mini" data-qm-op="remove" data-qm-path="${p}" aria-label="Remove ${esc(e.label)}"${native}>${IC.close}</button></span></li>`);
+      if(e.type==='submenu')walk(e.entries||[],[...path,i],depth+1);
+    });
+    walk(m.entries||[],[],0);
+    const pick=this.menuPick;
+    const pickedEntry=pick?.mode==='change'?(()=>{const [l,i]=Au05Panel.locate(m.entries||[],pick.path);return l[i];})():null;
+    const pickedValue=pickedEntry?(pickedEntry.type==='action'?`a:${pickedEntry.action?.kind}`:pickedEntry.type==='profile'?`p:${pickedEntry.profile}`:pickedEntry.type==='target'?`t:${pickedEntry.target}`:pickedEntry.type==='submenu'?'submenu':'sessions'):'';
+    const qmCard=(v,icon,name,title)=>card('data-qm-pick=""',v,icon,name,pickedValue===v,{title});
+    const picker=pick?`<div class="au05-picker" role="dialog" aria-label="Choose a menu entry"><div class="au05-picker-head"><h3>${pick.mode==='change'?'Change entry':'Add entry'}</h3><button type="button" class="au05-mini" data-qm-op="cancel" aria-label="Close">${IC.close}</button></div>
+      ${catalogueSections('data-qm-pick=""','a:',pickedValue,`<section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" style="--hue:var(--accent)">${IC.menu}</span>Menu</h3><div class="au05-grid">
+        ${profiles.map(p=>qmCard(`p:${p.id}`,IC.profile,p.name,`Switch to the profile ${p.name}`)).join('')}
+        ${(m.targets||[]).map(t=>qmCard(`t:${t.id}`,IC.target,`Target ${t.name}`,`Target app: ${t.name}`)).join('')}
+        ${qmCard('submenu',IC.folder,'Sub-menu','A menu inside the menu')}${qmCard('sessions',IC.sessions,'Claude sessions','The live list of Claude sessions')}</div></section>`)}</div>`:'';
+    const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2></div>
+      <div class="au05-box-actions"><button class="btn" type="button" data-qm-op="open"${live}>Open</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset</button></div></header>
+      <ul class="au05-menu-list" aria-label="Quick menu entries">${rows.join('')||'<li class="au05-line">Empty.</li>'}</ul>
+      <div class="au05-box-foot"><button class="btn" type="button" data-qm-op="add-top"${native}>${IC.plus} Add entry</button>${m.last?`<span class="au05-muted">Last: ${esc(m.last)}</span>`:''}</div>${picker}</section>`;
+
+    // ---- Claude sessions ----
+    const cs=s.claude||{},full=this.claudeFull||{};
+    const when=ms=>ms?new Date(ms).toLocaleTimeString('en-AU',{hour12:false,hour:'2-digit',minute:'2-digit'}):'';
+    const csState=full.blocked?'bad':cs.connected?(full.hooks&&full.hooks!=='connected'?'warn':'ok'):'off';
+    const csText=full.blocked?'Blocked by Claude settings':cs.connected?(full.hooks&&full.hooks!=='connected'?'Hooks missing: connect again':cs.lastEvent?`Connected · last event ${when(cs.lastEvent)}`:'Connected · no event yet'):'Not connected';
+    const projects=[...new Set((cs.sessions||[]).map(x=>x.project||'Other'))];
+    const sessionChips=(cs.sessions||[]).length?`<div class="au05-session-groups">${projects.map(g=>`<div class="au05-session-group"><span class="au05-muted">${esc(g)}</span>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<span class="au05-session${x.state==='working'?' working':''}" title="${esc(x.state==='working'?'Working':'Idle')} · ${esc(when(x.last))}">${esc(x.label||'Untitled session')}</span>`).join('')}</div>`).join('')}</div>`:'';
+    const claudeBox=`<section class="au05-box au05-claude"><div class="au05-claude-main"><span class="au05-status-dot ${csState}" aria-hidden="true"></span>
+      <div class="au05-claude-text"><h2>Claude sessions</h2><span class="au05-muted">${esc(csText)}</span></div>
+      ${cs.connected?`<button class="btn au05-big" type="button" data-claude-op="${full.hooks&&full.hooks!=='connected'&&!full.blocked?'connect':'disconnect'}"${native}>${full.hooks&&full.hooks!=='connected'&&!full.blocked?'Connect again':'Disconnect'}</button>`:`<button class="btn primary au05-big" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect</button>`}</div>
+      ${full.blocked?`<p class="au05-line attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="au05-line attention">${esc(full.error)}</p>`:''}
+      ${sessionChips}
+      <details class="au05-claude-preview"><summary>What Connect adds</summary><p class="au05-muted">${esc(full.settingsPath||'')} · merged and backed up first; the file is reformatted. Disconnect (or uninstall) removes only these entries.</p><pre>${esc(full.preview||'')}</pre></details></section>`;
+
+    // ---- device settings ----
     const standby=s.standbyS;const standbyOpts=STANDBY.some(([v])=>v===standby)||standby==null?STANDBY:[...STANDBY,[standby,minutes(standby)]];
     const sleepOpts=Object.entries(SLEEP).some(([v])=>Number(v)===s.sleepS)||s.sleepS==null?Object.entries(SLEEP):[...Object.entries(SLEEP),[String(s.sleepS),`${s.sleepS} seconds`]];
     const light=s.light||{};const range=s.lightRange||{modeMax:3,brightnessMax:10};
     const fmax=s.lightFieldMax||{type:3,time:15,breatheLevel:15,breatheBrightness:10,alwaysOnBrightness:10};
     const numbers=(max,sel)=>Array.from({length:max+1},(_,i)=>opt(i,String(i),sel)).join('');
-    const FIELDS=[['type','Type'],['time','Time'],['breatheLevel','Breathe level'],['breatheBrightness','Breathe brightness'],['alwaysOnBrightness','Always-on brightness']];
-    const records=(light.records||[]).map((rec,r)=>`<tr><th scope="row">Record ${r}</th>${FIELDS.map(([f,label],i)=>`<td><select data-au05-record="${r}" data-au05-field="${f}" aria-label="Record ${r} ${label}"${dis}>${numbers(Math.max(fmax[f],rec[i]??0),rec[i])}</select></td>`).join('')}</tr>`).join('');
-    const codes=(s.controlCodes||[]).map((c,i)=>c==null?'':`${['K1','K2','K3','Knob press','Knob right','Knob left'][i]} ${esc(c)} (raw ${esc(s.controlCodesRaw?.[i])})`).filter(Boolean).join(' · ');
-    const native=this.native?'':' disabled';
-    const profiles=m.profiles||[],current=profiles.find(p=>p.id===m.profile);
-    const profileBar=`<div class="au05-profile-bar">
-      <div class="field"><label for="au05-profile">Profile</label><select id="au05-profile" data-au05-profile${native}>${profiles.map(p=>opt(p.id,p.name,m.profile)).join('')}</select></div>
-      <div class="field"><label for="au05-target">Target app</label><select id="au05-target" data-au05-target${native}>${(m.targets||[]).map(t=>opt(t.id,t.name,m.target)).join('')}</select></div>
-      <div class="field"><label for="au05-profile-name">Profile name</label><input id="au05-profile-name" data-au05-profile-name maxlength="60" value="${esc(current?.name||'')}"${native}></div>
-      <div class="au05-profile-tools"><button class="btn" type="button" data-au05-profile-op="add"${native}>New profile</button><button class="btn" type="button" data-au05-profile-op="remove"${native||profiles.length<2?' disabled':''}>Remove profile</button></div></div>
-      <p class="hint">A profile is a set of actions for K1, K2, K3 and the knob press; switching applies at once and writes nothing to the key. The target app decides what "Target app" actions do.</p>`;
-    const groups=[...new Set(cat.map(e=>e.group))];
-    const whatValue=e=>e.type==='action'?`a:${e.action?.kind}`:e.type==='profile'?`p:${e.profile}`:e.type==='target'?`t:${e.target}`:e.type==='submenu'?'submenu':e.type==='claudeSessions'?'sessions':'session';
-    const whatOptions=e=>{const v=whatValue(e);
-      return `${e.type==='action'&&e.action?.kind==='hotkey'?opt(v,`Custom shortcut ${e.action.value}`,v):''}${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(x=>x.group===g).map(x=>opt(`a:${x.id}`,`${x.group}: ${x.label}${x.status==='verified'?'':' · unverified'}`,v)).join('')}</optgroup>`).join('')}
-        <optgroup label="Switch profile">${profiles.map(p=>opt(`p:${p.id}`,`Profile: ${p.name}`,v)).join('')}</optgroup>
-        <optgroup label="Target app">${(m.targets||[]).map(t=>opt(`t:${t.id}`,`Target app: ${t.name}`,v)).join('')}</optgroup>
-        <optgroup label="Other">${opt('submenu','Sub-menu',v)}${opt('sessions','Claude sessions (the live list)',v)}${v==='session'?opt('session','One Claude session',v):''}</optgroup>`;};
-    const thenSelect=(e,p)=>e.type==='claudeSessions'?`<select id="qm-then-${p}" data-qm-then="${p}" aria-label="After opening the session"${native}>${opt('none','Then: nothing',e.then||'none')}${cat.filter(x=>x.group==='Claude'&&x.id!=='claudeStop').map(x=>opt(x.id,`Then: ${x.label}`,e.then||'none')).join('')}</select>`:'';
-    const menuRows=[];
-    const walk=(list,path,depth)=>list.forEach((e,i)=>{
-      const p=[...path,i].join('.');
-      menuRows.push(`<li class="au05-menu-row" style="--depth:${depth}" data-qm-row="${p}">
-        <input id="qm-label-${p}" data-qm-label="${p}" maxlength="60" value="${esc(e.label)}" aria-label="Name of menu entry ${esc(e.label)}"${native}>
-        <select id="qm-what-${p}" data-qm-what="${p}" aria-label="What ${esc(e.label)} does"${native}>${whatOptions(e)}</select>${thenSelect(e,p)}
-        <span class="au05-menu-tools"><button class="btn" type="button" data-qm-op="up" data-qm-path="${p}" aria-label="Move ${esc(e.label)} up"${i===0?' disabled':native}>↑</button><button class="btn" type="button" data-qm-op="down" data-qm-path="${p}" aria-label="Move ${esc(e.label)} down"${i===list.length-1?' disabled':native}>↓</button><button class="btn" type="button" data-qm-op="remove" data-qm-path="${p}" aria-label="Remove ${esc(e.label)}"${native}>Remove</button>${e.type==='submenu'&&depth<1?`<button class="btn" type="button" data-qm-op="add" data-qm-path="${p}"${native}>Add inside</button>`:''}</span></li>`);
-      if(e.type==='submenu')walk(e.entries||[],[...path,i],depth+1);
-    });
-    walk(m.entries||[],[],0);
-    const menuSection=`<div class="settings-section-heading au05-device-heading"><div><h2>Quick menu</h2><p>Give a key the action "Open quick menu". Turn the knob to move, press the knob to choose; press the key again, Esc or wait ${m.closeAfterS||8} seconds to close. The menu appears near the top-right corner of the main screen; drag it by its title to move it, and it opens there next time.</p></div><div class="au05-device-actions"><button class="btn" type="button" data-qm-op="open"${this.native&&s.enabled===true?'':' disabled'}>Open the menu</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset to the default menu</button></div></div>
-      <section class="settings-list"><ul class="au05-menu-list" aria-label="Quick menu entries">${menuRows.join('')||'<li class="hint">The menu is empty.</li>'}</ul>
-      <div class="setting-row"><button class="btn" type="button" data-qm-op="add-top"${native}>Add entry</button>${m.last?`<span class="hint">Last choice: ${esc(m.last)}</span>`:''}</div></section>`;
-    const cs=s.claude||{},full=this.claudeFull||{};
-    const when=ms=>ms?new Date(ms).toLocaleTimeString('en-AU',{hour12:false}):'';
-    const csStatus=full.blocked?`<span class="chip attention">Blocked</span>`:cs.connected?(full.hooks==='connected'?`<span class="chip accent">Connected</span>`:`<span class="chip attention">${full.hooks==='outdated'?'Needs reconnecting':'Hooks missing'}</span>`):'<span class="chip">Not connected</span>';
-    const groupsBy=[...new Set((cs.sessions||[]).map(x=>x.project||'Other'))];
-    const sessionList=(cs.sessions||[]).length?groupsBy.map(g=>`<li><strong>${esc(g)}</strong><ul>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<li>${esc(x.label||'Untitled session')} <span class="hint">${esc(x.state==='working'?'working':'idle')} · ${esc(when(x.last))}</span></li>`).join('')}</ul></li>`).join(''):`<li class="hint">${cs.connected?'No sessions yet. Start or use a Claude session; it appears here.':'Connect to see your Claude sessions here and in the quick menu.'}</li>`;
-    const claudeSection=`<div class="settings-section-heading au05-device-heading"><div><h2>Claude sessions</h2><p>Open a Claude session from the quick menu ("Claude sessions"). Unified Control adds its own hooks to your Claude settings; each hook tells Unified Control only the session, its folder, the time and the first words of the first prompt (as its name). Nothing else is read, and Claude is never slowed down.</p></div>
-      <div class="au05-device-actions">${csStatus}${cs.connected?`<button class="btn" type="button" data-claude-op="disconnect"${native}>Disconnect</button>`:`<button class="btn" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect Claude sessions</button>`}</div></div>
-      ${full.blocked?`<p class="attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="attention">${esc(full.error)}</p>`:''}
-      ${cs.connected&&full.hooks&&full.hooks!=='connected'&&!full.blocked?`<p class="attention">The hooks in your Claude settings are missing or point to another copy of Unified Control. <button class="btn" type="button" data-claude-op="connect"${native}>Connect again</button></p>`:''}
-      <section class="settings-list"><ul class="au05-sessions">${sessionList}</ul>${cs.connected?`<div class="setting-row"><span class="hint">${cs.lastEvent?`Last event received at ${esc(when(cs.lastEvent))}.`:'No event received yet: send a prompt in a Claude session to check the connection.'}</span></div>`:''}</section>
-      ${cs.connected?'':`<details class="au05-claude-preview"><summary>What Connect adds to ${esc(full.settingsPath||'your Claude settings')}</summary><p class="hint">Merged into the file: nothing else changes, though Claude's file is rewritten with standard formatting. A backup copy is saved next to it first (Unified Control keeps its last three). Disconnect removes exactly these entries; disconnect before uninstalling (the uninstaller also does it).</p><pre>${esc(full.preview||'')}</pre></details>`}`;
-    return `${profileBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}<p class="hint">Choose a key or the knob. A control lights up when you press or turn it.</p></div>
+    const FIELDS=[['type','Type'],['time','Time'],['breatheLevel','Breathe'],['breatheBrightness','Breathe bright.'],['alwaysOnBrightness','Always-on']];
+    const records=(light.records||[]).map((rec,r)=>`<tr><th scope="row">${r}</th>${FIELDS.map(([f,label],i)=>`<td><select data-au05-record="${r}" data-au05-field="${f}" aria-label="Record ${r} ${label}"${dis}>${numbers(Math.max(fmax[f],rec[i]??0),rec[i])}</select></td>`).join('')}</tr>`).join('');
+    const codes=(s.controlCodes||[]).map((c,i)=>c==null?'':`<span class="au05-code"><span class="au05-muted">${['K1','K2','K3','Press','Right','Left'][i]}</span> ${esc(c)}</span>`).filter(Boolean).join('');
+    const row=(label,untested,control,rawText)=>`<div class="au05-set-row"><div class="au05-set-label">${esc(label)}${untested}${raw(rawText)}</div>${control}</div>`;
+    const notRead=v=>v==null?opt('','Not read','') :'';
+    const deviceCard=(icon,title,body,wide=false)=>`<section class="au05-box au05-set-card${wide?' au05-wide':''}"><h3 class="au05-box-title"><span class="au05-box-icon">${icon}</span>${esc(title)}</h3>${body}</section>`;
+    const device=`<div class="au05-section-head"><h2>Device</h2><div class="au05-box-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
+      <div class="au05-settings-grid">
+      ${deviceCard(IC.power,'Power',
+        row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select>`,standby==null?null:`${standby} s`)+
+        row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`)+
+        row('Standby status','',`<span class="au05-value">${s.standbyStatus==null?'—':esc(s.standbyStatus)}</span>`,null))}
+      ${deviceCard(IC.light,'Light',
+        row('Mode',this.untested('lightMode'),`<select data-au05-set="lightMode" aria-label="Light mode"${dis}>${notRead(light.mode)}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select>`,null)+
+        row('Brightness',this.untested('lightBrightness'),`<select data-au05-set="lightBrightness" aria-label="All-on brightness"${dis}>${notRead(light.brightness)}${numbers(Math.max(range.brightnessMax,light.brightness??0),light.brightness)}</select>`,null)+
+        row('Hooks mode',this.untested('hooksMode'),`<select data-au05-set="hooksMode" aria-label="Hooks mode"${dis}>${notRead(s.hooksMode)}${opt(0,'Off',s.hooksMode)}${opt(1,'On',s.hooksMode)}</select>`,null)+
+        `<div class="au05-records"><div class="au05-set-label">Mode records${this.untested('lightRecord')}</div>${records?`<div class="au05-table"><table><thead><tr><th></th>${FIELDS.map(([,l])=>`<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${records}</tbody></table></div>`:'<p class="au05-muted">Not read yet.</p>'}</div>`,true)}
+      ${deviceCard(IC.mic,'Microphone',
+        row('Noise reduction',this.untested('micNr'),`<select data-au05-set="micNr" aria-label="Noise reduction"${dis}>${notRead(s.micNr)}${Array.from({length:Math.max(s.micNrMax??3,s.micNr?.level??0)+1},(_,i)=>opt(i,i===0?'Off':`Level ${i}`,s.micNr?.level)).join('')}</select>`,s.micNr?`${s.micNr.level}, ${s.micNr.a}, ${s.micNr.b}`:null))}
+      ${deviceCard(IC.sliders,'Controls',`<div class="au05-codes">${codes||'<span class="au05-muted">Read all settings to see each control\'s code.</span>'}</div>`)}
+      </div>`;
+
+    return `${topBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}</div>
     <aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside></div>
-    ${menuSection}${claudeSection}
-    <div class="settings-section-heading au05-device-heading"><div><h2>Device settings</h2><p>Settings marked Untested were not yet checked on the real key. Each change is read back from the key.</p></div><div class="au05-device-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
-    <div class="au05-settings-grid"><div><h3 class="au05-sub">Power</h3>
-    <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong>${this.untested('standbyTime')}<p>The key sleeps after this much idle time. Press a key to wake it.${raw(standby==null?null:`${standby} s`)}</p></div>
-    <select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${standby==null?opt('', 'Not read yet',''):''}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select></div>
-    <div class="setting-row"><div><strong>Power-off time</strong>${this.untested('sleepTime')}<p>The key turns off after this much idle time.${raw(s.sleepS==null?null:`${s.sleepS} s`)}</p></div>
-    <select data-au05-set="sleepTime" aria-label="Power-off time"${dis}>${s.sleepS==null?opt('','Not read yet',''):''}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select></div>
-    <div class="setting-row"><div><strong>Standby status</strong><p>Read only.${raw(s.standbyStatus)}</p></div></div></section>
-    <h3 class="au05-sub">Microphone</h3>
-    <section class="settings-list"><div class="setting-row"><div><strong>Noise reduction</strong>${this.untested('micNr')}<p>The two other values are written back as read.${raw(s.micNr?`level ${s.micNr.level}, ${s.micNr.a}, ${s.micNr.b}`:null)}</p></div>
-    <select data-au05-set="micNr" aria-label="Noise reduction"${dis}>${s.micNr==null?opt('','Not read yet',''):''}${Array.from({length:Math.max(s.micNrMax??3,s.micNr?.level??0)+1},(_,i)=>opt(i,i===0?'Off (0)':`Level ${i}`,s.micNr?.level)).join('')}</select></div></section>
-    <h3 class="au05-sub">Controls</h3>
-    <section class="settings-list"><div class="setting-row"><div><strong>Each control's own code</strong><p>Read only.${codes?` ${codes}`:' Use Read all settings.'}</p></div></div></section></div>
-    <div><h3 class="au05-sub">Light</h3>
-    <section class="settings-list"><div class="setting-row"><div><strong>Light mode</strong>${this.untested('lightMode')}<p>Which light record is in use.${raw(light.mode)}</p></div>
-    <select data-au05-set="lightMode" aria-label="Light mode"${dis}>${light.mode==null?opt('','Not read yet',''):''}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select></div>
-    <div class="setting-row"><div><strong>All-on brightness</strong>${this.untested('lightBrightness')}<p>${raw(light.brightness)}</p></div>
-    <select data-au05-set="lightBrightness" aria-label="All-on brightness"${dis}>${light.brightness==null?opt('','Not read yet',''):''}${numbers(Math.max(range.brightnessMax,light.brightness??0),light.brightness)}</select></div>
-    <div class="setting-row au05-records"><div><strong>Light mode records</strong>${this.untested('lightRecord')}<p>Four records, as the key reports them. The numbers are the raw values.</p>
-    ${records?`<div class="au05-table"><table><thead><tr><th></th>${FIELDS.map(([,l])=>`<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${records}</tbody></table></div>`:'<p class="hint">Not read yet.</p>'}</div></div>
-    <div class="setting-row"><div><strong>Hooks mode</strong>${this.untested('hooksMode')}<p>${raw(s.hooksMode)}</p></div>
-    <select data-au05-set="hooksMode" aria-label="Hooks mode"${dis}>${s.hooksMode==null?opt('','Not read yet',''):''}${opt(0,'0 (off)',s.hooksMode)}${opt(1,'1 (on)',s.hooksMode)}</select></div></section></div></div>`;
+    <div class="au05-boxes">${menuBox}${claudeBox}</div>
+    ${device}`;
   }
   async change(change){
     this.sending++;this.setNote('Sending to the Vibe Key…');this.paint(true);
@@ -391,14 +446,24 @@ export class Au05Panel{
   menuOp(op,path){
     if(op==='open'){this.invoke('au05_menu',{input:{op:'toggle'}}).catch(error=>this.setNote(errorText(error),true));return;}
     if(op==='reset'){this.configure({menu:'default'});return;}
-    const fresh=()=>this.entryFor('a:claudeDictation');
+    if(op==='add-top'||op==='add'||op==='change'){this.menuPick={mode:op,path};this.paint(true);
+      this.container?.querySelector('.au05-picker')?.scrollIntoView({block:'nearest'});return;}
+    if(op==='cancel'){this.menuPick=null;this.paint(true);return;}
     this.editMenu(entries=>{
-      if(op==='add-top'){entries.push(fresh());return;}
       const [list,i]=Au05Panel.locate(entries,path);
       if(op==='up'&&i>0)[list[i-1],list[i]]=[list[i],list[i-1]];
       if(op==='down'&&i<list.length-1)[list[i+1],list[i]]=[list[i],list[i+1]];
       if(op==='remove')list.splice(i,1);
-      if(op==='add'&&list[i]?.type==='submenu')(list[i].entries||=[]).push(fresh());
+    });
+  }
+  // A card picked in the menu picker: add it (at the end, or inside a sub-menu) or replace the entry.
+  menuPicked(what){
+    const pick=this.menuPick;if(!pick)return;this.menuPick=null;
+    this.editMenu(entries=>{
+      if(pick.mode==='add-top'){entries.push(this.entryFor(what));return;}
+      const [list,i]=Au05Panel.locate(entries,pick.path);if(!list[i])return;
+      if(pick.mode==='add'&&list[i].type==='submenu')(list[i].entries||=[]).push(this.entryFor(what));
+      if(pick.mode==='change')list[i]=this.entryFor(what,list[i]);
     });
   }
   // Delegated events from the page.
@@ -406,11 +471,30 @@ export class Au05Panel{
     const t=e.target;
     const cop=e.type==='click'&&t.closest?.('[data-claude-op]');
     if(cop){this.claudeOp(cop.dataset.claudeOp);return true;}
+    const click=sel=>e.type==='click'&&t.closest?.(sel);
+    const qmPick=click('[data-qm-pick]');
+    if(qmPick){this.menuPicked(qmPick.dataset.value);return true;}
+    const cardPick=click('[data-au05-pick]');
+    if(cardPick){const key=cardPick.dataset.au05Pick;this.chooseAction(key,cardPick.dataset.value.slice(3));return true;}
+    const segment=click('[data-au05-segment]');
+    if(segment){const key=segment.closest('[data-au05-mode]').dataset.au05Mode,v=segment.dataset.au05Segment;
+      this.modeView[key]=v;
+      if(v==='factory')this.setMode(key,'factory');else{this.paint(true);if(v==='keys')this.container.querySelector(`[data-au05-keys="${key}"]`)?.focus();}
+      return true;}
+    const turnSeg=click('[data-au05-turn-mode]');
+    if(turnSeg){this.turnView=turnSeg.dataset.au05TurnMode;if(this.turnView==='factory')this.chooseTurn('factory');else this.paint(true);return true;}
+    const turnPick=click('[data-au05-turn-pick]');
+    if(turnPick){this.chooseTurn(turnPick.dataset.au05TurnPick);return true;}
+    const profPick=click('[data-au05-profile-pick]');
+    if(profPick){if(profPick.getAttribute('aria-pressed')!=='true')this.configure({profile:profPick.dataset.au05ProfilePick});return true;}
+    const tgtPick=click('[data-au05-target-pick]');
+    if(tgtPick){this.configure({target:tgtPick.dataset.au05TargetPick});return true;}
     const qm=e.type==='click'&&t.closest?.('[data-qm-op]');
     if(qm){this.menuOp(qm.dataset.qmOp,qm.dataset.qmPath);return true;}
     const pop=e.type==='click'&&t.closest?.('[data-au05-profile-op]');
     if(pop){
       const m=this.state?.menu||{};
+      if(pop.dataset.au05ProfileOp==='rename'){this.renaming=true;this.paint(true);const i=this.container.querySelector('[data-au05-profile-name]');i?.focus();i?.select();return true;}
       if(pop.dataset.au05ProfileOp==='add')this.configure({profileEdit:{op:'add',name:`Profile ${(m.profiles||[]).length+1}`}});
       else if(confirm(`Remove the profile "${(m.profiles||[]).find(p=>p.id===m.profile)?.name||''}"? Its key actions are deleted.`))this.configure({profileEdit:{op:'remove',id:m.profile}});
       return true;
@@ -436,7 +520,7 @@ export class Au05Panel{
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}
     if(t.dataset.au05Profile!==undefined){this.configure({profile:t.value});return true;}
     if(t.dataset.au05Target!==undefined){this.configure({target:t.value});return true;}
-    if(t.dataset.au05ProfileName!==undefined){this.configure({profileEdit:{op:'rename',id:this.state?.menu?.profile,name:t.value}});return true;}
+    if(t.dataset.au05ProfileName!==undefined){this.renaming=false;this.configure({profileEdit:{op:'rename',id:this.state?.menu?.profile,name:t.value}});return true;}
     if(t.dataset.au05Turn!==undefined){this.chooseTurn(t.value);return true;}
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
     if(t.dataset.au05Record){this.change({setting:'lightRecord',record:Number(t.dataset.au05Record),field:t.dataset.au05Field,value:Number(t.value)});return true;}

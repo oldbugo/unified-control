@@ -122,6 +122,28 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 - "Light follows Claude Code" is shown as planned. The code has a stub only (`agent_light_requests`
   returns nothing).
 
+## Page layout (user feedback 2026-11-17: "make it a little bit more visual ... like a card, group it well")
+
+- Profiles are a row of cards above the drawing (colour dot, name; the active one highlighted, with rename and
+  remove; "+" adds a copy). The target app (Claude / ChatGPT) is a two-way switch beside them.
+- The drawing stays the anchor (it stays in view while the panel scrolls). The panel for a control has a
+  three-way switch (UC action / Types keys / Factory), status pills (Ready, Waiting for key, Key updated,
+  Failed with Try again, Not set up with Set up) and the actions as cards grouped by app (Claude, ChatGPT,
+  Target app, Windows & media, Unified Control). Each card has an icon (`public/js/au05-icons.js`: simple line
+  glyphs, no app logos; app sections use an initial and a colour token), a short name, the shortcut in small
+  text and a "?" badge when unverified; details are in the tooltip.
+- The knob turn panel: UC action / Factory scroll, then Scroll / Volume / Nothing cards and one line per
+  direction.
+- Quick menu entries are cards: drag handle (same level), icon, name, a type badge (Action, Profile, App,
+  Sub-menu, Sessions) that opens the same card picker to change it, and small move / add-inside / remove
+  buttons. "Add entry" opens the picker.
+- Claude sessions is one card: status dot, Connect / Disconnect, last event, sessions as chips by project,
+  and "What Connect adds" behind a disclosure.
+- Device settings are cards (Power, Light, Microphone, Controls) with short labels; raw values in a small
+  muted line. Recent events are folded away.
+- Colours come from tokens only (`--hue-1..6`, `--hue-claude`, `--hue-chatgpt`, `--hue-system` added); UC is
+  dark only, so a later light theme needs only new token values.
+
 ## Actions by application (2026-11-17)
 
 The action list is a data table (`CATALOGUE` and `APPS` in `src-tauri/src/core/au05_hotkey.rs`), grouped as
