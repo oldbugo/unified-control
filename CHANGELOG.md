@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0 — 2026-11-16
+
+The Vibe Key page now lets you change every known setting on the real key,
+for one round of hands-on testing: power-off time, light mode, brightness and
+the four light mode records, the Claude status switch (hooks mode), microphone
+noise reduction and what the knob press types. Settings not yet confirmed on
+the key are labelled Untested, show their raw value, and are read back after
+each change. A Read all settings button reads everything again. The safety
+rules are unchanged: one change at a time, time limits, and commands that
+could harm the key cannot be sent.
+
 ## 0.12.0 — 2026-11-16
 
 Add the Ulanzi AU05 Vibe Key. It is off until you switch it on in General.
