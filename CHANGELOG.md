@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.0 — 2026-11-16
+
+Add the Ulanzi AU05 Vibe Key. It is off until you switch it on in General.
+The Vibe Key page shows the connection and battery, live key and knob
+presses, the standby and power-off timers, the light mode and brightness,
+and microphone noise reduction. Each key (K1, K2, K3, knob press) can run a
+Unified Control action from any app (start dictation in Claude, start
+dictation in ChatGPT, Send, or nothing), type a key combination stored on the
+key, or use the factory setting. All writes to the key are time-limited and
+limited to checked commands; nothing is written at start-up.
+
 ## 0.11.1 — 2026-11-13
 
 Fix a half update. The updater waited only for the main UC process. The dock
