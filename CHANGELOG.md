@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.17.0 — 2026-11-17
+
+Vibe Key quick menu. Any key (K1, K2, K3 or the knob press) can open a small
+menu window: turn the knob to move, press the knob to choose, press the key
+again or wait to close. The menu appears near the top-right of the main screen
+by default; drag it anywhere, on any monitor, and it opens there next time.
+Menu entries can run an action, switch a profile (a named set of key
+assignments), change the target app (Claude or ChatGPT), or open a sub-menu;
+edit the menu on the Vibe Key page. The knob turn can now be a Unified Control
+control: the knob types its own codes, the menu uses each click, and when the
+menu is closed Unified Control scrolls under the mouse or changes the volume.
+Factory scroll stays available.
+
 ## 0.16.0 — 2026-11-17
 
 Cooler engine 4.23.0. The cooler screen hung three times (6, 11 and 17 Nov)
