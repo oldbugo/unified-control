@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.11.1"
+version = "0.12.0"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"
@@ -22,6 +22,8 @@ ab_glyph = "0.2"
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
+# AU05 Vibe Key driver (uc-ulanzi PR 3, merged).
+ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "59f4080541f933686b65fdf3f135eb9a66238ade" }
 
 [dev-dependencies]
 tempfile = "3"

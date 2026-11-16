@@ -5,6 +5,7 @@ import {savePreviewPicture,previewPicture} from './js/preview-assets.js';
 import {KeyPreviewRenderer} from './js/key-preview.js';
 import {DevicePageFollower} from './js/device-page-follow.js';
 import {CoolerPanel} from './js/cooler-panel.js';
+import {Au05Panel,AU05_ICON} from './js/au05-panel.js';
 import {AgentEditorLease} from './js/agent-editor.js';
 import {installNavigationSearch} from './js/navigation-search.js';
 // Diagnostic only: a rejected promise nobody awaited is logged, never shown.
@@ -12,10 +13,12 @@ window.addEventListener('unhandledrejection',event=>{console.warn('Unhandled pro
 const T = window.__TAURI_INTERNALS__;
 const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new Error('Browser preview'));
 const coolerPanel=new CoolerPanel(invoke,!!T,()=>{syncDeviceVisibility();updateHomeDeviceStatus();});
+const au05Panel=new Au05Panel(invoke,!!T,()=>{syncDeviceVisibility();updateHomeDeviceStatus();});
 let refreshNavigationSearch=()=>{};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
-const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', dial:'Dial', general:'General', about:'About'};
+const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', vibekey:'Vibe Key', dial:'Dial', general:'General', about:'About'};
+const DEVICE_PAGES=['dock','cooler','vibekey','dial'];
 const FACES = {
   text:'Large text', icon:'Icon and label', picture:'Picture and label', clock:'Clock', date:'Date', claude:'Claude usage', codex:'Codex usage', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'
 };
@@ -39,7 +42,7 @@ const ICONS = {
   media:'<path d="m9 5 10 7-10 7Z"/>',
   monitor:'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
 };
-const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.launch}</svg>`;
+const icon = name => name==='vibekey'?AU05_ICON:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.launch}</svg>`;
 const face = (kind = 'text', text = '') => ({kind, text});
 const key = (a = face(), b = a, action = 'none', value = '') => ({a:{...a}, b:{...b}, action, value});
 const newPage = name => ({name, keys:Array.from({length:14}, () => key())});
@@ -126,24 +129,26 @@ function homeDockSummary(){
 function deviceEnabled(id){
   if(id==='dial')return false;
   if(!T)return true; // Browser previews expose the workspaces without enabling hardware.
+  if(id==='vibekey')return au05Panel.enabled;
   return id==='dock'?deviceStatus?.enabled===true:coolerPanel.state.enabled===true;
 }
-function deviceKnown(id){return !T||(id==='dock'?typeof deviceStatus?.enabled==='boolean':typeof coolerPanel.state.enabled==='boolean');}
+function deviceKnown(id){return !T||(id==='vibekey'?au05Panel.known:id==='dock'?typeof deviceStatus?.enabled==='boolean':typeof coolerPanel.state.enabled==='boolean');}
 function syncDeviceVisibility(){
-  for(const id of ['dock','cooler','dial']){
+  for(const id of DEVICE_PAGES){
     const button=document.querySelector(`.nav-item[data-page="${id}"]`);
     if(button)button.dataset.available=String(deviceEnabled(id));
   }
   refreshNavigationSearch();
-  if(['dock','cooler','dial'].includes(draft.current)&&deviceKnown(draft.current)&&!deviceEnabled(draft.current))navigate('home');
+  if(DEVICE_PAGES.includes(draft.current)&&deviceKnown(draft.current)&&!deviceEnabled(draft.current))navigate('home');
 }
 function updateHomeDeviceStatus(){
   if(draft.current!=='home')return;
   const list=pane.querySelector('.device-list');if(!list)return;
-  const cooler=coolerPanel.summary(),dock=homeDockSummary();
+  const cooler=coolerPanel.summary(),dock=homeDockSummary(),vibe=au05Panel.summary();
   for(const [id,title,description,status] of [
     ['dock','Stream dock',dock.description,dock.status],
     ['cooler','Cooler screen',cooler.description,cooler.status],
+    ['vibekey','Vibe Key',vibe.description,vibe.status],
   ]){
     let card=list.querySelector(`.device-card[data-go="${id}"]`);
     if(!deviceEnabled(id)){card?.remove();continue;}
@@ -306,15 +311,18 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   });
   if(draft.current==='cooler'&&coolerPanel.active(pane)){coolerPanel.refresh();showStorage();return;}
   coolerPanel.unmount();
+  if(draft.current==='vibekey'&&au05Panel.active(pane)){au05Panel.paint();showStorage();syncDeviceVisibility();return;}
+  au05Panel.unmount();
   let html = '';
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
   else if (draft.current==='cooler') html=coolerPanel.markup();
+  else if (draft.current==='vibekey') html=au05Panel.markup();
   else if (draft.current==='dial') html = plannedPage(draft.current);
   else if (draft.current === 'home') html = `<div class="home-intro"><div><span class="eyebrow">YOUR WORKSPACE</span><h1>Your devices, together.</h1><p>Make the desk your own. Your enabled devices keep working as you move between them.</p><button class="btn" data-go="general">Manage devices ${icon('general')}</button></div><div class="workspace-art" aria-hidden="true"><span class="art-screen">${icon('cooler')}</span><span class="art-dock">${icon('dock')}</span><span class="art-orbit"></span></div></div><div class="section-heading"><div><span class="eyebrow">DEVICE WORKSPACE</span><h2>Devices</h2></div><span class="local-badge"><i></i>Runs locally</span></div><div class="device-list"></div><section id="devices-empty" class="empty-devices"><span class="device-icon">${icon('general')}</span><div><h3>Choose your devices</h3><p>Enable a device in General to add it to your workspace.</p></div><button class="btn primary" data-go="general">Open settings</button></section><p class="workspace-footnote">${T?'Closing the window keeps enabled devices running in the tray.':'Browser previews do not connect to hardware.'}</p>`;
   else if (draft.current === 'general') html = `
     <div class="page-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h1>General</h1><p>Your devices and the way Unified Control works.</p></div></div>
     <div class="settings-section-heading"><h2>Devices</h2><p>Enabled devices appear in Home and the sidebar. They keep working in the background.</p></div>
-    <section class="settings-list device-settings"><div class="device-setting"><span class="device-icon">${icon('dock')}</span><div class="device-setting-copy"><strong>Stream dock</strong><p>Ulanzi D200H · keys, profiles and actions</p><p id="dock-message" class="setting-status">${esc(deviceStatus?.message||'Waiting for dock status.')}</p></div><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Unknown')}</span><label class="device-setting-control"><input id="dock-enabled" type="checkbox" role="switch" aria-label="Enable Stream dock" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label></div><div id="cooler-settings"></div></section>
+    <section class="settings-list device-settings"><div class="device-setting"><span class="device-icon">${icon('dock')}</span><div class="device-setting-copy"><strong>Stream dock</strong><p>Ulanzi D200H · keys, profiles and actions</p><p id="dock-message" class="setting-status">${esc(deviceStatus?.message||'Waiting for dock status.')}</p></div><span id="dock-state" class="chip">${esc(deviceStatus?.state||'Unknown')}</span><label class="device-setting-control"><input id="dock-enabled" type="checkbox" role="switch" aria-label="Enable Stream dock" ${deviceStatus?.enabled?'checked':''} ${T?'':'disabled'}></label></div><div id="cooler-settings"></div><div id="au05-settings"></div></section>
     <p class="settings-note">Dial support is planned. It will appear here when it is available.</p>
     <div class="settings-section-heading"><h2>Application</h2><p>Local controls, always within reach.</p></div>
     <section class="settings-list"><div class="setting-row"><div><strong>Start with Windows</strong><p>Start quietly in the tray. Off unless you enable it.</p></div>
@@ -327,6 +335,8 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   pane.innerHTML = html;
   if(draft.current==='cooler')coolerPanel.mount(pane);
   if(draft.current==='general')coolerPanel.mountSettings(pane.querySelector('#cooler-settings'));
+  if(draft.current==='general')au05Panel.mountSettings(pane.querySelector('#au05-settings'));
+  if(draft.current==='vibekey')au05Panel.mount(pane);
   showStorage();
   updateNativePreviews();
   updatePictures();
@@ -507,7 +517,7 @@ const agentEditor=new AgentEditorLease({
   onError:()=>{previewNote='The agent layout update could not finish. Your saved layout is kept.';showStorage();},
 });
 async function navigate(id) {
-  if (!Object.hasOwn(NAV,id)||(['dock','cooler','dial'].includes(id)&&!deviceEnabled(id))) return;
+  if (!Object.hasOwn(NAV,id)||(DEVICE_PAGES.includes(id)&&!deviceEnabled(id))) return;
   if(draft.current==='cooler'&&id!=='cooler'){
     pane.inert=true;
     try{await coolerPanel.prepareLeave({navigation:true});}catch(error){previewNote=error.message;showStorage();return;}finally{pane.inert=false;}
@@ -521,6 +531,7 @@ async function navigate(id) {
   invoke('settings_update',{patch:{page:id}}).then(s=>{state=s;}).catch(()=>{});
 }
 document.addEventListener('click', e => {
+  if(draft.current==='vibekey'&&pane.contains(e.target)&&au05Panel.handle(e))return;
   const nav = e.target.closest('[data-page],[data-go]');
   if (nav) return navigate(nav.dataset.page || nav.dataset.go);
   const keyEl = e.target.closest('[data-key]');
@@ -580,6 +591,7 @@ function markEditGesture(element){
 }
 pane.addEventListener('focusout',e=>{if(e.target===editGesture)editGesture=null;});
 pane.addEventListener('change', e => {
+  if(draft.current==='vibekey'&&au05Panel.handle(e))return;
   const {id,value} = e.target;
   markEditGesture(e.target);
   if(id==='follow-physical-page'){setFollowPhysicalPage(e.target.checked);return;}
@@ -747,6 +759,7 @@ const initialPreferenceEpoch=followPreferenceEpoch,initialDockTicket=++dockReque
 invoke('app_state').then(s => {
   state=s;
   if(s.cooler&&!coolerPanel.hasState)coolerPanel.acceptState(s.cooler);
+  if(s.au05)au05Panel.acceptState(s.au05);
   if(followPreferenceEpoch===initialPreferenceEpoch){
     followPhysicalPage=s.followPhysicalPage!==false;
     savedFollowPhysicalPage=followPhysicalPage;

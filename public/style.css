@@ -242,3 +242,9 @@ input[type="checkbox"][role="switch"]:disabled { opacity:.5;cursor:default; }
 .device-setting-control { gap:14px; }
 .device-advanced[open] { padding-bottom:18px; }
 .device-advanced > p { margin-bottom:14px;font-size:12px; }
+/* Vibe Key page */
+.au05-key-controls { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s2); }
+.au05-key-controls select, .au05-key-controls input { min-width:180px; }
+.au05-events { list-style:none; margin:0; padding:var(--s3) var(--s5); max-height:280px; overflow-y:auto; font-size:var(--fs-small); }
+.au05-events li { padding:var(--s1) 0; border-bottom:1px solid var(--border); }
+.au05-events li:last-child { border-bottom:0; }

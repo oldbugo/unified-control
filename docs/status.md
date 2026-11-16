@@ -61,7 +61,7 @@ Evidence (dated records):
 [acceptance](acceptance.md) · [cooler connection health](cooler-connection-health.md) · [function failures](function-failures.md) · [backlog](backlog.md) · [cooler entry delay](cooler-entry-delay.md) · [navigation timing](navigation-timing.md)
 
 Reference (how it works):
-[testing](testing.md) · [agent control (MCP)](agent-control.md) · [actions](actions.md) · [profiles](profiles.md) · [usage](usage.md) · [visuals](visuals.md) · [dock service](dock-service.md) · [architecture](device-app/architecture.md) · [cooler migration](device-app/cooler-migration.md) · [cross-device controls](device-app/cross-device-controls.md) · [dock worker](device-app/dock-worker.md) · [installer transition](device-app/installer-transition.md) · [shared hardware](device-app/shared-hardware-protocol.md) · [shared services](device-app/shared-services-protocol.md)
+[testing](testing.md) · [agent control (MCP)](agent-control.md) · [actions](actions.md) · [profiles](profiles.md) · [usage](usage.md) · [visuals](visuals.md) · [dock service](dock-service.md) · [architecture](device-app/architecture.md) · [cooler migration](device-app/cooler-migration.md) · [cross-device controls](device-app/cross-device-controls.md) · [dock worker](device-app/dock-worker.md) · [installer transition](device-app/installer-transition.md) · [shared hardware](device-app/shared-hardware-protocol.md) · [shared services](device-app/shared-services-protocol.md) · [Vibe Key](device-app/vibe-key.md)
 
 Also: [CHANGELOG](../CHANGELOG.md) · [README](../README.md)
 
