@@ -43,7 +43,12 @@ pub fn iso_now() -> String {
 }
 
 pub fn log(msg: &str) {
-    let dir = base_dir();
+    log_in(&base_dir(), msg)
+}
+
+/// The same log in another folder (for example `devices/au05`).
+pub fn log_in(dir: &std::path::Path, msg: &str) {
+    let dir = dir.to_path_buf();
     let file = dir.join("device.log");
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(m) = std::fs::metadata(&file) {

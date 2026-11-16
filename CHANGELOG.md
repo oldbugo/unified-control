@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0 — 2026-11-17
+
+Choosing a Unified Control action for a Vibe Key key no longer gets stuck.
+The action is saved at once; setting the key to type its own code runs in the
+background and the panel shows each step ("Waiting for the key: press any key
+to wake it", "Sending to the key", "Key updated", or the error with Try again).
+Actions are now grouped by app: Claude, ChatGPT, Windows / media, and a custom
+shortcut. Actions nobody has confirmed yet are marked unverified. The Vibe Key
+has its own log, devices\au05\device.log (no raw device data or typed text).
+
 ## 0.14.0 — 2026-11-17
 
 The Vibe Key page now opens on a drawing of the key: knob (press and turn)

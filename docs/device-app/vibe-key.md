@@ -119,10 +119,48 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 - "Light follows Claude Code" is shown as planned. The code has a stub only (`agent_light_requests`
   returns nothing).
 
+## Actions by application (2026-11-17)
+
+The action list is a data table (`CATALOGUE` and `APPS` in `src-tauri/src/core/au05_hotkey.rs`), grouped as
+Claude, ChatGPT, Windows / media, Custom shortcut and Nothing. An action brings the app forward when needed,
+then presses a key combination or a media key. To add an app or an action, add a row there.
+
+Verified means vendor documentation or checked on this PC; the page marks every other action "unverified".
+
+- Claude: Start dictation Ctrl + D (checked on this PC), Send Enter and Stop/interrupt Esc (Claude Code desktop
+  docs). New session, next/previous session, model menu, permission menu, side chat, terminal, diff pane and
+  shortcut list are inferred from the macOS list (unverified). "Open Claude from anywhere" Ctrl + Alt + Space
+  is a third-party report (unverified). Stop/interrupt is never a default.
+- ChatGPT: every shortcut is unverified (OpenAI's help pages could not be read): dictation Ctrl + Shift + D,
+  new chat Ctrl + Shift + O, sidebar Ctrl + Shift + S, focus input Shift + Esc, shortcut list Ctrl + /,
+  companion window Alt + Space. The app's window (`chatgpt.exe`, title "ChatGPT") is also unverified.
+- Windows / media: play/pause, next, previous, volume up/down, mute (media keys), show desktop Win + D, task view
+  Win + Tab, screenshot Win + Shift + S (verified Windows shortcuts), microphone mute in calls Win + Alt + K
+  (unverified: only in call apps that support it).
+- Custom shortcut: any key combination, sent to the focused app or after bringing Claude or ChatGPT forward.
+
+## Choosing an action never waits for the key (fix, 2026-11-17)
+
+Before, choosing "Unified Control action" waited for the key (up to 45 s) with the whole panel disabled, and
+an asleep key made it fail after 20 s with the message far above the panel. Now the action is saved at once
+(no device write) and the hotkey is claimed at once, even before the key's list is read. Setting the key to
+type its own code is a background job shown under the choice: "Waiting for the key: press any key to wake it",
+"Sending to the key", "Key updated", or the error with "Try again". The job is sent only when the key is awake,
+one key-typing command at a time, with the usual quiet time, time limits and no retry. If the key falls asleep
+before the job is written, the job waits again; any other failure ends the job with the error.
+
+## Log
+
+`%APPDATA%\UnifiedControl\devices\au05\device.log` (rotated at about 1 MB). It records: worker start and
+stop; receiver opened or not (error kind only); state changes (waiting, connected, asleep, paused, not found);
+every command queued and its result (for example "done set key typing K3 (1 entries): ok" or ": NoReply");
+page changes and action choices; key jobs; hotkey claimed, not claimed (with the reason) or released; and each
+action run with its result. It never records report bytes, the key, window titles or typed text.
+
 ## Tests
 
 - Driver: `cargo test -p ulanzi_au05` in uc-ulanzi (25 tests, fake key and pure functions).
-- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (13 tests, fake key and fake desktop).
+- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (14 tests, fake key and fake desktop).
 - Page: `node scripts/check-vibe-key.cjs` (headless fixture; set `UC_PLAYWRIGHT_MODULE`).
 - Native: `node scripts/check-native-vibe-key.cjs` (quiet debug app with the fake key; also set `UC_TEST_EXE`).
 

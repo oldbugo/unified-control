@@ -8,7 +8,7 @@ const STATES={
   disabled:'Disabled',starting:'Starting',waiting:'Waiting for the key',connected:'Connected',asleep:'Asleep',
   paused:'Paused',suspended:'Stopped',not_found:'Not plugged in',error:'Error',
 };
-const ACTIONS={none:'Nothing (harmless)',claudeDictation:'Start dictation in Claude',chatgptDictation:'Start dictation in ChatGPT (not checked yet)',enter:'Send (Enter)',hotkey:'Custom key combination…'};
+
 const STANDBY=[[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes'],[600,'10 minutes'],[900,'15 minutes'],[1800,'30 minutes'],[3600,'1 hour']];
 const SLEEP={3600:'1 hour',7200:'2 hours',10800:'3 hours',14400:'4 hours',0:'Never'};
 const errorText=e=>typeof e==='string'?e:e?.error||e?.message||'The Vibe Key request failed';
@@ -17,7 +17,7 @@ const errorText=e=>typeof e==='string'?e:e?.error||e?.message||'The Vibe Key req
 // K2 (tick) and K3 (cross) in one column.
 const ZONES={knobTurn:'Knob turn',knobPress:'Knob press',k1:'K1 · voice',k2:'K2 · confirm',k3:'K3 · cancel'};
 const EVENT_ZONE={'K1':'k1','K2':'k2','K3':'k3','knob press':'knobPress','knob right':'knobTurn','knob left':'knobTurn'};
-const SHORT={none:'Nothing',claudeDictation:'Claude dictation',chatgptDictation:'ChatGPT dictation',enter:'Send (Enter)'};
+
 const clip=(t,n=24)=>t.length>n?t.slice(0,n-1)+'…':t;
 const minutes=s=>s%60===0?`${s/60} minute${s===60?'':'s'}`:`${s} seconds`;
 
@@ -35,7 +35,7 @@ export class Au05Panel{
     this.state=native?null:{enabled:false,state:'disabled',message:'Vibe Key is disabled'};
     this.readError=false;this.container=null;this.settingsContainer=null;
     this.note='';this.noteAttention=false;this.sending=0;this.polling=false;this.epoch=0;
-    this.selected='k1';this.lastFlashAt=null;
+    this.selected='k1';this.lastFlashAt=null;this.lastChange={};
     this.timer=setInterval(()=>this.refresh(),1000);
   }
   get enabled(){return this.state?.enabled===true;}
@@ -109,7 +109,7 @@ export class Au05Panel{
   }
   unmount(){this.container=null;}
   active(container){return this.container===container&&!!container.querySelector('#au05-page');}
-  setNote(text,attention=false){this.note=text;this.noteAttention=attention;const el=this.container?.querySelector('#au05-note');if(el){el.textContent=text;el.classList.toggle('attention',attention);}}
+  setNote(text,attention=false){this.note=text;this.noteAttention=attention;for(const el of this.container?.querySelectorAll('#au05-note,.au05-panel-note')||[]){el.textContent=text;el.classList.toggle('attention',attention);}}
   paint(force=false){
     this.paintSettings();
     const root=this.container?.querySelector('#au05-page');if(!root)return;
@@ -121,8 +121,13 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected]);
-    const typing=controls.contains(document.activeElement)&&document.activeElement.matches('input,select');
-    if(force||(sig!==this.lastSig&&!typing)){this.lastSig=sig;controls.innerHTML=this.controlsMarkup();}
+    // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
+    const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
+    if(force||(sig!==this.lastSig&&!typing)){
+      const refocus=controls.contains(active)&&active.id?active.id:null;
+      this.lastSig=sig;controls.innerHTML=this.controlsMarkup();
+      if(refocus)controls.querySelector(`#${CSS.escape(refocus)}`)?.focus();
+    }
     this.flash();
   }
   skeleton(){
@@ -147,29 +152,51 @@ export class Au05Panel{
     const dis=off?' disabled':'';
     const opt=(v,label,sel)=>`<option value="${esc(v)}"${String(v)===String(sel)?' selected':''}>${esc(label)}</option>`;
     const raw=v=>v==null?'':` <span class="hint">raw ${esc(v)}</span>`;
+    const cat=s.catalogue?.actions||[];
+    const actionName=a=>{
+      if(!a||a.kind==='none')return 'Nothing';
+      if(a.kind==='hotkey'){const app=(s.catalogue?.apps||[]).find(x=>x.id===a.app);return a.value?`${a.value}${app?` in ${app.name}`:''}`:'Custom (not set)';}
+      const e=cat.find(x=>x.id===a.kind);return e?`${e.group==='Windows / media'?'':`${e.group} `}${e.label}`:a.kind;
+    };
     const keyEditor=k=>{
-      const a=s.actions?.[k.key]||{kind:'none',value:''};
-      const hot=k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:'';
-      const uc=k.mode==='uc'?`<select data-au05-action="${k.key}" aria-label="Unified Control action for ${esc(k.name)}"${dis}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>
-        ${a.kind==='hotkey'?`<input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}"${dis}>`:''}${hot}`:'';
+      const a=s.actions?.[k.key]||{kind:'none',value:'',app:''};
+      const job=k.job;
+      // The choice shows what the user chose, even while the key change is still waiting.
+      const pendingMode=job&&job.state!=='done'&&job.state!=='failed'?(job.label===k.ownCode?'uc':job.label?.startsWith('Factory')?'factory':'keys'):null;
+      const effective=pendingMode||k.mode;
+      const value=(effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
+      const groups=[...new Set(cat.map(e=>e.group))];
+      const options=`${value==='unknown'?opt('unknown','Not read yet: choose to set it','unknown'):''}
+        <optgroup label="Unified Control action">${opt('uc:none','Nothing (harmless: the key does nothing)',value)}${opt('uc:hotkey','Custom shortcut…',value)}</optgroup>
+        ${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(e=>e.group===g).map(e=>opt(`uc:${e.id}`,`${e.label}${e.keys&&e.keys!==e.label?` (${e.keys})`:''}${e.status==='verified'?'':' · unverified'}`,value)).join('')}</optgroup>`).join('')}
+        <optgroup label="Stored on the key (works without Unified Control)">${opt('keys','Types keys…',value)}${opt('factory',`Factory default (${k.factory})`,value)}</optgroup>`;
+      const entry=cat.find(e=>e.id===a.kind);
+      const custom=value==='uc:hotkey'?`<div class="au05-key-controls"><input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}">
+        <select data-au05-action-app="${k.key}" aria-label="Send to">${opt('','Send to the focused app',a.app||'')}${(s.catalogue?.apps||[]).map(x=>opt(x.id,`Bring ${x.name} forward first${x.verified?'':' (unverified)'}`,a.app||'')).join('')}</select></div>`:'';
+      const hot=value.startsWith('uc:')&&a.kind!=='none'?(k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:''):'';
+      const jobLine=job?`<p class="au05-job${job.state==='failed'?' attention':''}" role="status">${job.state==='done'?'Key updated.':esc(job.message)}${job.state==='failed'?` <button class="btn" type="button" data-au05-retry="${k.key}">Try again</button>`:''}</p>`:'';
+      // An action without the key typing its own code yet (for example after a restart): offer to finish it.
+      const finish=!job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<p class="attention">The key does not type ${esc(k.ownCode)} yet, so the action cannot run. <button class="btn" type="button" data-au05-retry="${k.key}">Set it up</button></p>`:'';
       const read=`<button class="btn" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
       return `<div class="au05-editor-head"><h2>${esc(ZONES[k.key])}</h2>${k.checked?'':' <span class="chip attention">Untested</span>'}</div>
       <p>Types now: ${esc(k.label||'Not read yet')}</p>
-      <div class="field"><label for="au05-mode-${k.key}">What it does</label><select id="au05-mode-${k.key}" data-au05-mode="${k.key}"${dis}>
-      ${k.mode==='unknown'?opt('unknown','Not read yet','unknown'):''}${opt('uc','Unified Control action',k.mode)}${opt('keys','Types keys…',k.mode)}${opt('factory',`Factory default (${k.factory})`,k.mode)}</select></div>
-      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${dis}>
-      <div class="au05-key-controls">${uc}</div>
-      <p class="hint">Unified Control action: the key types its own unused code (${esc(k.ownCode)}) and Unified Control runs the action, in any app. Types keys and Factory default are stored on the key and also work when Unified Control is closed.</p>
+      <div class="field"><label for="au05-mode-${k.key}">What it does</label><select id="au05-mode-${k.key}" data-au05-mode="${k.key}"${this.native&&s.enabled===true?'':' disabled'}>${options}</select></div>
+      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${value==='keys'?'':'hidden'}>
+      ${custom}${hot}${entry&&entry.status!=='verified'?`<p class="hint">Unverified shortcut: ${esc(entry.note)}. Check it in the app (Ctrl + / shows its shortcut list).</p>`:entry?`<p class="hint">${esc(entry.note)}.</p>`:''}
+      ${jobLine}${finish}<p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+      <p class="hint">A Unified Control action: the key types its own unused code (${esc(k.ownCode)}) and Unified Control runs the action in any app. Keys and Factory default are stored on the key.</p>
       ${read}`;
     };
     const keyOf=id=>(s.keys||[]).find(k=>k.key===id);
     const assignment=id=>{
       if(id==='knobTurn')return 'Factory scroll';
-      const k=keyOf(id);if(!k||k.mode==='unknown')return 'Not read yet';
-      if(k.mode==='factory')return `Factory: ${k.factory}`;
-      if(k.mode==='keys')return `Types ${k.keys||''}`;
-      const a=s.actions?.[id]||{kind:'none'};
-      return a.kind==='hotkey'?(a.value||'Custom keys (not set)'):SHORT[a.kind]||'Nothing';
+      const k=keyOf(id),a=s.actions?.[id];
+      const waiting=k?.job&&(k.job.state==='waiting'||k.job.state==='sending')?' (waiting)':'';
+      if(a&&a.kind!=='none'&&(!k||k.mode==='uc'||k.mode==='unknown'||waiting))return actionName(a)+waiting;
+      if(!k||k.mode==='unknown')return 'Not read yet';
+      if(k.mode==='factory')return `Factory: ${k.factory}`+waiting;
+      if(k.mode==='keys')return `Types ${k.keys||''}`+waiting;
+      return 'Nothing';
     };
     const sel=id=>id===this.selected?' is-selected':'';
     const zone=(id,shape)=>shape.replace('<ZONE ','<').replace('/>',` data-au05-zone="${id}" class="au05-zone${sel(id)}${id==='knobTurn'?' au05-ring':''}" role="button" tabindex="0" aria-label="${ZONES[id]}: ${esc(assignment(id))}" aria-pressed="${id===this.selected}"/>`);
@@ -229,11 +256,23 @@ export class Au05Panel{
     catch(error){this.setNote(errorText(error),true);return false;}
     finally{this.sending--;this.paint(true);this.onState();}
   }
-  // Keys and factory default type on their own, so their UC action is cleared (its hotkey is released).
+  // Setting what a key types returns at once; the side panel follows the job ("Waiting for the key", "Done"
+  // or the error). Keys and factory default type on their own, so their UC action is cleared.
   async setMode(key,mode,keys){
-    const ok=await this.change(mode==='keys'?{setting:'keyTyping',key,mode,keys}:{setting:'keyTyping',key,mode});
+    const change=mode==='keys'?{setting:'keyTyping',key,mode,keys}:{setting:'keyTyping',key,mode};
+    this.lastChange[key]=change;
+    try{this.state=await this.invoke('au05_change',{change});this.setNote('');}
+    catch(error){this.setNote(errorText(error),true);this.paint(true);return;}
     const a=this.state?.actions?.[key];
-    if(ok&&mode!=='uc'&&a&&a.kind!=='none')await this.action(key,'none','');
+    if(mode!=='uc'&&a&&a.kind!=='none')await this.action(key,'none','','');
+    this.paint(true);this.onState();
+  }
+  // Choosing a UC action saves it at once (no device write), then makes the key type its own code.
+  async chooseAction(key,kind){
+    await this.action(key,kind,kind==='hotkey'?(this.state?.actions?.[key]?.value||''):'',kind==='hotkey'?(this.state?.actions?.[key]?.app||''):'');
+    const k=(this.state?.keys||[]).find(x=>x.key===key);
+    const job=k?.job,busy=job&&(job.state==='waiting'||job.state==='sending')&&job.label===k.ownCode;
+    if(k&&k.mode!=='uc'&&!busy)await this.setMode(key,'uc');
   }
   // Key typing is read only on request, one key at a time (the key can take up to 20 s to answer).
   async readKey(key){
@@ -242,8 +281,8 @@ export class Au05Panel{
     catch(error){this.setNote(errorText(error),true);}
     finally{this.sending--;this.paint(true);}
   }
-  async action(control,kind,value){
-    try{this.state=await this.invoke('au05_configure',{patch:{action:{control,kind,value}}});this.setNote('Saved.');}
+  async action(control,kind,value,app=''){
+    try{this.state=await this.invoke('au05_configure',{patch:{action:{control,kind,value,app}}});this.setNote('Saved.');}
     catch(error){this.setNote(errorText(error),true);}
     finally{this.paint(true);}
   }
@@ -260,6 +299,9 @@ export class Au05Panel{
     }
     const zone=e.type==='click'&&t.closest?.('[data-au05-zone]');
     if(zone){this.select(zone.dataset.au05Zone);return true;}
+    const retry=e.type==='click'&&t.closest?.('[data-au05-retry]');
+    if(retry){const key=retry.dataset.au05Retry,last=this.lastChange[key],a=this.state?.actions?.[key];
+      if(a&&a.kind!=='none')this.setMode(key,'uc');else if(last)this.setMode(key,last.mode,last.keys);return true;}
     const read=e.type==='click'&&t.closest?.('[data-au05-read]');
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
@@ -269,11 +311,12 @@ export class Au05Panel{
       const key=t.dataset.au05Mode,input=this.container.querySelector(`[data-au05-keys="${key}"]`);
       if(t.value==='keys'){input.hidden=false;input.focus();return true;}
       if(t.value==='unknown')return true;
+      if(t.value.startsWith('uc:')){this.chooseAction(key,t.value.slice(3));return true;}
       this.setMode(key,t.value);return true;
     }
     if(t.dataset.au05Keys){this.setMode(t.dataset.au05Keys,'keys',t.value);return true;}
-    if(t.dataset.au05Action){this.action(t.dataset.au05Action,t.value,'');return true;}
-    if(t.dataset.au05ActionValue){this.action(t.dataset.au05ActionValue,'hotkey',t.value);return true;}
+    if(t.dataset.au05ActionValue){const key=t.dataset.au05ActionValue;this.action(key,'hotkey',t.value,this.state?.actions?.[key]?.app||'');return true;}
+    if(t.dataset.au05ActionApp){const key=t.dataset.au05ActionApp;this.action(key,'hotkey',this.state?.actions?.[key]?.value||'',t.value);return true;}
     return false;
   }
 }

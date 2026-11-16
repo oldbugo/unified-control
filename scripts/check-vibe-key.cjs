@@ -20,6 +20,10 @@ const server=http.createServer((req,res)=>{
     // A real key (fake:false): only checked settings may be sent; the knob press typing is not checked yet.
     window.__au05={enabled:false,fake:false,state:'disabled',message:'Vibe Key is disabled',battery:null,standbyS:null,sleepS:null,light:null,micNr:null,
       keys:[],events:[],actions:{k1:none,k2:none,k3:none,knobPress:none},hotkeysAvailable:true,
+      catalogue:{apps:[{id:'claude',name:'Claude',verified:true},{id:'chatgpt',name:'ChatGPT',verified:false}],actions:[
+        {id:'claudeDictation',group:'Claude',label:'Start dictation',keys:'Ctrl + D',status:'verified',note:'Checked on this PC'},
+        {id:'chatgptNewChat',group:'ChatGPT',label:'New chat',keys:'Ctrl + Shift + O',status:'unverified',note:'Third-party report'},
+        {id:'volumeUp',group:'Windows / media',label:'Volume up',keys:'Volume up',status:'verified',note:'Standard media key'}]},
       checked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,lightRecord:false,hooksMode:false,micNr:false},
       lightRange:{modeMax:3,brightnessMax:10},micNrMax:3};
     const key=(key,name,mode,label,factory,ownCode,checked=true)=>({key,name,mode,label,keys:mode==='keys'?label:null,factory,ownCode,canSet:true,checked,hotkey:{state:'off'}});
@@ -39,7 +43,7 @@ const server=http.createServer((req,res)=>{
       if(command==='au05_configure'){
         window.__writes.push({command,...args});
         if('enabled' in args.patch){window.__au05.enabled=args.patch.enabled;if(args.patch.enabled)connected();else window.__au05.state='disabled';}
-        if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value};
+        if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value,app:args.patch.action.app||''};
         hotkeys();return structuredClone(window.__au05);
       }
       if(command==='au05_change'){
@@ -47,7 +51,7 @@ const server=http.createServer((req,res)=>{
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
         if(c.setting==='lightRecord'){const f=['type','time','breatheLevel','breatheBrightness','alwaysOnBrightness'].indexOf(c.field);window.__au05.light.records[c.record][f]=c.value;}
-        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;}
+        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;k.job={state:'done',message:'Done',label:k.label};}
         return structuredClone(window.__au05);
       }
       if(command==='au05_read_all'){window.__writes.push({command});return structuredClone(window.__au05);}
@@ -83,7 +87,11 @@ const server=http.createServer((req,res)=>{
   assert.match(await page.locator('#au05-battery').textContent(),/30 %/);
   await pick('k3');
   await page.waitForSelector('select[data-au05-mode="k3"]');
-  assert.equal(await page.locator('select[data-au05-mode="k3"]').inputValue(),'uc','K3 types its own code: a UC action');
+  assert.equal(await page.locator('select[data-au05-mode="k3"]').inputValue(),'uc:none','K3 types its own code: a UC action (Nothing)');
+  // Grouped catalogue: app groups, verified and unverified marks.
+  assert.deepEqual(await page.locator('select[data-au05-mode="k3"] optgroup').evaluateAll(g=>g.map(x=>x.label)),
+    ['Unified Control action','Claude','ChatGPT','Windows / media','Stored on the key (works without Unified Control)']);
+  assert.match(await page.locator('select[data-au05-mode="k3"] option[value="uc:chatgptNewChat"]').textContent(),/unverified/);
   // A new key message lights up its zone.
   await page.evaluate(()=>window.__au05.events.unshift({at:Date.now()+1,control:'K1',pressed:true,code:'F20',action:null}));
   await page.waitForSelector('.au05-diagram .au05-flash[data-au05-zone="k1"]',{timeout:5000});
@@ -109,16 +117,15 @@ const server=http.createServer((req,res)=>{
   assert.match(await page.locator('[data-au05-read="k1"]').textContent(),/Read again/);
   // K3: a UC action. Choosing it saves the action; the hotkey shows as ready and the label updates.
   await pick('k3');
-  await page.locator('select[data-au05-action="k3"]').selectOption('claudeDictation');
+  await page.locator('select[data-au05-mode="k3"]').selectOption('uc:claudeDictation');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.kind==='claudeDictation'));
   await page.waitForFunction(()=>/Ready · F22/.test(document.querySelector('.au05-editor')?.textContent||''));
-  await page.waitForFunction(()=>/Claude dictation/.test(document.querySelector('.au05-callout[data-au05-zone="k3"]')?.textContent||''));
+  await page.waitForFunction(()=>/Claude Start dictation/.test(document.querySelector('.au05-callout[data-au05-zone="k3"]')?.textContent||''));
   // K2: switch to a UC action (the key is set to type F21), then a custom key combination.
   await pick('k2');
-  await page.locator('select[data-au05-mode="k2"]').selectOption('uc');
+  await page.locator('select[data-au05-mode="k2"]').selectOption('uc:hotkey');
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.key==='k2'&&w.change.mode==='uc'));
-  await page.waitForSelector('select[data-au05-action="k2"]');
-  await page.locator('select[data-au05-action="k2"]').selectOption('hotkey');
+  await page.waitForFunction(()=>/Key updated/.test(document.querySelector('.au05-job')?.textContent||''));
   const combo=page.locator('input[data-au05-action-value="k2"]');await combo.waitFor();
   await combo.fill('Ctrl + Enter');await combo.press('Tab');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.value==='Ctrl + Enter'));
@@ -145,8 +152,8 @@ const server=http.createServer((req,res)=>{
   await pick('knobTurn');
   assert.match(await page.locator('.au05-editor').textContent(),/Factory scroll/);
   await pick('k3');
-  await page.locator('select[data-au05-mode="k3"]').selectOption('uc');
-  await page.waitForSelector('select[data-au05-action="k3"]');
+  await page.locator('select[data-au05-mode="k3"]').selectOption('uc:volumeUp');
+  await page.waitForFunction(()=>/Volume up/.test(document.querySelector('.au05-callout[data-au05-zone="k3"]')?.textContent||''));
   for(const [width,height]of[[1440,1000],[800,700],[600,700]]){
     await page.setViewportSize({width,height});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no overflow at ${width}`);

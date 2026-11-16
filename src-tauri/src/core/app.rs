@@ -211,6 +211,7 @@ impl App {
         #[cfg(not(windows))]
         let desktop = None;
         let au05 = super::au05::Au05::new(fake, desktop);
+        au05.set_log_dir(self.base.join("devices/au05"));
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
@@ -636,7 +637,7 @@ impl App {
             let kind = a["kind"].as_str().unwrap_or("");
             let value = a["value"].as_str().unwrap_or("");
             // A custom hotkey with an empty value is saved while the user is still typing; it does nothing.
-            super::au05::validate_action(kind, value).map_err(CoreError::new)?;
+            super::au05::validate_action(kind, value, a["app"].as_str().unwrap_or("")).map_err(CoreError::new)?;
         }
         let saved = self
             .settings
@@ -646,10 +647,21 @@ impl App {
                 }
                 if let Some(a) = action {
                     let control = a["control"].as_str().unwrap_or("").to_string();
-                    s["au05"]["actions"][control] = json!({"kind": a["kind"], "value": a["value"]});
+                    s["au05"]["actions"][control] = json!({"kind": a["kind"], "value": a["value"], "app": a["app"]});
                 }
             })
             .map_err(CoreError::from)?;
+        if let Some(a) = action {
+            au05.log_line(&format!(
+                "page action {} = {}{}",
+                a["control"].as_str().unwrap_or(""),
+                a["kind"].as_str().unwrap_or(""),
+                a["app"].as_str().filter(|x| !x.is_empty()).map(|x| format!(" (app {x})")).unwrap_or_default()
+            ));
+        }
+        if let Some(v) = patch.get("enabled") {
+            au05.log_line(&format!("page enabled = {v}"));
+        }
         au05.configure(&saved.0["au05"]);
         Ok(self.au05_state())
     }
