@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.0 — 2026-11-17
+
+The Vibe Key page now opens on a drawing of the key: knob (press and turn)
+and K1, K2, K3, each labelled with what it does now. Click a part to open its
+settings in a panel beside the drawing; changes apply at once. A part lights up
+briefly when it is used (K2, K3 and the knob press only when they run a Unified
+Control action, because they send no message of their own). The other settings
+are in a compact Device settings section below.
+
 ## 0.13.0 — 2026-11-16
 
 The Vibe Key page now lets you change every known setting on the real key,

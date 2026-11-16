@@ -91,6 +91,20 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 
 ## What the page offers
 
+- The main element is a drawing of the key, in the real layout (Ulanzi's product image in the AU05 user
+  guide, docs.ulanzistudio.com, and the Studio editor): logo and microphone grille at the top, a large round
+  knob with a light ring, then K1 (microphone icon), K2 (tick) and K3 (cross) in one column. Five zones:
+  knob turn (the outer ring), knob press (the centre), K1, K2, K3. Each shows its current assignment
+  beside it ("Claude dictation", "Types Ctrl + D", "Factory: Esc", "Nothing", "Factory scroll").
+- Clicking a zone (or Enter or Space on it) opens its settings in a panel beside the drawing; changes apply
+  at once. A zone flashes when its control sends a message (K1 and the knob turns) or when UC runs its
+  action on a hotkey. K2, K3 and the knob press send no message of their own, so they flash only for a UC
+  action.
+- The knob turn keeps the factory scroll. UC actions for the turns are not built yet (the factory scroll
+  would still happen at the same time).
+- Below the drawing, "Device settings" holds power, microphone, light, the control codes, "Read all
+  settings" and "Reconnect".
+
 - "Read all settings": every read except key typing, one at a time with the usual pacing. Key typing is
   still read one key at a time ("Read from key" / "Read again").
 

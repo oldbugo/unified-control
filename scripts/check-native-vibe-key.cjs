@@ -44,16 +44,20 @@ async function run(){
     assert.ok(fake.received.every(p=>!p.startsWith('01 06 50')),'no cmd 0x50 at connect');
 
     await page.locator('[data-page="vibekey"]').click();
-    await page.waitForSelector('select[data-au05-mode="k1"]');
+    const pick=id=>page.locator(`.au05-diagram .au05-callout[data-au05-zone="${id}"]`).click();
+    await page.waitForSelector('.au05-diagram');
+    await pick('k3');
     await page.locator('[data-au05-read="k3"]').click();
     await until(async()=>(await invoke('au05_state')).keys[2].mode==='uc','K3 read on request');
     await page.waitForSelector('select[data-au05-action="k3"]');
+    await pick('k1');
     await page.locator('select[data-au05-mode="k1"]').selectOption('keys');
     const keys=page.locator('input[data-au05-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
     await until(async()=>(await invoke('au05_state')).keys[0].label==='Ctrl + D','K1 typing read back');
     await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
     await until(async()=>(await invoke('au05_state')).standbyS===900,'standby read back');
     assert.deepEqual((await invoke('au05_test_control',{patch:{op:'state'}})).fake.hotkeysClaimed,[],'no hotkey without an action');
+    await pick('k3');
     await page.locator('select[data-au05-action="k3"]').selectOption('hotkey');
     const value=page.locator('input[data-au05-action-value="k3"]');await value.fill('Ctrl + Enter');await value.press('Tab');
     await until(async()=>(await invoke('au05_state')).actions.k3.value==='Ctrl + Enter','K3 UC action saved');
@@ -64,6 +68,7 @@ async function run(){
     const ev=st.events.find(e=>e.control==='K3'&&e.action);
     assert.equal(ev.code,'F22');assert.equal(ev.action,'ran Ctrl + Enter');
     await page.waitForFunction(()=>/ran Ctrl \+ Enter/.test(document.getElementById('au05-events')?.textContent||''));
+    assert.match(await page.locator('.au05-callout[data-au05-zone="k3"]').textContent(),/Ctrl \+ Enter/,'the diagram shows the assignment');
 
     fake=(await invoke('au05_test_control',{patch:{op:'state'}})).fake;
     assert.deepEqual(fake.forbidden,[],'every command was on the allowlist');
