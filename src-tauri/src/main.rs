@@ -5,6 +5,7 @@
 
 mod instance_id;
 mod agent_transport;
+mod claude_hook;
 mod freeze_heartbeat;
 mod live_app;
 mod quick_menu;
@@ -20,6 +21,11 @@ use uc_core::core::App;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // A Claude Code hook: first of all, before any log, window or single-instance path. Prints nothing,
+    // always exits 0 quickly.
+    if args.iter().any(|a| a == uc_core::core::claude_sessions::HOOK_FLAG) {
+        std::process::exit(claude_hook::run(&args));
+    }
     // The supervised child has no window, tray, MCP server or durable profile
     // writer. Dispatch before every GUI/single-instance path.
     if args.iter().any(|a| a == "--dock-worker") {
@@ -133,6 +139,9 @@ fn main() {
             cc::au05_read_all,
             cc::au05_test_control,
             cc::au05_menu,
+            cc::claude_sessions_state,
+            cc::claude_sessions_connect,
+            cc::claude_sessions_disconnect,
             cc::dock_test_button,
             cc::dock_test_studio,
             cc::asset_import,
@@ -159,6 +168,10 @@ fn main() {
             }
             let agent_core = app.state::<Core>().0.clone();
             match agent_transport::start(Arc::new(move |request| {
+                // A Claude Code hook event (`--claude-hook`): not an agent call, and not gated by Local agent access.
+                if request["method"] == "claude_hook" {
+                    return serde_json::json!({"ok": true, "result": agent_core.claude_hook_event(&request["params"])});
+                }
                 match agent_core.agent_call(
                     request["method"].as_str().unwrap_or(""),
                     request["params"].clone(),

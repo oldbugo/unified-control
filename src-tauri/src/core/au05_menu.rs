@@ -17,9 +17,9 @@ pub const MAX_DEPTH: usize = 3;
 pub const MAX_ENTRIES: usize = 64;
 pub const MAX_LABEL: usize = 60;
 pub const MAX_PROFILES: usize = 12;
-/// Entry types. "claudeSession" is reserved for "open a Claude session" (not built yet: kept, shown, does
-/// nothing when chosen).
-pub const ENTRY_TYPES: [&str; 5] = ["action", "profile", "target", "submenu", "claudeSession"];
+/// Entry types. "claudeSessions" is the live list of Claude sessions (from Claude Code hooks, see
+/// `claude_sessions`), expanded when the menu is shown; "claudeSession" opens one session.
+pub const ENTRY_TYPES: [&str; 6] = ["action", "profile", "target", "submenu", "claudeSessions", "claudeSession"];
 
 /// Shows the menu window. Implemented by the app shell (a Tauri window); never installed in tests, fake or
 /// quiet instances.
@@ -45,6 +45,7 @@ pub fn default_menu() -> Value {
     json!([
         act("Claude dictation", "claudeDictation"),
         act("Claude new session", "claudeNewSession"),
+        {"type": "claudeSessions", "label": "Claude sessions", "then": "none"},
         act("ChatGPT dictation", "chatgptDictation"),
         {"type": "submenu", "label": "Switch profile", "entries": [
             {"type": "profile", "label": "Claude", "profile": "claude"},
@@ -84,7 +85,71 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 fn valid_session(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    super::claude_sessions::valid_desktop_id(id)
+}
+/// The action run after a Claude session opens (for example dictation): a catalogue id or "none".
+fn then_action(v: &Value) -> &str {
+    v.as_str().filter(|k| hotkey::entry(k).is_some()).unwrap_or("none")
+}
+
+fn age(ms: u64) -> String {
+    match ms / 60_000 {
+        0 => "now".into(),
+        m if m < 60 => format!("{m} min"),
+        m => format!("{} h", m / 60),
+    }
+}
+
+/// The menu with each "Claude sessions" entry replaced by a sub-menu: the sessions grouped by project (one
+/// project: the sessions directly), most recent first, at most 30. `sessions` from `claude_sessions`.
+pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) -> Value {
+    let Some(list) = menu.as_array() else { return json!([]) };
+    Value::Array(
+        list.iter()
+            .map(|e| match e["type"].as_str() {
+                Some("claudeSessions") => {
+                    let then = e["then"].clone();
+                    let row = |s: &Value| {
+                        let label = s["label"].as_str().filter(|l| !l.is_empty()).unwrap_or("Untitled session");
+                        let state = if s["state"] == "working" { "working" } else { "idle" };
+                        let since = now_ms.saturating_sub(s["last"].as_u64().unwrap_or(now_ms));
+                        json!({"type": "claudeSession", "label": label, "session": s["desktopId"], "then": then,
+                               "detail": format!("{state} · {}", age(since))})
+                    };
+                    let shown: Vec<&Value> = sessions.iter().take(30).collect();
+                    let mut projects: Vec<String> = Vec::new();
+                    for s in &shown {
+                        let p = s["project"].as_str().unwrap_or("Other").to_string();
+                        if !projects.contains(&p) {
+                            projects.push(p);
+                        }
+                    }
+                    let entries: Vec<Value> = if shown.is_empty() {
+                        let note = if connected { "No Claude sessions yet" } else { "Connect Claude sessions on the Vibe Key page" };
+                        vec![json!({"type": "note", "label": note})]
+                    } else if projects.len() == 1 {
+                        shown.iter().map(|s| row(s)).collect()
+                    } else {
+                        projects
+                            .iter()
+                            .map(|p| {
+                                let rows: Vec<Value> =
+                                    shown.iter().filter(|s| s["project"].as_str().unwrap_or("Other") == p).map(|s| row(s)).collect();
+                                json!({"type": "submenu", "label": p, "entries": rows})
+                            })
+                            .collect()
+                    };
+                    json!({"type": "submenu", "label": e["label"], "entries": entries})
+                }
+                Some("submenu") => {
+                    let mut x = e.clone();
+                    x["entries"] = expand(&e["entries"], sessions, connected, now_ms);
+                    x
+                }
+                _ => e.clone(),
+            })
+            .collect(),
+    )
 }
 
 /// Keep only valid entries (unknown types, unknown actions, missing profiles, too deep or too many are
@@ -139,10 +204,14 @@ fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) 
                 out.push(json!({"type": "submenu", "label": if label.is_empty() { "Sub-menu".to_string() } else { label }, "entries": entries}));
                 continue;
             }
+            "claudeSessions" => {
+                json!({"type": "claudeSessions", "label": if label.is_empty() { "Claude sessions".to_string() } else { label },
+                       "then": then_action(&e["then"])})
+            }
             "claudeSession" => {
                 let id = e["session"].as_str().unwrap_or("");
                 json!({"type": "claudeSession", "label": if label.is_empty() { "Claude session".to_string() } else { label },
-                       "session": if valid_session(id) { id } else { "" }})
+                       "session": if valid_session(id) { id } else { "" }, "then": then_action(&e["then"])})
             }
             _ => continue,
         };
@@ -176,7 +245,9 @@ pub enum Outcome {
     Run(Value, String),
     Profile(String, String),
     Target(String, String),
-    /// Chosen but not available yet (stays open).
+    /// Open this Claude session (desktop id), then run the follow-up action (a catalogue id or "none").
+    Session(String, String),
+    /// Chosen but not available (stays open with a note).
     Unavailable(String),
 }
 
@@ -295,8 +366,12 @@ impl MenuState {
                         self.close();
                         Outcome::Target(e["target"].as_str().unwrap_or("").to_string(), label)
                     }
+                    "claudeSession" if super::claude_sessions::valid_desktop_id(e["session"].as_str().unwrap_or("")) => {
+                        self.close();
+                        Outcome::Session(e["session"].as_str().unwrap_or("").to_string(), e["then"].as_str().unwrap_or("none").to_string())
+                    }
                     _ => {
-                        let msg = "Opening a Claude session is not built yet".to_string();
+                        let msg = if e["type"] == "note" { label } else { "This Claude session is no longer available".to_string() };
                         self.note = Some(msg.clone());
                         Outcome::Unavailable(msg)
                     }
@@ -305,9 +380,9 @@ impl MenuState {
         }
     }
 
-    /// What the window shows. `settings` is the sanitized `au05` settings (for the header).
-    pub fn view(&mut self, settings: &Value) -> Value {
-        let menu = &settings["menu"];
+    /// What the window shows. `settings` is the sanitized `au05` settings (for the header); `menu` is the
+    /// menu as shown (with the Claude sessions expanded).
+    pub fn view(&mut self, settings: &Value, menu: &Value) -> Value {
         let level = self.level(menu);
         let profile = settings["profile"].as_str().unwrap_or("");
         let target = settings["target"].as_str().unwrap_or("claude");
@@ -331,7 +406,7 @@ impl MenuState {
                         _ => String::new(),
                     }
                 }
-                "claudeSession" => "not built yet".to_string(),
+                "claudeSession" => e["detail"].as_str().unwrap_or("").to_string(),
                 _ => String::new(),
             };
             let current = (t == "profile" && e["profile"] == profile) || (t == "target" && e["target"] == target);
@@ -368,29 +443,29 @@ mod tests {
     fn the_quick_menu_opens_moves_chooses_and_closes() {
         let profiles = vec!["claude".to_string(), "chatgpt".to_string(), "media".to_string()];
         let menu = sanitize_menu(&default_menu(), &profiles);
-        assert_eq!(menu.as_array().unwrap().len(), 7);
+        assert_eq!(menu.as_array().unwrap().len(), 8);
         let t0 = Instant::now();
         let mut m = MenuState::default();
         assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Nothing, "closed: knob turns do nothing");
         assert_eq!(m.step(&menu, Input::Toggle, t0), Outcome::Opened);
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
-        assert_eq!(m.highlight, 6, "wraps to the last row");
+        assert_eq!(m.highlight, 7, "wraps to the last row");
         assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Moved);
         assert_eq!(m.highlight, 0);
         // Into "Switch profile": row 0 is Back, the first profile is highlighted.
-        m.highlight = 3;
+        m.highlight = 4;
         assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Moved);
         assert_eq!(m.highlight, 1);
         let settings = json!({"menu": menu, "profile": "claude", "target": "claude",
                               "profiles": [{"id": "claude", "name": "Claude"}]});
-        let v = m.view(&settings);
+        let v = m.view(&settings, &menu);
         assert_eq!(v["title"], json!(["Quick menu", "Switch profile"]));
         assert_eq!(v["rows"][0]["type"], "back");
         assert_eq!(v["rows"][1]["current"], true, "the current profile is marked");
         assert_eq!(v["profile"], "Claude");
         // Back returns to the sub-menu's row; choosing again and picking ChatGPT switches the profile.
         assert_eq!(m.step(&menu, Input::Pick(0), t0), Outcome::Moved);
-        assert_eq!(m.highlight, 3);
+        assert_eq!(m.highlight, 4);
         m.step(&menu, Input::Choose, t0);
         assert_eq!(m.step(&menu, Input::Pick(2), t0), Outcome::Profile("chatgpt".into(), "ChatGPT".into()));
         assert!(!m.open, "a choice closes the menu");
@@ -410,13 +485,29 @@ mod tests {
         m.step(&menu, Input::Next, t0 + Duration::from_secs(5));
         assert!(!m.expired(t0 + Duration::from_secs(12)));
         assert!(m.expired(t0 + Duration::from_secs(13)));
-        // The reserved session entry stays open with a note; Back at the top closes.
-        let session = json!([{"type": "claudeSession", "label": "Fix the cooler", "session": "abc-123"}]);
+        // "Claude sessions" lists the sessions by project; choosing one opens it, then runs the follow-up.
+        let id = "local_0123abcd-0000-4000-8000-00000000abcd";
+        let sessions = vec![
+            json!({"desktopId": id, "label": "Fix the cooler", "project": "UnifiedControl", "state": "working", "last": 1}),
+            json!({"desktopId": "local_0123abcd-0000-4000-8000-00000000abce", "label": "", "project": "vault", "last": 1}),
+        ];
+        let lst = json!([{"type": "claudeSessions", "label": "Claude sessions", "then": "claudeDictation"}]);
+        let shown = expand(&lst, &sessions, true, 1);
+        assert_eq!(shown[0]["entries"][0]["label"], "UnifiedControl", "grouped by project");
         let mut s = MenuState::default();
-        s.step(&session, Input::Toggle, t0);
-        assert!(matches!(s.step(&session, Input::Choose, t0), Outcome::Unavailable(_)));
+        s.step(&shown, Input::Toggle, t0);
+        s.step(&shown, Input::Choose, t0); // into Claude sessions
+        s.step(&shown, Input::Choose, t0); // into UnifiedControl
+        assert_eq!(s.step(&shown, Input::Choose, t0), Outcome::Session(id.into(), "claudeDictation".into()));
+        // Not connected: a note that stays open; Back at the top closes.
+        let none = expand(&lst, &[], false, 1);
+        let mut s = MenuState::default();
+        s.step(&none, Input::Toggle, t0);
+        s.step(&none, Input::Choose, t0);
+        assert!(matches!(s.step(&none, Input::Choose, t0), Outcome::Unavailable(m) if m.starts_with("Connect")));
         assert!(s.open);
-        assert_eq!(s.step(&session, Input::Back, t0), Outcome::Closed);
+        s.step(&none, Input::Back, t0);
+        assert_eq!(s.step(&none, Input::Back, t0), Outcome::Closed);
         // Sanitising drops what the menu cannot run.
         let bad = json!([{"type": "action", "action": {"kind": "quickMenu"}}, {"type": "action", "action": {"kind": "shell"}},
                          {"type": "profile", "profile": "gone"}, {"type": "target", "target": "notepad"},

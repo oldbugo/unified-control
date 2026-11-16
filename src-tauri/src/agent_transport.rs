@@ -101,6 +101,17 @@ fn request(value: Value) -> Value {
     windows::request(value)
 }
 
+/// One short, fire-and-forget request (Claude Code hooks): every step has a small time limit, and any
+/// failure (UC not running) is ignored by the caller.
+#[cfg(windows)]
+pub fn notify(value: Value, budget: std::time::Duration) -> bool {
+    windows::notify(value, budget)
+}
+#[cfg(not(windows))]
+pub fn notify(_value: Value, _budget: std::time::Duration) -> bool {
+    false
+}
+
 #[cfg(not(windows))]
 pub struct Server;
 #[cfg(not(windows))]
@@ -602,6 +613,20 @@ mod windows {
             },
             Err(_) => failure("connection_lost", "The local agent response was interrupted or timed out; read the current state before retrying changes"),
         }
+    }
+    pub(super) fn notify(value: Value, budget: Duration) -> bool {
+        let Ok((sid, name)) = identity() else { return false };
+        let end = Instant::now() + budget;
+        let Ok(pipe) = open_client(&name, &sid, budget / 2) else { return false };
+        let Ok(bytes) = encode(&value, MAX_REQUEST) else { return false };
+        if write_frame(&pipe, bytes, end, None).is_err() {
+            return false;
+        }
+        let ok = read_frame(&pipe, 4096, end, None).is_ok();
+        if ok {
+            let _ = transfer(&pipe, &mut [1], true, end.max(Instant::now() + Duration::from_millis(20)), None);
+        }
+        ok
     }
     pub(super) fn request(value: Value) -> Value {
         match identity() {

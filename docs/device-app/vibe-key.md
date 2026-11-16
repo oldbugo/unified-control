@@ -18,6 +18,7 @@ facts".
 | Worker: one background thread that owns the key | `src-tauri/src/core/au05.rs` |
 | Hotkeys, focus and synthetic keys (behind a trait, with a fake) | `src-tauri/src/core/au05_hotkey.rs` |
 | Quick menu: model, profiles, state machine | `src-tauri/src/core/au05_menu.rs` (wiring: `MenuCtl` in `au05.rs`) |
+| Claude sessions (hooks, session list, Claude settings merge) | `src-tauri/src/core/claude_sessions.rs`, `src-tauri/src/claude_hook.rs` (`--claude-hook`) |
 | Quick menu window | `src-tauri/src/quick_menu.rs`, `public/quick-menu.html`, `public/js/quick-menu.js`, `public/css/quick-menu.css` |
 | Settings and commands | `src-tauri/src/core/app.rs` (`au05_*`), `commands.rs`, `settings.rs` (`au05`) |
 | Page, General switch and Home card | `public/js/au05-panel.js`, wired in `public/app.js` |
@@ -177,10 +178,10 @@ one key opens a menu.
   choice it closes first, then the action runs (and may bring Claude or ChatGPT forward).
 - **Menu model** (`au05.menu` in settings.json, data only): entries of type `action` (any catalogue action; the
   editor does not offer custom shortcuts yet, though a saved one is kept), `profile` (switch profile), `target` (change the target app), `submenu` (up to three
-  levels, 64 entries) and `claudeSession` (reserved for "open a Claude session", a
-  `claude://claude.ai/epitaxy/<sessionId>` link; shown, does nothing yet). The page's editor adds, removes,
+  levels, 64 entries), `claudeSessions` (the live list of Claude sessions, with an optional follow-up action
+  such as dictation) and `claudeSession` (one saved session). The page's editor adds, removes,
   moves, renames and changes entries; "Reset to the default menu" restores the shipped one.
-- **Default menu:** Claude dictation, Claude new session, ChatGPT dictation, Switch profile (Claude / ChatGPT /
+- **Default menu:** Claude dictation, Claude new session, Claude sessions, ChatGPT dictation, Switch profile (Claude / ChatGPT /
   Media), Target app (Claude / ChatGPT), Play / pause, Screenshot.
 - **Profiles** (`au05.profiles`, `au05.profile`): a profile is a named set of actions for K1, K2, K3 and the
   knob press. `au05.actions` are always the current profile's actions. Switching applies at once and writes
@@ -194,6 +195,37 @@ one key opens a menu.
   tests drive it through the fake key and `au05_menu`.
 - Later, not built: an always-on small assistant that shows the current profile and target.
 
+## Claude sessions (2026-11-17)
+
+The user chose Claude Code hooks. Opt-in: "Connect Claude sessions" on the Vibe Key page.
+
+- **Connect** adds four hook entries (SessionStart, UserPromptSubmit, Stop, SessionEnd) to
+  `%USERPROFILE%\.claude\settings.json`: merged (other settings and the user's own hooks stay), a backup copy
+  `settings.json.uc-backup-<time>` is written next to it first, and the page shows exactly what is added
+  before. Each entry runs the program directly (exec form, no shell): `{"type": "command", "command":
+  "<UnifiedControl.exe>", "args": ["--claude-hook", "<event>"], "timeout": 5}`. **Disconnect** removes exactly
+  UC's entries and forgets the session list. If the organisation's managed settings (`C:\Program
+  Files\ClaudeCode\managed-settings.json`, `managed-settings.d`, or the `ClaudeCode` policy in the registry)
+  block user hooks (`allowManagedHooksOnly`, `disableAllHooks`, `strictPluginOnlyCustomization`), or the
+  user's own `disableAllHooks` is on, the page says so and Connect is not offered.
+- **`UnifiedControl.exe --claude-hook <event>`** reads the hook's stdin and only `CLAUDE_CODE_HOST_SESSION_ID`
+  (the desktop session id, `local_<uuid>`) and `CLAUDE_CODE_SESSION_ID`; no other environment variable (the
+  environment holds tokens and the user's email). It sends {event, desktop id, Claude Code session id,
+  folder, time, and for UserPromptSubmit the first 80 characters of the prompt as a label} over UC's local
+  pipe, prints nothing, writes nothing and exits 0 (24-30 ms in the quiet test, debug build). If UC is not
+  running or Claude sessions are not connected, nothing happens. Sessions without a desktop id (terminal
+  sessions) are not sent.
+- **Session list** (`claude-sessions.json` in the app folder): desktop id, project (the folder's name),
+  label, state (working after a prompt, idle after Stop), last activity. A session leaves at SessionEnd or
+  after 24 h without activity.
+- **Quick menu:** "Claude sessions" lists them, grouped by project (one project: the sessions directly), most
+  recent first. Choosing one opens `claude://claude.ai/epitaxy/<desktop id>` (ShellExecute), then, after
+  about 1.2 s, runs the entry's follow-up action if one is set (for example Claude: Start dictation).
+- Tests never touch the real Claude settings: fake and quiet instances refuse unless `UC_CLAUDE_HOME`
+  points to a test folder. The log records connect and disconnect (entry counts) and "menu chose a Claude
+  session"; never prompt text or labels.
+- ChatGPT: nothing similar yet.
+
 ## Log
 
 `%APPDATA%\UnifiedControl\devices\au05\device.log` (rotated at about 1 MB). It records: worker start and
@@ -201,7 +233,7 @@ stop; receiver opened or not (error kind only); state changes (waiting, connecte
 every command queued and its result (for example "done set key typing K3 (1 entries): ok" or ": NoReply");
 page changes and action choices; key jobs; hotkey claimed, not claimed (with the reason) or released; each
 action run with its result; the quick menu opened and closed (and why), each choice, profile and target
-changes, and menu edits (entry count only); knob turn changes. It never records report bytes, the key, window titles or typed text.
+changes, and menu edits (entry count only); knob turn changes; Claude sessions connected and disconnected. It never records report bytes, the key, window titles or typed text.
 
 ## Tests
 
@@ -241,3 +273,9 @@ changes, and menu edits (entry count only); knob turn changes. It never records 
     Check one notch per click in both directions with the menu closed, one menu step per click with it open,
     no scrolling behind the menu, then Volume. Then Factory scroll: confirm the n 0 write restores the
     knob's own scrolling.
+15. Claude sessions: Connect, and check the backup and the four entries in `.claude\settings.json`. Send a
+    prompt in a Claude desktop session: "Last event received" updates, and the session appears with its
+    project. Confirm Claude is not slowed and shows nothing from the hook. From the quick menu, open the
+    session (with and without the follow-up dictation). Confirm Claude Code accepts the exec form
+    (`command` plus `args`); if not, the hooks do nothing and "No event received yet" stays. Disconnect: the
+    file is back as before.
