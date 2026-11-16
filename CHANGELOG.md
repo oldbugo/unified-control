@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 — 2026-11-17
 
 Cooler engine 4.23.0. The cooler screen hung three times (6, 11 and 17 Nov)
 when Live started again about 8 s after Unified Control stopped it for an
