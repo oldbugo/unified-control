@@ -70,6 +70,7 @@ pub struct App {
     pub runtime: OnceLock<Arc<super::runtime_resources::RuntimeResources>>,
     pub dock: OnceLock<Arc<super::dock_worker::Controller>>,
     pub cooler: OnceLock<Arc<super::cooler::Cooler>>,
+    pub au05: OnceLock<Arc<super::au05::Au05>>,
     pub hardware: OnceLock<Arc<super::hardware::Service>>,
     pub hardware_bridge: OnceLock<Arc<super::hardware_bridge::Bridge>>,
     pub shared_usage: OnceLock<Arc<super::shared_usage::Service>>,
@@ -111,6 +112,7 @@ impl App {
             runtime: OnceLock::new(),
             dock: OnceLock::new(),
             cooler: OnceLock::new(),
+            au05: OnceLock::new(),
             hardware: OnceLock::new(),
             hardware_bridge: OnceLock::new(),
             shared_usage: OnceLock::new(),
@@ -189,6 +191,12 @@ impl App {
             settings.0["dock"]["enabled"].as_bool().unwrap_or(false),
             settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
         );
+        let au05 = super::au05::Au05::new(
+            fake,
+            super::au05::native_runner(resource_dir.clone(), self.base.clone(), fake),
+        );
+        au05.configure(&settings.0["au05"]);
+        let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
         let bridge = super::hardware_bridge::Bridge::start(
             hardware.clone(),
@@ -581,6 +589,81 @@ impl App {
         Ok(self.dock_state())
     }
 
+    pub fn au05_state(&self) -> Value {
+        let mut v = self
+            .au05
+            .get()
+            .map(|a| a.status())
+            .unwrap_or_else(|| json!({"enabled":false,"state":"disabled","message":"Vibe Key is disabled"}));
+        // The saved switch and actions are the source of truth for the page.
+        let saved = self.settings.load().0["au05"].clone();
+        v["enabled"] = saved["enabled"].clone();
+        v["actions"] = saved["actions"].clone();
+        v
+    }
+    /// `{ enabled?, action?: { control, kind, value } }`: saved at once, then applied.
+    pub fn au05_configure(&self, patch: &Value) -> CoreResult<Value> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(CoreError::new("The app is closing"));
+        }
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        if patch.get("enabled").is_some_and(|v| !v.is_boolean()) {
+            return Err(CoreError::new("Invalid Vibe Key setting"));
+        }
+        let action = patch.get("action");
+        if let Some(a) = action {
+            let control = a["control"].as_str().unwrap_or("");
+            if !super::au05::CONTROLS.iter().any(|(k, _)| *k == control) {
+                return Err(CoreError::new("Unknown Vibe Key control"));
+            }
+            let kind = a["kind"].as_str().unwrap_or("");
+            let value = a["value"].as_str().unwrap_or("");
+            // An empty value is saved while the user is still choosing; it does nothing when pressed.
+            if kind != "none" && !value.is_empty() {
+                super::au05::validate_action(kind, value).map_err(CoreError::new)?;
+            } else if !super::au05::ACTION_KINDS.contains(&kind) {
+                return Err(CoreError::new("Choose a supported action"));
+            }
+        }
+        let saved = self
+            .settings
+            .update(|s| {
+                if let Some(v) = patch.get("enabled") {
+                    s["au05"]["enabled"] = v.clone();
+                }
+                if let Some(a) = action {
+                    let control = a["control"].as_str().unwrap_or("").to_string();
+                    s["au05"]["actions"][control] = json!({"kind": a["kind"], "value": a["value"]});
+                }
+            })
+            .map_err(CoreError::from)?;
+        au05.configure(&saved.0["au05"]);
+        Ok(self.au05_state())
+    }
+    /// One setting stored on the key. Waits for the key's answer.
+    pub fn au05_change(&self, request: &Value) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        let change = super::au05::parse_change(request).map_err(CoreError::new)?;
+        au05.change(change).map_err(CoreError::new)?;
+        Ok(self.au05_state())
+    }
+    pub fn au05_reconnect(&self) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        au05.reconnect().map_err(CoreError::new)?;
+        Ok(self.au05_state())
+    }
+    /// Debug fake instances only.
+    pub fn au05_test_control(&self, patch: &Value) -> CoreResult<Value> {
+        if !cfg!(debug_assertions) || super::buildinfo::fake_device().is_none() {
+            return Err(CoreError::coded("test_only", "Vibe Key test controls require a debug fake instance"));
+        }
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        if patch["op"] != "state" {
+            au05.test_control(patch).map_err(CoreError::new)?;
+        }
+        Ok(json!({"au05": self.au05_state(), "fake": au05.test_state()}))
+    }
+
     /// Run a task through the scheduler and wait for it (on the calling thread).
     pub fn run_task(
         &self,
@@ -609,6 +692,7 @@ impl App {
             "freezeDiagnostics": s.0["freezeDiagnostics"],
             "dock": self.dock_state(),
             "cooler": self.cooler_state(),
+            "au05": self.au05_state(),
             "hardware": self.hardware.get().map(|hardware| hardware.status()),
             "sharedUsage": self.shared_usage.get().map(|service| service.status()),
             "sharedSources": self.shared_sources.get().map(|service| service.status()),
@@ -854,6 +938,9 @@ impl App {
             }
         }
         let _guard = self.dock_config_lock.lock_or_recover();
+        if let Some(au05) = self.au05.get() {
+            au05.shutdown();
+        }
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
         }
@@ -880,6 +967,7 @@ impl App {
             || self.sched.any_visible_job()
             || self.dock.get().is_some_and(|dock| dock.busy())
             || self.cooler.get().is_some_and(|cooler| cooler.busy())
+            || self.au05.get().is_some_and(|au05| au05.busy())
     }
 
     /// True while something is being written to a device (close guard).

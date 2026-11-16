@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// The pages of the window's left list (PowerToys-style frame).
-pub const PAGES: [&str; 6] = ["home", "cooler", "dock", "dial", "general", "about"];
+pub const PAGES: [&str; 7] = ["home", "cooler", "dock", "vibekey", "dial", "general", "about"];
 
 /// Settings are always handled as the sanitised JSON object.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +24,7 @@ pub fn defaults() -> Value {
         "ui": { "page": "home", "followPhysicalPage": true, "agentAccess": false },
         "dock": { "enabled": false, "brightness": 50 },
         "cooler": {"enabled":false,"diagnostics":true},
+        "au05": super::au05::default_settings(),
         "freezeDiagnostics": false
     })
 }
@@ -38,6 +39,7 @@ pub fn sanitize(s: &Value) -> Settings {
     v["freezeDiagnostics"] = json!(s["freezeDiagnostics"].as_bool().unwrap_or(false));
     v["cooler"]["enabled"] = json!(s["cooler"]["enabled"].as_bool().unwrap_or(false));
     v["cooler"]["diagnostics"] = json!(s["cooler"]["diagnostics"].as_bool().unwrap_or(true));
+    v["au05"] = super::au05::sanitize(&s["au05"]);
     v["ui"]["page"] = json!(page);
     v["ui"]["followPhysicalPage"] = json!(s["ui"]["followPhysicalPage"].as_bool().unwrap_or(true));
     v["ui"]["agentAccess"] = json!(s["ui"]["agentAccess"].as_bool().unwrap_or(false));
@@ -143,7 +145,7 @@ mod tests {
         assert_eq!(sanitize(&json!({})).0, defaults());
         assert_eq!(
             sanitize(&json!({ "ui": { "page": "dock" }, "junk": 1 })).0,
-            json!({ "ui": { "page": "dock", "followPhysicalPage":true, "agentAccess":false }, "dock":{"enabled":false,"brightness":50}, "cooler":{"enabled":false,"diagnostics":true}, "freezeDiagnostics":false })
+            json!({ "ui": { "page": "dock", "followPhysicalPage":true, "agentAccess":false }, "dock":{"enabled":false,"brightness":50}, "cooler":{"enabled":false,"diagnostics":true}, "au05": crate::core::au05::default_settings(), "freezeDiagnostics":false })
         );
         assert_eq!(
             sanitize(&json!({ "ui": { "page": "cooler" } })).page(),
@@ -158,6 +160,8 @@ mod tests {
             "home"
         );
         assert_eq!(sanitize(&json!("not an object")).page(), "home");
+        assert_eq!(sanitize(&json!({ "ui": { "page": "vibekey" } })).page(), "vibekey");
+        assert_eq!(sanitize(&json!({})).0["au05"]["enabled"], false, "the Vibe Key is opt-in");
         assert_eq!(sanitize(&json!({"ui":{"agentAccess":true}})).0["ui"]["agentAccess"],true);
         assert_eq!(sanitize(&json!({"ui":{"agentAccess":"true"}})).0["ui"]["agentAccess"],false);
     }

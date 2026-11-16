@@ -55,8 +55,10 @@ Variables used below:
 | `check-device-status.cjs` | Pure status summaries and the status display, with fixture IPC. | `UC_PLAYWRIGHT_MODULE` | No | Headless |
 | `check-interface.cjs` | The main interface renders and navigates. It can write preview images. | `UC_PLAYWRIGHT_MODULE`, `UC_PREVIEW_OUTPUT` (optional) | No | Headless |
 | `check-monitor-discovery.cjs` | Monitor discovery results and failures reach the UI through fixture IPC. It never calls the display or audio APIs. | `UC_PLAYWRIGHT_MODULE` | No | Headless |
+| `check-vibe-key.cjs` | The Vibe Key (AU05) switch, Home card and page: off by default, only checked settings can be sent to a real key, changes and UC actions reach the host. | `UC_PLAYWRIGHT_MODULE` | No | Headless |
 | `check-navigation-search.cjs` | Navigation and search drafts in the browser UI. No native app or OS action. | `UC_PLAYWRIGHT_MODULE` | No | Headless |
 | `check-native-agent.cjs` | End to end: MCP, request-only native proxy, same-user host pipe, editor. | `UC_PLAYWRIGHT_MODULE`, `UC_TEST_EXE` | Yes | Native |
+| `check-native-vibe-key.cjs` | The Vibe Key worker in the real debug app with the encrypted fake key: opt-in switch, first read, key typing and standby changes, a UC action on the private event, allowlist only, stall pause and Reconnect. | `UC_PLAYWRIGHT_MODULE`, `UC_TEST_EXE` | Yes | Native |
 | `check-native-cooler.cjs` | The debug WebView works with the real cooler engine over inherited pipes. Fake devices. | `UC_PLAYWRIGHT_MODULE`, `UC_TEST_EXE`, `UC_COOLER_WORKER_EXE` | Yes | Native |
 | `check-native-cooler-lifetime.cjs` | The cooler worker lifetime follows the host (start and shutdown). | `UC_PLAYWRIGHT_MODULE`, `UC_TEST_EXE`, `UC_COOLER_WORKER_EXE` | Yes | Native |
 | `check-native-cooler-migration.cjs` | Cooler data migration and comparison work with the real worker IPC. Source plugins are off. | `UC_PLAYWRIGHT_MODULE`, `UC_TEST_EXE`, `UC_COOLER_WORKER_EXE` | Yes | Native |

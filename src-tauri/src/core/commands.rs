@@ -217,6 +217,26 @@ pub async fn cooler_call(
     run(&core, move |app| app.cooler_call(&command, args)).await
 }
 #[tauri::command]
+pub async fn au05_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| Ok(app.au05_state())).await
+}
+#[tauri::command]
+pub async fn au05_configure(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
+    run(&core, move |app| app.au05_configure(&patch)).await
+}
+#[tauri::command]
+pub async fn au05_change(core: State<'_, Core>, change: Value) -> Result<Value, CoreError> {
+    run(&core, move |app| app.au05_change(&change)).await
+}
+#[tauri::command]
+pub async fn au05_reconnect(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.au05_reconnect()).await
+}
+#[tauri::command]
+pub async fn au05_test_control(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
+    run(&core, move |app| app.au05_test_control(&patch)).await
+}
+#[tauri::command]
 pub async fn dock_configure(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
     run(&core, move |app| app.dock_configure(&patch)).await
 }

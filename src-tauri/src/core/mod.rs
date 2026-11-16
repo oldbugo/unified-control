@@ -4,6 +4,7 @@ pub mod actions;
 pub mod agent;
 pub mod app;
 pub mod assets;
+pub mod au05;
 pub mod autostart;
 pub mod buildinfo;
 pub mod commands;

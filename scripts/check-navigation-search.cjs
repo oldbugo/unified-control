@@ -18,7 +18,7 @@ async function main(){
       page.on('pageerror',error=>errors.push(error.message));
       await page.goto(`http://127.0.0.1:${server.address().port}/`);
       const input=page.getByRole('searchbox',{name:'Find a page'}),visible=()=>page.locator('.nav-item:not([hidden])');
-      assert.equal(await visible().count(),5);
+      assert.equal(await visible().count(),6); // the browser preview shows every implemented device page
       const draft=await page.evaluate(()=>localStorage.getItem('uc.interface-prototype.v1'));
       const originalHeading=await page.locator('main h1').textContent();
       await input.fill('  AI  USAGE ');
@@ -28,7 +28,7 @@ async function main(){
       await input.fill('mCp');await page.keyboard.press('Tab');
       assert.equal(await visible().evaluate(el=>el===document.activeElement),true,'Tab skips hidden results');
       await page.keyboard.press('Escape');
-      assert.equal(await input.inputValue(),'');assert.equal(await visible().count(),5);
+      assert.equal(await input.inputValue(),'');assert.equal(await visible().count(),6);
       assert.equal(await input.evaluate(el=>el===document.activeElement),true);
       await input.fill('MCP');await page.keyboard.press('Enter');
       assert.equal(await page.locator('main h1').textContent(),'General');
@@ -41,7 +41,7 @@ async function main(){
       assert.equal(await page.locator('main h1').textContent(),'Stream dock');
       await page.keyboard.press('Escape');await page.locator('[data-key="6"]').click();
       await page.locator('#face-text').fill('Editing is separate');
-      assert.equal(await visible().count(),5,'typing in the editor does not filter navigation');
+      assert.equal(await visible().count(),6,'typing in the editor does not filter navigation');
       await input.fill('screen');
       assert.equal(await visible().getAttribute('data-page'),'cooler');
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -63,7 +63,7 @@ async function main(){
     assert.equal(await toggle.evaluate(el=>el===document.activeElement),true);
     await toggle.click();await search.fill('about');await toggle.click();
     assert.equal(await search.isVisible(),false);
-    assert.equal(await compact.locator('.nav-item:not([hidden])').count(),5,'closing compact search must restore every page');
+    assert.equal(await compact.locator('.nav-item:not([hidden])').count(),6,'closing compact search must restore every page');
     assert.equal(await compact.locator('#page-search').inputValue(),'');
     await compact.setViewportSize({width:1440,height:900});
     await search.fill('mcp');await compact.setViewportSize({width:600,height:700});
@@ -71,7 +71,7 @@ async function main(){
     assert.equal(await search.isVisible(),true,'an active filter remains visible on a compact transition');
     assert.equal(await search.inputValue(),'mcp');
     assert.equal(await compact.locator('.nav-item:not([hidden])').getAttribute('data-page'),'general');
-    await toggle.click();assert.equal(await compact.locator('.nav-item:not([hidden])').count(),5);
+    await toggle.click();assert.equal(await compact.locator('.nav-item:not([hidden])').count(),6);
     assert.ok(await compact.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.deepEqual(compactErrors,[]);
     console.log('PASS: page/alias/token search, no-save/no-navigation filtering, keyboard activation/tab/Escape, empty and escaped queries, editor isolation, three widths and compact search access. Browser fixtures only.');

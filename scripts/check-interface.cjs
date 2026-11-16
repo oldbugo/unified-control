@@ -20,7 +20,7 @@ const server = http.createServer((req,res) => {
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     const base = `http://127.0.0.1:${server.address().port}`;
     await page.goto(base);
-    assert.equal(await page.locator('.nav-item').count(),6);
+    assert.equal(await page.locator('.nav-item').count(),7); // Home, cooler, dock, Vibe Key, dial, General, About
     await page.locator('[data-page="dock"]').click();
     assert.equal(await page.locator('[data-key]').count(),14);
     assert.equal(await page.locator('.allowance-values').first().textContent(),'——');

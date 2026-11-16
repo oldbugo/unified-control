@@ -4012,6 +4012,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi_au05"
+version = "0.0.0"
+source = "git+file:///C:/Users/pc/Documents/uc-ulanzi?rev=79adb61d57a2abaceb9292c0333214f68edd78c0#79adb61d57a2abaceb9292c0333214f68edd78c0"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ulanzi_dock"
 version = "0.0.0"
 source = "git+https://github.com/oldbugo/uc-ulanzi?rev=9ea93c06ad8ff3ae6f01784a4403886593ffff5d#9ea93c06ad8ff3ae6f01784a4403886593ffff5d"
@@ -4049,6 +4057,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-single-instance",
  "tempfile",
+ "ulanzi_au05",
  "ulanzi_dock",
  "windows-sys 0.61.2",
 ]

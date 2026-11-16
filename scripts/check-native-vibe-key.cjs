@@ -1,0 +1,101 @@
+// Native, quiet: a debug UC with the fake Vibe Key (UC_FAKE_DEVICE). Real IPC, real worker, encrypted fake.
+// No window is shown, no focus is taken, no sound, and the real AU05 is never opened.
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),assert=require('node:assert/strict');
+const {spawn}=require('node:child_process');
+const {chromium}=require(process.env.UC_PLAYWRIGHT_MODULE||'playwright');
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function until(f,what,ms=10000){const end=Date.now()+ms;for(;;){const v=await f();if(v)return v;if(Date.now()>end)throw new Error(`Timed out: ${what}`);await delay(100);}}
+async function run(){
+  const exe=path.resolve(process.env.UC_TEST_EXE||'');
+  if(!exe.toLowerCase().includes(`${path.sep}debug${path.sep}`)||path.basename(exe).toLowerCase()!=='unified-control.exe'||!fs.existsSync(exe))
+    throw new Error('Set UC_TEST_EXE to the debug unified-control.exe; installed/release binaries are refused.');
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'uc-native-vibe-key-'));
+  const port=await new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
+  const env={...process.env,UC_HOME:home,UC_TEST_QUIET:'1',UC_MULTI:'1',UC_FAKE_DEVICE:'1',UC_TEST_TRAY_QUIT_MS:'60000',
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
+  const child=spawn(exe,[],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  const exited=new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
+  let logs='';child.stdout.on('data',d=>{logs+=d;});child.stderr.on('data',d=>{logs+=d;});
+  try{
+    await until(async()=>{if(child.exitCode!==null)throw new Error(`exited early (${child.exitCode})`);try{return (await fetch(`http://127.0.0.1:${port}/json/version`)).ok;}catch{return false;}},'WebView debug endpoint',20000);
+    const browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const page=await until(()=>browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri/.test(p.url())),'UC WebView');
+    const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    const invoke=async(cmd,args={})=>{
+      const r=await page.evaluate(async([c,a])=>{try{return {ok:await window.__TAURI_INTERNALS__.invoke(c,a)};}catch(e){return {err:e?.error||String(e)};}},[cmd,args]);
+      if('err' in r)throw new Error(r.err);return r.ok;};
+    await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
+    let st=await invoke('au05_state');
+    assert.equal(st.enabled,false,'off by default');assert.equal(st.state,'disabled');
+    let fake=(await invoke('au05_test_control',{patch:{op:'state'}})).fake;
+    assert.deepEqual(fake.received,[],'nothing is sent while disabled');
+    assert.equal(await page.locator('[data-page="vibekey"]').isVisible(),false);
+
+    await page.locator('[data-page="general"]').click();
+    await page.locator('#au05-enabled').check();
+    await page.locator('[data-page="vibekey"]').waitFor({state:'visible'});
+    const saved=JSON.parse(fs.readFileSync(path.join(home,'settings.json'),'utf8'));
+    assert.equal(saved.au05.enabled,true,'the switch is saved at once');
+    st=await until(async()=>{const s=await invoke('au05_state');return s.keys?.[2]?.mode!=='unknown'&&s.micNr?s:null;},'first read of the fake key');
+    assert.equal(st.state,'connected');assert.equal(st.fake,true);
+    assert.equal(st.standbyS,600);assert.equal(st.keys[2].mode,'harmless');assert.equal(st.battery.percent,30);
+
+    await page.locator('[data-page="vibekey"]').click();
+    await page.waitForSelector('select[data-au05-type="k1"]');
+    await page.locator('select[data-au05-type="k1"]').selectOption('keys');
+    const keys=page.locator('input[data-au05-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
+    await until(async()=>(await invoke('au05_state')).keys[0].label==='Ctrl + D','K1 typing read back');
+    await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
+    await until(async()=>(await invoke('au05_state')).standbyS===900,'standby read back');
+    await page.locator('select[data-au05-action="k3"]').selectOption('hotkey');
+    const value=page.locator('input[data-au05-action-value="k3"]');await value.fill('Ctrl + Enter');await value.press('Tab');
+    await until(async()=>(await invoke('au05_state')).actions.k3.value==='Ctrl + Enter','K3 UC action saved');
+
+    await invoke('au05_test_control',{patch:{op:'click',control:'k3'}});
+    st=await until(async()=>{const s=await invoke('au05_state');return s.events.find(e=>e.control==='K3'&&e.pressed)?s:null;},'K3 event');
+    const ev=st.events.find(e=>e.control==='K3'&&e.pressed);
+    assert.equal(ev.code,'F22');assert.match(ev.action,/hotkey: Ctrl \+ Enter/);
+    await page.waitForFunction(()=>/K3 down/.test(document.getElementById('au05-events')?.textContent||''));
+
+    fake=(await invoke('au05_test_control',{patch:{op:'state'}})).fake;
+    assert.deepEqual(fake.forbidden,[],'every command was on the allowlist');
+    assert.ok(fake.received.includes('01 06 50 00 00 01 02 03 01 02 07'),'K1 Ctrl + D frame as proven');
+    assert.ok(fake.received.includes('01 01 2c 02 84 03'),'standby 900 s (the fake log drops trailing zero bytes)');
+    assert.deepEqual(fake.typed,['F22'],'K3 typed only its harmless code');
+
+    // A stalling key pauses sending; the app stays responsive.
+    await invoke('au05_test_control',{patch:{op:'stallWrites',value:true}});
+    const t0=Date.now();
+    await assert.rejects(invoke('au05_change',{change:{setting:'standbyTime',value:600}}),/did not accept/);
+    assert.ok(Date.now()-t0<6000,'the write had a time limit');
+    assert.equal((await invoke('au05_state')).state,'paused');
+    await page.locator('select[data-au05-set="standbyTime"]').selectOption('300');
+    await page.waitForFunction(()=>/paused|did not accept/i.test(document.getElementById('au05-note')?.textContent||''));
+    assert.ok((await invoke('app_state')).appVersion,'the host still answers');
+    await invoke('au05_test_control',{patch:{op:'stallWrites',value:false}});
+    await page.getByRole('button',{name:'Reconnect'}).click();
+    await invoke('au05_change',{change:{setting:'standbyTime',value:600}});
+    assert.equal((await invoke('au05_state')).standbyS,600);
+
+    // A real-key-only refusal cannot be tested with the fake; check the fake accepts an unverified set.
+    await invoke('au05_change',{change:{setting:'sleepTime',value:7200}});
+    await until(async()=>(await invoke('au05_state')).sleepS===7200,'power-off read back');
+
+    await page.locator('[data-page="general"]').click();await page.locator('#au05-enabled').uncheck();
+    await until(async()=>(await invoke('au05_state')).state==='disabled','disable');
+    assert.deepEqual(errors,[]);
+    console.log('PASS: quiet native Vibe Key; opt-in switch saved; fake key read; key typing and standby changes read back; UC action on the private event; allowlist only; stall pause and Reconnect; disable. No physical device opened.');
+    console.log(`Isolated test data: ${home}`);
+    await browser.close().catch(()=>{});
+  }finally{
+    if(child.exitCode===null){
+      const end=Date.now()+6000;
+      do{const quit=spawn(exe,['--quit'],{env,windowsHide:true,stdio:'ignore'});const code=await new Promise(r=>quit.once('exit',r));if(code!==2)break;await delay(75);}while(Date.now()<end);
+    }
+    const result=await Promise.race([exited,delay(8000).then(()=>null)]);
+    fs.writeFileSync(path.join(home,'test-output.log'),logs);
+    if(!result)throw new Error('Quiet test instance did not finish its clean quit; its safety timer remains active.');
+    if(result.code!==0)throw new Error(`Quiet debug instance exit code ${result.code}.`);
+  }
+}
+run().catch(error=>{console.error(error);process.exitCode=1;});

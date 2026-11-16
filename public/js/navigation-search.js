@@ -1,5 +1,5 @@
 // Search filters navigation only. Activation uses the existing guarded click path.
-const ALIASES={home:'overview devices',cooler:'lovingcool sc70 themes library live',dock:'ulanzi d200h stream keys profiles ai usage allowance',dial:'ulanzi dial',general:'settings preferences startup privacy diagnostics mcp agent',about:'version build information'};
+const ALIASES={home:'overview devices',cooler:'lovingcool sc70 themes library live',dock:'ulanzi d200h stream keys profiles ai usage allowance',vibekey:'ulanzi au05 vibe key knob microphone voice battery',dial:'ulanzi dial',general:'settings preferences startup privacy diagnostics mcp agent',about:'version build information'};
 export function installNavigationSearch(nav){
   const input=nav?.querySelector('#page-search'),status=nav?.querySelector('.nav-search-status'),toggle=nav?.querySelector('.nav-search-toggle');
   if(!input||!status||!toggle)return;
@@ -13,7 +13,7 @@ export function installNavigationSearch(nav){
       button.hidden=button.dataset.available==='false'||!terms.every(term=>text.includes(term));
     }
     const visible=buttons.filter(button=>!button.hidden);
-    if(heading)heading.hidden=!visible.some(button=>['cooler','dock','dial'].includes(button.dataset.page));
+    if(heading)heading.hidden=!visible.some(button=>['cooler','dock','vibekey','dial'].includes(button.dataset.page));
     if(spacer)spacer.hidden=!!query;
     status.hidden=!query;
     status.textContent=query?(visible.length?`${visible.length} matching ${visible.length===1?'page':'pages'}`:'No matching pages'):'';
