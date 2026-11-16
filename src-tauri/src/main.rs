@@ -129,6 +129,7 @@ fn main() {
             cc::au05_change,
             cc::au05_reconnect,
             cc::au05_read_key,
+            cc::au05_read_all,
             cc::au05_test_control,
             cc::dock_test_button,
             cc::dock_test_studio,

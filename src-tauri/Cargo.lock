@@ -4014,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "ulanzi_au05"
 version = "0.0.0"
-source = "git+https://github.com/oldbugo/uc-ulanzi?rev=59f4080541f933686b65fdf3f135eb9a66238ade#59f4080541f933686b65fdf3f135eb9a66238ade"
+source = "git+https://github.com/oldbugo/uc-ulanzi?rev=4e1022d5a3667b1d3973b7ced65f90154cfa5cd2#4e1022d5a3667b1d3973b7ced65f90154cfa5cd2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -4044,7 +4044,7 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unified-control"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ab_glyph",
  "dirs 6.0.0",

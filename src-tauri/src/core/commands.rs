@@ -229,6 +229,10 @@ pub async fn au05_change(core: State<'_, Core>, change: Value) -> Result<Value, 
     run(&core, move |app| app.au05_change(&change)).await
 }
 #[tauri::command]
+pub async fn au05_read_all(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.au05_read_all()).await
+}
+#[tauri::command]
 pub async fn au05_read_key(core: State<'_, Core>, key: String) -> Result<Value, CoreError> {
     run(&core, move |app| app.au05_read_key(&key)).await
 }

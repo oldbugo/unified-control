@@ -80,12 +80,12 @@ export class Au05Panel{
     root.querySelector('#au05-battery').textContent=s.battery?`${s.battery.percent} % (${(s.battery.millivolts/1000).toFixed(2)} V)`:'Not read yet';
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
-    const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.actions,s.fake,s.enabled,this.sending>0]);
+    const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0]);
     if(force||(sig!==this.lastSig&&!controls.contains(document.activeElement))){this.lastSig=sig;controls.innerHTML=this.controlsMarkup();}
   }
   skeleton(){
     return `<div class="page-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1><p>Three keys, a knob and a microphone. Changes go to the key as you make them.</p></div><span id="au05-page-state" class="chip"></span></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Connection</strong><p id="au05-page-message"></p></div><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Connection</strong><p id="au05-page-message"></p></div><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div>
     <div class="setting-row"><div><strong>Battery</strong><p id="au05-battery"></p></div></div></section>
     <p id="au05-note" class="hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
     <div id="au05-controls"></div>
@@ -99,41 +99,54 @@ export class Au05Panel{
     if(!ev.length)return '<li class="hint">No events yet. Press a key or turn the knob.</li>';
     return ev.slice(0,20).map(e=>`<li><span>${esc(new Date(e.at).toLocaleTimeString('en-AU',{hour12:false}))}</span> <strong>${esc(e.control)}</strong> ${e.pressed?'down':'up'} <span class="hint">${esc(e.code)}</span>${e.action?` <span class="chip">${esc(e.action)}</span>`:''}</li>`).join('');
   }
-  canSet(name){return this.state?.fake===true||this.state?.realKeyChecked?.[name]===true;}
-  unchecked(name){return this.canSet(name)?'':'<p class="hint">Not yet checked on the real key, so Unified Control does not send this. It shows the value the key reports.</p>';}
+  // Every setting can be sent; the ones not yet checked on the real key carry an "Untested" label.
+  untested(name){return this.state?.checked?.[name]===true?'':' <span class="chip attention">Untested</span>';}
   controlsMarkup(){
     const s=this.state||{};const off=!this.native||s.enabled!==true||this.sending>0;
-    const dis=name=>off||!this.canSet(name)?' disabled':'';
+    const dis=off?' disabled':'';
     const opt=(v,label,sel)=>`<option value="${esc(v)}"${String(v)===String(sel)?' selected':''}>${esc(label)}</option>`;
+    const raw=v=>v==null?'':` <span class="hint">raw ${esc(v)}</span>`;
     const keyRows=(s.keys||[]).map(k=>{
       const a=s.actions?.[k.key]||{kind:'none',value:''};
-      const lock=off||!k.canSet?' disabled':'';
       const hot=k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:'';
-      const uc=k.mode==='uc'?`<select data-au05-action="${k.key}" aria-label="Unified Control action for ${esc(k.name)}"${off?' disabled':''}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>
-        ${a.kind==='hotkey'?`<input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}"${off?' disabled':''}>`:''}${hot}`:'';
-      const read=k.mode==='unknown'&&k.canSet?`<button class="btn" type="button" data-au05-read="${k.key}"${off?' disabled':''}>Read from key</button>`:'';
-      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)}</strong><p>Types now: ${esc(k.label||'Not read yet')}</p>${read}${k.canSet?'':'<p class="hint">Not yet checked on the real key, so Unified Control does not change it.</p>'}</div>
-      <div class="au05-key-controls"><select data-au05-mode="${k.key}" aria-label="What ${esc(k.name)} does"${lock}>
+      const uc=k.mode==='uc'?`<select data-au05-action="${k.key}" aria-label="Unified Control action for ${esc(k.name)}"${dis}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>
+        ${a.kind==='hotkey'?`<input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}"${dis}>`:''}${hot}`:'';
+      const read=`<button class="btn" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
+      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)}</strong>${k.checked?'':' <span class="chip attention">Untested</span>'}<p>Types now: ${esc(k.label||'Not read yet')}</p>${read}</div>
+      <div class="au05-key-controls"><select data-au05-mode="${k.key}" aria-label="What ${esc(k.name)} does"${dis}>
       ${k.mode==='unknown'?opt('unknown','Not read yet','unknown'):''}${opt('uc','Unified Control action',k.mode)}${opt('keys','Types keys…',k.mode)}${opt('factory',`Factory default (${k.factory})`,k.mode)}</select>
-      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${lock}>${uc}</div></div>`;
+      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${dis}>${uc}</div></div>`;
     }).join('');
     const standby=s.standbyS;const standbyOpts=STANDBY.some(([v])=>v===standby)||standby==null?STANDBY:[...STANDBY,[standby,minutes(standby)]];
+    const sleepOpts=Object.entries(SLEEP).some(([v])=>Number(v)===s.sleepS)||s.sleepS==null?Object.entries(SLEEP):[...Object.entries(SLEEP),[String(s.sleepS),`${s.sleepS} seconds`]];
     const light=s.light||{};const range=s.lightRange||{modeMax:3,brightnessMax:10};
-    return `<div class="settings-section-heading"><h2>Keys</h2><p>Unified Control action: the key types its own unused code (F19 to F22) and Unified Control runs the action you choose, in any app. Types keys and Factory default are stored on the key and also work when Unified Control is closed. The knob turns keep their factory scroll.</p></div>
+    const fmax=s.lightFieldMax||{type:3,time:15,breatheLevel:15,breatheBrightness:10,alwaysOnBrightness:10};
+    const numbers=(max,sel)=>Array.from({length:max+1},(_,i)=>opt(i,String(i),sel)).join('');
+    const FIELDS=[['type','Type'],['time','Time'],['breatheLevel','Breathe level'],['breatheBrightness','Breathe brightness'],['alwaysOnBrightness','Always-on brightness']];
+    const records=(light.records||[]).map((rec,r)=>`<tr><th scope="row">Record ${r}</th>${FIELDS.map(([f,label],i)=>`<td><select data-au05-record="${r}" data-au05-field="${f}" aria-label="Record ${r} ${label}"${dis}>${numbers(Math.max(fmax[f],rec[i]??0),rec[i])}</select></td>`).join('')}</tr>`).join('');
+    const codes=(s.controlCodes||[]).map((c,i)=>c==null?'':`${['K1','K2','K3','Knob press','Knob right','Knob left'][i]} ${esc(c)} (raw ${esc(s.controlCodesRaw?.[i])})`).filter(Boolean).join(' · ');
+    return `<div class="settings-section-heading"><h2>Keys</h2><p>Unified Control action: the key types its own unused code (F19 to F22) and Unified Control runs the action you choose, in any app. Types keys and Factory default are stored on the key and also work when Unified Control is closed. The knob turns keep their factory scroll. Key settings are read one key at a time.</p></div>
     <section class="settings-list">${keyRows||'<div class="setting-row"><p class="hint">Wake the key to read its keys.</p></div>'}</section>
-    <div class="settings-section-heading"><h2>Power</h2></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong><p>The key sleeps after this much idle time. Press a key to wake it.</p></div>
-    <select data-au05-set="standbyTime" aria-label="Standby time"${dis('standbyTime')}>${standby==null?opt('', 'Not read yet',''):''}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select></div>
-    <div class="setting-row"><div><strong>Power-off time</strong><p>The key turns off after this much idle time.</p>${this.unchecked('sleepTime')}</div>
-    <select data-au05-set="sleepTime" aria-label="Power-off time"${dis('sleepTime')}>${s.sleepS==null?opt('','Not read yet',''):''}${Object.entries(SLEEP).map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select></div></section>
+    <div class="settings-section-heading"><h2>Power</h2><p>Settings marked Untested were not yet checked on the real key. Each change is read back from the key.</p></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong>${this.untested('standbyTime')}<p>The key sleeps after this much idle time. Press a key to wake it.${raw(standby==null?null:`${standby} s`)}</p></div>
+    <select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${standby==null?opt('', 'Not read yet',''):''}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select></div>
+    <div class="setting-row"><div><strong>Power-off time</strong>${this.untested('sleepTime')}<p>The key turns off after this much idle time.${raw(s.sleepS==null?null:`${s.sleepS} s`)}</p></div>
+    <select data-au05-set="sleepTime" aria-label="Power-off time"${dis}>${s.sleepS==null?opt('','Not read yet',''):''}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select></div>
+    <div class="setting-row"><div><strong>Standby status</strong><p>Read only.${raw(s.standbyStatus)}</p></div></div></section>
     <div class="settings-section-heading"><h2>Light</h2></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Light mode</strong>${this.unchecked('lightMode')}</div>
-    <select data-au05-set="lightMode" aria-label="Light mode"${dis('lightMode')}>${light.mode==null?opt('','Not read yet',''):''}${Array.from({length:range.modeMax+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select></div>
-    <div class="setting-row"><div><strong>All-on brightness</strong>${this.unchecked('lightBrightness')}</div>
-    <select data-au05-set="lightBrightness" aria-label="All-on brightness"${dis('lightBrightness')}>${light.brightness==null?opt('','Not read yet',''):''}${Array.from({length:range.brightnessMax+1},(_,i)=>opt(i,String(i),light.brightness)).join('')}</select></div></section>
+    <section class="settings-list"><div class="setting-row"><div><strong>Light mode</strong>${this.untested('lightMode')}<p>Which light record is in use.${raw(light.mode)}</p></div>
+    <select data-au05-set="lightMode" aria-label="Light mode"${dis}>${light.mode==null?opt('','Not read yet',''):''}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select></div>
+    <div class="setting-row"><div><strong>All-on brightness</strong>${this.untested('lightBrightness')}<p>${raw(light.brightness)}</p></div>
+    <select data-au05-set="lightBrightness" aria-label="All-on brightness"${dis}>${light.brightness==null?opt('','Not read yet',''):''}${numbers(Math.max(range.brightnessMax,light.brightness??0),light.brightness)}</select></div>
+    <div class="setting-row au05-records"><div><strong>Light mode records</strong>${this.untested('lightRecord')}<p>Four records, as the key reports them. The numbers are the raw values.</p>
+    ${records?`<div class="au05-table"><table><thead><tr><th></th>${FIELDS.map(([,l])=>`<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${records}</tbody></table></div>`:'<p class="hint">Not read yet.</p>'}</div></div>
+    <div class="setting-row"><div><strong>Hooks mode</strong>${this.untested('hooksMode')}<p>${raw(s.hooksMode)}</p></div>
+    <select data-au05-set="hooksMode" aria-label="Hooks mode"${dis}>${s.hooksMode==null?opt('','Not read yet',''):''}${opt(0,'0 (off)',s.hooksMode)}${opt(1,'1 (on)',s.hooksMode)}</select></div></section>
     <div class="settings-section-heading"><h2>Microphone</h2></div>
-    <section class="settings-list"><div class="setting-row"><div><strong>Noise reduction</strong>${this.unchecked('micNr')}</div>
-    <select data-au05-set="micNr" aria-label="Noise reduction"${dis('micNr')}>${s.micNr==null?opt('','Not read yet',''):''}${Array.from({length:(s.micNrMax??3)+1},(_,i)=>opt(i,i===0?'Off':`Level ${i}`,s.micNr?.level)).join('')}</select></div></section>`;
+    <section class="settings-list"><div class="setting-row"><div><strong>Noise reduction</strong>${this.untested('micNr')}<p>The two other values are written back as read.${raw(s.micNr?`level ${s.micNr.level}, ${s.micNr.a}, ${s.micNr.b}`:null)}</p></div>
+    <select data-au05-set="micNr" aria-label="Noise reduction"${dis}>${s.micNr==null?opt('','Not read yet',''):''}${Array.from({length:Math.max(s.micNrMax??3,s.micNr?.level??0)+1},(_,i)=>opt(i,i===0?'Off (0)':`Level ${i}`,s.micNr?.level)).join('')}</select></div></section>
+    <div class="settings-section-heading"><h2>Controls</h2></div>
+    <section class="settings-list"><div class="setting-row"><div><strong>Each control's own code</strong><p>Read only.${codes?` ${codes}`:' Use Read all settings.'}</p></div></div></section>`;
   }
   async change(change){
     this.sending++;this.setNote('Sending to the Vibe Key…');this.paint(true);
@@ -166,10 +179,15 @@ export class Au05Panel{
       this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting. Press a key to wake the Vibe Key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
     }
+    if(e.type==='click'&&t.closest?.('[data-au05="read-all"]')){
+      this.invoke('au05_read_all').then(s=>{this.state=s;this.setNote('Reading all settings, one at a time. Key settings are read per key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
+      return true;
+    }
     const read=e.type==='click'&&t.closest?.('[data-au05-read]');
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
+    if(t.dataset.au05Record){this.change({setting:'lightRecord',record:Number(t.dataset.au05Record),field:t.dataset.au05Field,value:Number(t.value)});return true;}
     if(t.dataset.au05Mode){
       const key=t.dataset.au05Mode,input=this.container.querySelector(`[data-au05-keys="${key}"]`);
       if(t.value==='keys'){input.hidden=false;input.focus();return true;}

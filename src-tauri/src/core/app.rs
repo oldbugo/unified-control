@@ -660,6 +660,12 @@ impl App {
         au05.change(change).map_err(CoreError::new)?;
         Ok(self.au05_state())
     }
+    /// Queue every get except key typing (the page's "Read all settings").
+    pub fn au05_read_all(&self) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        au05.read_all().map_err(CoreError::new)?;
+        Ok(self.au05_state())
+    }
     /// Read one key's typing list (`k1`..`k3`, `knobPress`), only when the user asks.
     pub fn au05_read_key(&self, key: &str) -> CoreResult<Value> {
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;

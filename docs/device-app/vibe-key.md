@@ -32,12 +32,16 @@ stall in the key cannot stop the window, the dock or the cooler.
 - With `UC_FAKE_DEVICE` set, the real key is never opened. The fake key is encrypted in both directions.
 - Only commands in the allowlist (`Request`) can be encoded. Reboot, serial number, flash ID, UUID,
   receiver command 0x05, firmware and the keep-alive 0x23 have no encoder.
-- The allowlist is enforced three times on a real key: the page parser, the session (`real_key` refuses
-  commands not checked on the real key), and the Windows transport itself, which decrypts every report
-  and sends only one exact, in-range, hardware-checked command (`protocol::check_outgoing`).
+- The allowlist is enforced three times on a real key: the page parser, the session, and the Windows
+  transport itself, which decrypts every report and sends only one exact, in-range, known command
+  (`protocol::check_outgoing`). Value ranges: light mode and record type 0..3, record time and breathe
+  level 0..15, brightness values 0..10, hooks mode 0..1, noise reduction 0..3.
 - Checked on the real key: all reads except the knob-press typing, and the sets standby time and key
-  typing for K1..K3. Power-off time, light, microphone and knob-press typing work on the fake key only;
-  the page shows them read-only.
+  typing for K1..K3. Since 2026-11-16 (user request: "expose all the parameters in the app so I can test it
+  out all at once") every other known setting can also be sent to the real key, labelled "Untested" on the
+  page: power-off time, light mode, all-on brightness, the five fields of each of the four light mode
+  records (masks 0x04 to 0x40), hooks mode, microphone noise reduction and knob-press typing. Each set is
+  read back and the page shows the raw value next to the friendly one.
 - Every write has a 2 s limit. One request at a time, and never a second write while a reply is
   outstanding. No retry: a reply that does not come in time (20 s for key typing, cmd 0x50; 2 s for the
   rest) or a write that does not finish pauses sending for 30 s. After three stalls in a row, sending
@@ -86,6 +90,9 @@ Everything that touches the desktop is behind the `Desktop` trait. Unit tests an
 delivers a press to it only when the fake key types that key's own code, like Windows would.
 
 ## What the page offers
+
+- "Read all settings": every read except key typing, one at a time with the usual pacing. Key typing is
+  still read one key at a time ("Read from key" / "Read again").
 
 - Connection state, battery and a Reconnect button.
 - For K1, K2, K3 and the knob press, "What it does": Unified Control action (then the action and a "Ready"

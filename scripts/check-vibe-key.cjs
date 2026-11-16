@@ -20,12 +20,12 @@ const server=http.createServer((req,res)=>{
     // A real key (fake:false): only checked settings may be sent; the knob press typing is not checked yet.
     window.__au05={enabled:false,fake:false,state:'disabled',message:'Vibe Key is disabled',battery:null,standbyS:null,sleepS:null,light:null,micNr:null,
       keys:[],events:[],actions:{k1:none,k2:none,k3:none,knobPress:none},hotkeysAvailable:true,
-      realKeyChecked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,micNr:false},
+      checked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,lightRecord:false,hooksMode:false,micNr:false},
       lightRange:{modeMax:3,brightnessMax:10},micNrMax:3};
-    const key=(key,name,mode,label,factory,ownCode,canSet=true)=>({key,name,mode,label,keys:mode==='keys'?label:null,factory,ownCode,canSet,hotkey:{state:'off'}});
+    const key=(key,name,mode,label,factory,ownCode,checked=true)=>({key,name,mode,label,keys:mode==='keys'?label:null,factory,ownCode,canSet:true,checked,hotkey:{state:'off'}});
     const hotkeys=()=>{for(const k of window.__au05.keys)k.hotkey={state:window.__au05.enabled&&window.__au05.actions[k.key].kind!=='none'?'ready':'off'};};
     const connected=()=>Object.assign(window.__au05,{state:'connected',message:'Connected',battery:{millivolts:3608,percent:30},standbyS:600,sleepS:3600,
-      light:{mode:2,brightness:7},micNr:{level:0},
+      light:{mode:2,brightness:7,records:[[2,10,2,7,2],[2,10,2,7,2],[2,10,2,7,2],[1,10,2,7,2]]},micNr:{level:0,a:100,b:100},hooksMode:0,
       keys:[key('k1','K1','unknown',null,'Win + H','F20'),key('k2','K2','factory','Factory default (Enter)','Enter','F21'),
             key('k3','K3','uc','F22','Esc','F22'),key('knobPress','knob press','unknown',null,'Backspace','F19',false)],
       events:[{at:Date.now(),control:'knob right',pressed:true,code:'F23',action:null}]});
@@ -46,9 +46,11 @@ const server=http.createServer((req,res)=>{
         window.__writes.push({command,...args});
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
+        if(c.setting==='lightRecord'){const f=['type','time','breatheLevel','breatheBrightness','alwaysOnBrightness'].indexOf(c.field);window.__au05.light.records[c.record][f]=c.value;}
         if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;}
         return structuredClone(window.__au05);
       }
+      if(command==='au05_read_all'){window.__writes.push({command});return structuredClone(window.__au05);}
       if(command==='au05_read_key'){window.__writes.push({command,...args});const k=window.__au05.keys.find(k=>k.key===args.key);k.mode='factory';k.label=`Factory default (${k.factory})`;return structuredClone(window.__au05);}
       if(command==='au05_reconnect'){window.__writes.push({command});return structuredClone(window.__au05);}
       if(command==='settings_update')return {appVersion:'fixture',page:args.patch.page||'home',fake:true};
@@ -75,18 +77,21 @@ const server=http.createServer((req,res)=>{
   assert.match(await page.locator('#au05-battery').textContent(),/30 %/);
   assert.equal(await page.locator('select[data-au05-mode="k3"]').inputValue(),'uc','K3 types its own code: a UC action');
   assert.match(await page.locator('#au05-events').textContent(),/knob right down/);
-  // Unchecked settings are shown but cannot be sent to a real key.
-  for(const name of ['sleepTime','lightMode','lightBrightness','micNr'])
-    assert.equal(await page.locator(`select[data-au05-set="${name}"]`).isDisabled(),true,name);
-  assert.equal(await page.locator('select[data-au05-mode="knobPress"]').isDisabled(),true,'knob press typing is not checked on the real key');
-  assert.equal(await page.locator('select[data-au05-set="standbyTime"]').isDisabled(),false);
+  // Every setting can be changed on a real key; unchecked ones are labelled Untested.
+  for(const name of ['sleepTime','lightMode','lightBrightness','micNr','hooksMode','standbyTime'])
+    assert.equal(await page.locator(`select[data-au05-set="${name}"]`).isDisabled(),false,name);
+  assert.equal(await page.locator('select[data-au05-mode="knobPress"]').isDisabled(),false);
+  assert.ok(await page.locator('#au05-controls .chip', {hasText:'Untested'}).count()>=6);
+  await page.locator('select[data-au05-record="1"][data-au05-field="time"]').selectOption('12');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='lightRecord'&&w.change.record===1&&w.change.field==='time'&&w.change.value===12));
+  await page.getByRole('button',{name:'Read all settings'}).click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_read_all'));
 
-  // K1 is not read yet: it offers "Read from key"; the knob press (unchecked on a real key) does not.
-  assert.equal(await page.locator('[data-au05-read="knobPress"]').count(),0);
+  // K1 is not read yet: it offers "Read from key".
   await page.locator('[data-au05-read="k1"]').click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_read_key'&&w.key==='k1'));
   await page.waitForFunction(()=>document.querySelector('select[data-au05-mode="k1"]')?.value==='factory');
-  assert.equal(await page.locator('[data-au05-read="k1"]').count(),0);
+  assert.match(await page.locator('[data-au05-read="k1"]').textContent(),/Read again/);
   // K3: a UC action. Choosing it saves the action; the hotkey shows as ready.
   await page.locator('select[data-au05-action="k3"]').selectOption('claudeDictation');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.kind==='claudeDictation'));
@@ -111,8 +116,8 @@ const server=http.createServer((req,res)=>{
   await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='standbyTime'));
   const changes=(await writes()).filter(w=>w.command==='au05_change').map(w=>w.change);
-  assert.deepEqual(changes,[{setting:'keyTyping',key:'k2',mode:'uc'},{setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'},
-    {setting:'keyTyping',key:'k3',mode:'factory'},{setting:'standbyTime',value:900}]);
+  assert.deepEqual(changes,[{setting:'lightRecord',record:1,field:'time',value:12},{setting:'keyTyping',key:'k2',mode:'uc'},
+    {setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'},{setting:'keyTyping',key:'k3',mode:'factory'},{setting:'standbyTime',value:900}]);
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_reconnect'));
 
@@ -125,6 +130,7 @@ const server=http.createServer((req,res)=>{
     await page.screenshot({path:path.join(output,`uc-vibe-key-${width}.png`),fullPage:true});
   }
   await page.setViewportSize({width:1440,height:1000});
+  await page.locator('.au05-records').screenshot({path:path.join(output,'uc-vibe-key-light-records.png')});
   await nav('general').click();await page.locator('#au05-enabled').uncheck();
   await page.waitForFunction(()=>document.querySelector('[data-page="vibekey"]').hidden);
   assert.deepEqual(errors,[]);
