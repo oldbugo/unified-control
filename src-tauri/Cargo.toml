@@ -22,8 +22,8 @@ ab_glyph = "0.2"
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
-# AU05 Vibe Key driver (uc-ulanzi PRs 3 and 4, merged).
-ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "4e1022d5a3667b1d3973b7ced65f90154cfa5cd2" }
+# AU05 Vibe Key driver. Local branch claude/au05-knob-typing (knob turn typing); the orchestrator switches this to GitHub.
+ulanzi_au05 = { git = "file:///C:/Users/pc/Documents/uc-worktrees/uc-ulanzi-au05", rev = "a1129a4c6a44879335555cefb1fe4b7c9f0e9ba0" }
 
 [dev-dependencies]
 tempfile = "3"

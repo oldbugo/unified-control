@@ -121,7 +121,7 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
+    const sig=JSON.stringify([s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(force||(sig!==this.lastSig&&!typing)){
@@ -196,7 +196,7 @@ export class Au05Panel{
     const m=s.menu||{};
     const anyMenu=Object.values(s.actions||{}).some(a=>a?.kind==='quickMenu');
     const assignment=id=>{
-      if(id==='knobTurn')return anyMenu?'Scroll · moves the menu':'Factory scroll';
+      if(id==='knobTurn'){const act={scroll:'UC scroll',volume:'Volume',none:'Nothing'}[m.knobTurnAction]||'UC scroll';return m.knobTurn==='uc'?`${act}${anyMenu?' · moves the menu':''}`:`Factory scroll${anyMenu?' · moves the menu':''}`;}
       const k=keyOf(id),a=s.actions?.[id];
       const waiting=k?.job&&(k.job.state==='waiting'||k.job.state==='sending')?' (waiting)':'';
       if(a&&a.kind!=='none'&&(!k||k.mode==='uc'||k.mode==='unknown'||waiting))return actionName(a)+waiting;
@@ -224,9 +224,17 @@ export class Au05Panel{
     </svg>`;
     const hk=s.menuHotkeys||{};
     const hkText=h=>h?.state==='ready'?'claimed':h?.state==='failed'?esc(h.message||'not available'):'not claimed';
-    const knobEditor=`<div class="au05-editor-head"><h2>Knob turn</h2></div><p>Factory scroll: turning right scrolls down, turning left scrolls up, in the app under the mouse. While the quick menu is open, turning moves its highlight.</p>
-      <div class="field"><label for="au05-knob-input">How knob turns reach the quick menu</label><select id="au05-knob-input" data-au05-knob-input${this.native?'':' disabled'}>${opt('events','Knob messages (works now; the window behind may scroll too)',m.knobInput||'events')}${opt('hotkeys','F23 / F24 (only if the knob is set to type them)',m.knobInput||'events')}</select></div>
-      ${m.knobInput==='hotkeys'?`<label class="au05-check"><input type="checkbox" data-au05-scroll${m.scrollWhenClosed?' checked':''}${this.native?'':' disabled'}> Unified Control scrolls when the menu is closed</label><p class="hint">F23 (right): ${hkText(hk.knobRight)} · F24 (left): ${hkText(hk.knobLeft)}. Setting the knob to type F23 / F24 needs a check on the real key first; until then use Knob messages.</p>`:''}`;
+    const turnValue=m.knobTurn==='uc'?`uc:${m.knobTurnAction||'scroll'}`:'factory';
+    const turnLine=t=>{const j=t.job;const now=t.mode==='unknown'?'not read yet':t.mode==='uc'?`${t.ownCode} (Unified Control)`:t.mode==='factory'?`factory ${t.key==='knobRight'?'scroll down':'scroll up'}`:t.label;
+      return `<div class="setting-row au05-turn-row"><div><strong>${esc(t.name)}</strong>${t.checked?'':' <span class="chip attention">Untested</span>'}<p>Types now: ${esc(now)}${j?` · <span class="${j.state==='failed'?'attention':''}">${j.state==='done'?'Key updated':esc(j.message)}</span>`:''}</p></div>
+        <button class="btn" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read from key':'Read again'}</button></div>`;};
+    const knobEditor=`<div class="au05-editor-head"><h2>Knob turn</h2></div>
+      <div class="field"><label for="au05-turn">What turning does</label><select id="au05-turn" data-au05-turn${this.native&&s.enabled===true?'':' disabled'}>
+        <optgroup label="Unified Control (the knob types F23 / F24)">${opt('uc:scroll','Scroll (one notch per click)',turnValue)}${opt('uc:volume','Volume up / down',turnValue)}${opt('uc:none','Nothing (only moves the quick menu)',turnValue)}</optgroup>
+        <optgroup label="Stored on the key">${opt('factory','Factory scroll',turnValue)}</optgroup></select></div>
+      <p class="hint">${m.knobTurn==='uc'?'The knob types its own codes F23 (right) and F24 (left). Unified Control turns them into scrolling or volume, and moves the quick menu while it is open. Nothing scrolls behind the menu.':'Factory scroll: turning right scrolls down, left scrolls up, in the app under the mouse. While the quick menu is open, turning also moves its highlight (the window behind may scroll too).'}</p>
+      ${m.knobTurn==='uc'?`<p class="hint">F23: ${hkText(hk.knobRight)} · F24: ${hkText(hk.knobLeft)}</p>`:''}
+      <section class="settings-list">${(s.turns||[]).map(turnLine).join('')}</section>`;
     const editor=this.selected==='knobTurn'
       ?knobEditor
       :keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="hint">Wake the key to read its controls.</p>';
@@ -315,6 +323,17 @@ export class Au05Panel{
     const job=k?.job,busy=job&&(job.state==='waiting'||job.state==='sending')&&job.label===k.ownCode;
     if(k&&k.mode!=='uc'&&!busy)await this.setMode(key,'uc');
   }
+  // The knob turn: Unified Control (the knob types F23/F24; UC scrolls, changes volume or does nothing) or the
+  // factory scroll. The choice is saved at once; the two key changes run as background jobs.
+  async chooseTurn(value){
+    const uc=value.startsWith('uc:');
+    await this.configure(uc?{knobTurn:'uc',knobTurnAction:value.slice(3)}:{knobTurn:'factory'});
+    const want=uc?'uc':'factory',turns=this.state?.turns||[];
+    if(turns.length&&turns.every(t=>t.mode===want&&(!t.job||t.job.state==='done')))return;
+    try{this.state=await this.invoke('au05_change',{change:{setting:'knobTurn',mode:want}});this.setNote('');}
+    catch(error){this.setNote(errorText(error),true);}
+    this.paint(true);this.onState();
+  }
   // Key typing is read only on request, one key at a time (the key can take up to 20 s to answer).
   async readKey(key){
     this.sending++;this.setNote('Reading from the Vibe Key… This can take up to 20 seconds.');this.paint(true);
@@ -392,8 +411,7 @@ export class Au05Panel{
     if(t.dataset.au05Profile!==undefined){this.configure({profile:t.value});return true;}
     if(t.dataset.au05Target!==undefined){this.configure({target:t.value});return true;}
     if(t.dataset.au05ProfileName!==undefined){this.configure({profileEdit:{op:'rename',id:this.state?.menu?.profile,name:t.value}});return true;}
-    if(t.dataset.au05KnobInput!==undefined){this.configure({knobInput:t.value});return true;}
-    if(t.dataset.au05Scroll!==undefined){this.configure({scrollWhenClosed:t.checked});return true;}
+    if(t.dataset.au05Turn!==undefined){this.chooseTurn(t.value);return true;}
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
     if(t.dataset.au05Record){this.change({setting:'lightRecord',record:Number(t.dataset.au05Record),field:t.dataset.au05Field,value:Number(t.value)});return true;}
     if(t.dataset.au05Mode){

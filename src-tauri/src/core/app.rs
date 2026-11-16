@@ -664,8 +664,10 @@ impl App {
     /// Read one key's typing list (`k1`..`k3`, `knobPress`), only when the user asks.
     pub fn au05_read_key(&self, key: &str) -> CoreResult<Value> {
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        let turns = [("knobRight", ulanzi_au05::protocol::KeyId::KnobRight), ("knobLeft", ulanzi_au05::protocol::KeyId::KnobLeft)];
         let id = super::au05::ACTION_KEYS
             .iter()
+            .chain(turns.iter())
             .find(|(k, _)| *k == key)
             .map(|(_, id)| *id)
             .ok_or_else(|| CoreError::new("Unknown Vibe Key key"))?;

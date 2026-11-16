@@ -162,12 +162,14 @@ one key opens a menu.
   sends no private event, so it chooses through its own code F19: the knob press must be set to a Unified
   Control action (Nothing is fine). UC claims F19 while any key opens the menu. Arrow keys, Enter, Backspace
   and mouse clicks work in the window too. Another key with an action closes the menu and runs its action.
-- **Knob input, two ways.** "Knob messages" (default, works now): the private knob events move the menu;
-  the factory scroll still reaches the window behind (accepted by the user: the menu takes focus).
-  "F23 / F24": for when the knob is set to type F23 (right) and F24 (left) instead of scrolling (needs a check
-  on the real key; UC does not set the knob yet). UC then claims F23/F24, and the option "Unified Control
-  scrolls when the menu is closed" turns the mouse wheel itself. Only one way is used at a time, so a turn
-  never moves twice.
+- **Knob turn** (Knob turn in the drawing; 2026-11-17). "Factory scroll" (stored on the key) or a Unified
+  Control choice: the knob types its own codes F23 (right) and F24 (left), which UC claims as hotkeys. While
+  the menu is closed UC then scrolls itself (one notch per click on the window under the mouse, SendInput),
+  changes the volume, or does nothing; while it is open the turns move the menu and nothing scrolls behind
+  it. Knob right typing F23 was proven on the real key (user-run, 2026-11-17); knob left (F24) is the same
+  command and is marked Untested. With the factory scroll, the knob's private events move the menu (the
+  window behind may scroll too). A turn moves the menu once: if the knob is known (read or set) to type F23,
+  or was set to by the user, only the hotkeys move it.
 - **Place.** Not at the mouse: near the top-right corner of the primary monitor's work area. Drag it by its
   title; the monitor (device name and rectangle) and the position are saved in `quick-menu.json` in the app
   folder and used next time. If that monitor is gone, it goes back to the default place. Sizes are logical
@@ -190,8 +192,7 @@ one key opens a menu.
 - The page shows the current profile and target above the drawing; the menu shows them in its header.
 - Quiet and fake instances never create the window (`quick_menu::enabled`); the menu state is still there, so
   tests drive it through the fake key and `au05_menu`.
-- Later, not built: an always-on small assistant that shows the current profile and target; Claude session
-  targeting (design to come).
+- Later, not built: an always-on small assistant that shows the current profile and target.
 
 ## Log
 
@@ -200,7 +201,7 @@ stop; receiver opened or not (error kind only); state changes (waiting, connecte
 every command queued and its result (for example "done set key typing K3 (1 entries): ok" or ": NoReply");
 page changes and action choices; key jobs; hotkey claimed, not claimed (with the reason) or released; each
 action run with its result; the quick menu opened and closed (and why), each choice, profile and target
-changes, and menu edits (entry count only). It never records report bytes, the key, window titles or typed text.
+changes, and menu edits (entry count only); knob turn changes. It never records report bytes, the key, window titles or typed text.
 
 ## Tests
 
@@ -236,5 +237,7 @@ changes, and menu edits (entry count only). It never records report bytes, the k
     the action runs once, and no F19 or Backspace reaches the app. Drag the menu to another monitor, close it,
     open it again: it comes back there. Check a monitor with a different scale. Wait 8 s: it closes.
 13. Quick menu profiles: switch to ChatGPT and Media and back; confirm K3 still opens the menu.
-14. If the knob can be set to type F23/F24: choose "F23 / F24" under Knob turn, and check that turning moves
-    the menu and, with "Unified Control scrolls when the menu is closed", scrolls the window under the mouse.
+14. Knob turn: choose Unified Control, Scroll. Both directions are set (knob left is the first real F24 set).
+    Check one notch per click in both directions with the menu closed, one menu step per click with it open,
+    no scrolling behind the menu, then Volume. Then Factory scroll: confirm the n 0 write restores the
+    knob's own scrolling.

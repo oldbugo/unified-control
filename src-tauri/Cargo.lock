@@ -4014,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "ulanzi_au05"
 version = "0.0.0"
-source = "git+https://github.com/oldbugo/uc-ulanzi?rev=4e1022d5a3667b1d3973b7ced65f90154cfa5cd2#4e1022d5a3667b1d3973b7ced65f90154cfa5cd2"
+source = "git+file:///C:/Users/pc/Documents/uc-worktrees/uc-ulanzi-au05?rev=a1129a4c6a44879335555cefb1fe4b7c9f0e9ba0#a1129a4c6a44879335555cefb1fe4b7c9f0e9ba0"
 dependencies = [
  "windows-sys 0.61.2",
 ]

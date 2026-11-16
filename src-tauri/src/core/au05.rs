@@ -58,11 +58,19 @@ pub fn own_vk(key: KeyId) -> u16 {
         KeyId::K2 => hotkey::VK_F21,
         KeyId::K3 => hotkey::VK_F22,
         KeyId::KnobPress => hotkey::VK_F19,
+        KeyId::KnobRight => hotkey::VK_F23,
+        KeyId::KnobLeft => hotkey::VK_F24,
     }
 }
 fn settings_key(key: KeyId) -> &'static str {
-    ACTION_KEYS[key.index() as usize].0
+    match key {
+        KeyId::KnobRight => "knobRight",
+        KeyId::KnobLeft => "knobLeft",
+        k => ACTION_KEYS[k.index() as usize].0,
+    }
 }
+/// What turning the knob does while the quick menu is closed and the knob types F23/F24.
+pub const TURN_ACTIONS: [&str; 3] = ["scroll", "volume", "none"];
 
 pub fn default_settings() -> Value {
     sanitize(&json!({}))
@@ -125,8 +133,10 @@ pub fn sanitize(v: &Value) -> Value {
         "profile": current,
         "target": v["target"].as_str().filter(|t| TARGETS.contains(t)).unwrap_or("claude"),
         "menu": menu::sanitize_menu(&entries, &ids),
-        "knobInput": if v["knobInput"] == "hotkeys" { "hotkeys" } else { "events" },
-        "scrollWhenClosed": v["scrollWhenClosed"].as_bool().unwrap_or(false),
+        // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
+        // menu or runs `knobTurnAction` (scroll by default).
+        "knobTurn": if v["knobTurn"] == "uc" { "uc" } else { "factory" },
+        "knobTurnAction": v["knobTurnAction"].as_str().filter(|a| TURN_ACTIONS.contains(a)).unwrap_or("scroll"),
     })
 }
 
@@ -170,7 +180,7 @@ fn profile_id(name: &str, profiles: &[Value]) -> String {
 }
 
 /// Apply a page patch to the saved `au05` settings. Returns log lines (names only, no typed text).
-/// `{enabled?, action?: {control, kind, value, app}, profile?, target?, menu?, knobInput?, scrollWhenClosed?,
+/// `{enabled?, action?: {control, kind, value, app}, profile?, target?, menu?, knobTurn?, knobTurnAction?,
 ///   profileEdit?: {op: add|rename|remove, id?, name?}}`
 pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String> {
     *au = sanitize(au);
@@ -261,14 +271,15 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
         au["menu"] = m.clone();
         lines.push(format!("page menu saved ({} entries)", m.as_array().map(|a| a.len()).unwrap_or(0)));
     }
-    if let Some(k) = patch.get("knobInput") {
-        let k = k.as_str().filter(|k| *k == "events" || *k == "hotkeys").ok_or("Choose how knob turns reach the menu")?;
-        au["knobInput"] = json!(k);
-        lines.push(format!("page knob input = {k}"));
+    if let Some(k) = patch.get("knobTurn") {
+        let k = k.as_str().filter(|k| *k == "factory" || *k == "uc").ok_or("Choose what the knob turn does")?;
+        au["knobTurn"] = json!(k);
+        lines.push(format!("page knob turn = {k}"));
     }
-    if let Some(v) = patch.get("scrollWhenClosed") {
-        au["scrollWhenClosed"] = json!(v.as_bool().ok_or("Invalid Vibe Key setting")?);
-        lines.push(format!("page scroll when closed = {v}"));
+    if let Some(a) = patch.get("knobTurnAction") {
+        let a = a.as_str().filter(|a| TURN_ACTIONS.contains(a)).ok_or("Choose what turning the knob does")?;
+        au["knobTurnAction"] = json!(a);
+        lines.push(format!("page knob turn action = {a}"));
     }
     *au = sanitize(au);
     Ok(lines)
@@ -298,6 +309,8 @@ pub enum Change {
     LightBrightness(u8),
     MicNrLevel(u8),
     KeyTyping(KeyId, KeyTyping),
+    /// Both knob turn directions: their own codes F23/F24 (true) or the factory scroll (false).
+    KnobTurn(bool),
     LightRecord { record: u8, field: LightField, value: u8 },
     HooksMode(u8),
 }
@@ -338,6 +351,11 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
                 .ok_or("Choose a light field")?;
             Ok(Change::LightRecord { record, field, value: byte()? })
         }
+        "knobTurn" => match v["mode"].as_str().unwrap_or("") {
+            "factory" => Ok(Change::KnobTurn(false)),
+            "uc" => Ok(Change::KnobTurn(true)),
+            _ => Err("Choose what the knob turn does".into()),
+        },
         "keyTyping" => {
             let key = ACTION_KEYS
                 .iter()
@@ -366,7 +384,8 @@ struct Known {
     light: Option<LightState>,
     hooks_mode: Option<u8>,
     mic: Option<MicNr>,
-    keys: [Option<KeyTyping>; 4],
+    /// What each control types (K1..K3, knob press, knob right, knob left).
+    keys: [Option<KeyTyping>; 6],
     standby_status: Option<u8>,
     codes: [Option<u8>; 6],
 }
@@ -393,7 +412,7 @@ struct Status {
     stalls: u64,
     sent: u64,
     generation: u64,
-    jobs: [Option<KeyJob>; 4],
+    jobs: [Option<KeyJob>; 6],
 }
 
 fn push_event(status: &Mutex<Status>, control: Control, pressed: bool, code: u8, action: Option<String>) {
@@ -474,6 +493,16 @@ impl MenuCtl {
     }
     pub fn is_open(&self) -> bool {
         self.state.lock_or_recover().open
+    }
+    /// True when knob turns reach UC as F23/F24: the key was read or set to type them, or (not read since
+    /// start) the user chose that. Then the knob's private events do not move the menu, so a turn never
+    /// moves twice.
+    fn turns_are_hotkeys(&self) -> bool {
+        let known = self.status.lock_or_recover().known.keys[KeyId::KnobRight.index() as usize].clone();
+        match known {
+            Some(t) => t == KeyTyping::own_code(KeyId::KnobRight),
+            None => self.settings()["knobTurn"] == "uc",
+        }
     }
 
     /// One input for the menu (`source` is for the log).
@@ -597,10 +626,23 @@ impl MenuCtl {
             let right = vk == hotkey::VK_F23;
             if open {
                 self.input(if right { Input::Next } else { Input::Prev }, "knob");
-            } else if settings["scrollWhenClosed"] == true {
-                if let Some(d) = self.desktop.lock_or_recover().clone().and_then(|d| d.upgrade()) {
-                    // Turning right scrolls down, like the factory knob.
-                    let _ = d.scroll(if right { -1 } else { 1 });
+            } else {
+                match settings["knobTurnAction"].as_str().unwrap_or("scroll") {
+                    "scroll" => {
+                        if let Some(d) = self.desktop.lock_or_recover().clone().and_then(|d| d.upgrade()) {
+                            // One notch per click; turning right scrolls down, like the factory knob.
+                            if let Err(e) = d.scroll(if right { -1 } else { 1 }) {
+                                self.log.line(&format!("knob scroll: {e}"));
+                            }
+                        }
+                    }
+                    "volume" => {
+                        let id = if right { "volumeUp" } else { "volumeDown" };
+                        if let Some(e) = hotkey::entry(id) {
+                            self.run(Action::Entry(e), None, false);
+                        }
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -633,8 +675,8 @@ impl MenuCtl {
             "profile": settings["profile"],
             "target": settings["target"],
             "targets": TARGETS.iter().map(|t| json!({"id": t, "name": menu::target_name(t)})).collect::<Vec<_>>(),
-            "knobInput": settings["knobInput"],
-            "scrollWhenClosed": settings["scrollWhenClosed"],
+            "knobTurn": settings["knobTurn"],
+            "knobTurnAction": settings["knobTurnAction"],
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
             "last": self.last.lock_or_recover().clone(),
@@ -673,6 +715,8 @@ struct KeyJob {
     /// "waiting", "sending", "done" or "failed".
     state: &'static str,
     message: String,
+    /// A newer choice made while this one was being sent: it is sent next (still one at a time).
+    next: Option<KeyTyping>,
 }
 
 fn now_ms() -> u64 {
@@ -810,8 +854,8 @@ impl Au05 {
         if enabled && any_menu && !wanted.contains(&hotkey::VK_F19) {
             wanted.push(hotkey::VK_F19);
         }
-        // Knob turns as F23/F24 (only if the knob is set to type them): the menu, or UC's own scrolling.
-        if enabled && settings["knobInput"] == "hotkeys" && (any_menu || settings["scrollWhenClosed"] == true) {
+        // The knob types F23/F24: they move the menu, or run the knob turn action (UC's own scrolling).
+        if enabled && settings["knobTurn"] == "uc" {
             wanted.extend([hotkey::VK_F23, hotkey::VK_F24]);
         }
         let results = d.set_hotkeys(&wanted);
@@ -934,6 +978,13 @@ impl Au05 {
 
     /// Send one change to the key and wait for its answer (at most `SET_WAIT`).
     pub fn change(&self, change: Change) -> Result<(), String> {
+        if let Change::KnobTurn(own) = change {
+            self.log.line(&format!("page change knob turn {}", if own { "F23/F24" } else { "factory scroll" }));
+            for k in KeyId::TURNS {
+                self.set_key(k, if own { KeyTyping::own_code(k) } else { KeyTyping::factory() })?;
+            }
+            return Ok(());
+        }
         if let Change::KeyTyping(key, typing) = change {
             self.log.line(&format!("page change key typing {} ({} entries)", key.control().name(), typing.0.len()));
             return self.set_key(key, typing);
@@ -954,13 +1005,18 @@ impl Au05 {
         if !s.enabled {
             return Err("Enable the Vibe Key first".into());
         }
-        if s.jobs[key.index() as usize].as_ref().is_some_and(|j| j.state == "sending") {
-            return Err("This key is being changed now. Try again in a moment".into());
+        if let Some(j) = s.jobs[key.index() as usize].as_mut().filter(|j| j.state == "sending") {
+            // Never a second command for this key while one is pending: send it after this one.
+            j.next = Some(typing);
+            drop(s);
+            self.log.line(&format!("key job for {} follows the one being sent", key.control().name()));
+            return Ok(());
         }
         s.jobs[key.index() as usize] = Some(KeyJob {
             typing,
             state: "waiting",
             message: String::new(),
+            next: None,
         });
         drop(s);
         self.log.line(&format!("key job queued for {}", key.control().name()));
@@ -1072,6 +1128,23 @@ impl Au05 {
             "lightFieldMax": LIGHT_FIELDS.iter().map(|(n, f)| (n.to_string(), json!(f.max()))).collect::<serde_json::Map<_, _>>(),
             "micNrMax": protocol::MIC_NR_LEVEL_MAX,
             "keys": keys,
+            // The knob turn directions: what each types (read or set; never read at connect) and its job.
+            "turns": KeyId::TURNS.iter().map(|&id| {
+                let t = k.keys[id.index() as usize].as_ref();
+                json!({
+                    "key": settings_key(id),
+                    "name": id.control().name(),
+                    "mode": match t { None => "unknown", Some(t) if t.is_factory() => "factory",
+                                      Some(t) if *t == KeyTyping::own_code(id) => "uc", Some(_) => "keys" },
+                    "label": t.map(|t| t.label(id)),
+                    "ownCode": protocol::usage_name(id.control().own_code().unwrap_or(0)),
+                    "job": s.jobs[id.index() as usize].as_ref().map(|j| json!({"state": j.state,
+                        "message": if j.state == "failed" { j.message.clone() } else if j.state == "done" { "Done".into() }
+                                   else if j.state == "sending" { "Sending to the key".into() }
+                                   else { "Waiting for the key: press any key to wake it".to_string() }})),
+                    "checked": Request::SetKeyTyping(id, KeyTyping::own_code(id)).verified_on_hardware(),
+                })
+            }).collect::<Vec<_>>(),
             "events": events,
             "actions": self.actions.lock_or_recover().clone(),
             "hotkeysAvailable": self.desktop.is_some(),
@@ -1107,19 +1180,8 @@ impl Au05 {
                 let name = v["control"].as_str().unwrap_or("");
                 let control = CONTROLS.iter().find(|(k, _)| *k == name).ok_or("Unknown control")?.1;
                 fake.click(control);
-                // Knob turns as F23/F24 (as if the knob were set to type them), when that input is chosen.
-                if self.menu.settings()["knobInput"] == "hotkeys" {
-                    let vk = match control {
-                        Control::KnobRight => Some(hotkey::VK_F23),
-                        Control::KnobLeft => Some(hotkey::VK_F24),
-                        _ => None,
-                    };
-                    if let (Some(vk), Some(d)) = (vk, &self.fake_desktop) {
-                        d.press(vk);
-                    }
-                }
                 // If the fake key typed its own code, deliver it to the fake hotkey layer, as Windows would.
-                if let Some(id) = KeyId::ALL.into_iter().find(|k| k.control() == control) {
+                if let Some(id) = KeyId::EVERY.into_iter().find(|k| k.control() == control) {
                     let own = fake.lock().typing[id.index() as usize] == KeyTyping::own_code(id);
                     if let (true, Some(d)) = (own, &self.fake_desktop) {
                         d.press(own_vk(id));
@@ -1206,7 +1268,7 @@ impl Worker {
         }
         let next = {
             let s = self.status.lock_or_recover();
-            KeyId::ALL.into_iter().find_map(|k| {
+            KeyId::EVERY.into_iter().find_map(|k| {
                 s.jobs[k.index() as usize]
                     .as_ref()
                     .filter(|j| j.state == "waiting")
@@ -1448,6 +1510,10 @@ impl Worker {
                 }
             },
             Change::KeyTyping(k, t) => Request::SetKeyTyping(k, t),
+            Change::KnobTurn(_) => {
+                let _ = reply.send(Err("The knob turn is set as a background job".into()));
+                return;
+            }
             Change::LightRecord { record, field, value } => Request::SetLightRecord { record, field, value },
             Change::HooksMode(m) => Request::SetHooksMode(m),
         };
@@ -1499,7 +1565,7 @@ impl Worker {
             // also move an open quick menu (unless the knob is set to type F23/F24 instead).
             Output::Control(e) => {
                 push_event(&self.status, e.control, e.pressed, e.code, None);
-                if e.pressed && self.menu.is_open() && self.menu.settings()["knobInput"] != "hotkeys" {
+                if e.pressed && self.menu.is_open() && !self.menu.turns_are_hotkeys() {
                     match e.control {
                         Control::KnobRight => self.menu.input(Input::Next, "knob"),
                         Control::KnobLeft => self.menu.input(Input::Prev, "knob"),
@@ -1537,6 +1603,14 @@ impl Worker {
                                 Err(f) => {
                                     job.state = "failed";
                                     job.message = f.message();
+                                }
+                            }
+                            // A newer choice was made meanwhile: it becomes the waiting job.
+                            if job.state != "waiting" {
+                                if let Some(next) = job.next.take() {
+                                    job.typing = next;
+                                    job.state = "waiting";
+                                    job.message.clear();
                                 }
                             }
                         }
