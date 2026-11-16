@@ -212,6 +212,12 @@ impl App {
         let desktop = None;
         let au05 = super::au05::Au05::new(fake, desktop);
         au05.set_log_dir(self.base.join("devices/au05"));
+        // A profile or target chosen in the quick menu is saved like a page change.
+        let weak_app = self.me.lock_or_recover().clone();
+        au05.set_persist(Arc::new(move |patch| {
+            let app = weak_app.upgrade().ok_or_else(|| "Unified Control is closing".to_string())?;
+            app.au05_configure(&patch).map(|_| ()).map_err(|e| e.message)
+        }));
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
@@ -618,52 +624,29 @@ impl App {
         v["actions"] = saved["actions"].clone();
         v
     }
-    /// `{ enabled?, action?: { control, kind, value } }`: saved at once, then applied.
+    /// `{ enabled?, action?, profile?, target?, menu?, knobInput?, scrollWhenClosed?, profileEdit? }`
+    /// (see `au05::apply_patch`): checked, saved at once, then applied.
     pub fn au05_configure(&self, patch: &Value) -> CoreResult<Value> {
         let _guard = self.au05_config_lock.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
-        if patch.get("enabled").is_some_and(|v| !v.is_boolean()) {
-            return Err(CoreError::new("Invalid Vibe Key setting"));
-        }
-        let action = patch.get("action");
-        if let Some(a) = action {
-            let control = a["control"].as_str().unwrap_or("");
-            if !super::au05::ACTION_KEYS.iter().any(|(k, _)| *k == control) {
-                return Err(CoreError::new("Unknown Vibe Key control"));
-            }
-            let kind = a["kind"].as_str().unwrap_or("");
-            let value = a["value"].as_str().unwrap_or("");
-            // A custom hotkey with an empty value is saved while the user is still typing; it does nothing.
-            super::au05::validate_action(kind, value, a["app"].as_str().unwrap_or("")).map_err(CoreError::new)?;
-        }
-        let saved = self
-            .settings
-            .update(|s| {
-                if let Some(v) = patch.get("enabled") {
-                    s["au05"]["enabled"] = v.clone();
-                }
-                if let Some(a) = action {
-                    let control = a["control"].as_str().unwrap_or("").to_string();
-                    s["au05"]["actions"][control] = json!({"kind": a["kind"], "value": a["value"], "app": a["app"]});
-                }
-            })
-            .map_err(CoreError::from)?;
-        if let Some(a) = action {
-            au05.log_line(&format!(
-                "page action {} = {}{}",
-                a["control"].as_str().unwrap_or(""),
-                a["kind"].as_str().unwrap_or(""),
-                a["app"].as_str().filter(|x| !x.is_empty()).map(|x| format!(" (app {x})")).unwrap_or_default()
-            ));
-        }
-        if let Some(v) = patch.get("enabled") {
-            au05.log_line(&format!("page enabled = {v}"));
+        // Checked on a copy first; the lock above keeps the copy current until it is saved.
+        let mut next = self.settings.load().0["au05"].clone();
+        let lines = super::au05::apply_patch(&mut next, patch).map_err(CoreError::new)?;
+        let saved = self.settings.update(|s| s["au05"] = next.clone()).map_err(CoreError::from)?;
+        for line in lines {
+            au05.log_line(&line);
         }
         au05.configure(&saved.0["au05"]);
         Ok(self.au05_state())
+    }
+    /// Input from the quick menu window (`{op, index?}`); returns the menu's view.
+    pub fn au05_menu(&self, input: &Value) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        let index = input["index"].as_u64().map(|i| i.min(1000) as usize);
+        au05.menu_input(input["op"].as_str().unwrap_or("state"), index).map_err(CoreError::new)
     }
     /// One setting stored on the key. Waits for the key's answer.
     pub fn au05_change(&self, request: &Value) -> CoreResult<Value> {

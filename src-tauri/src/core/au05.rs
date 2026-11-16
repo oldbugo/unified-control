@@ -15,7 +15,12 @@
 //!   the app so I can test it out all at once"). Settings not checked on the real key
 //!   (`Request::verified_on_hardware`) are labelled "Untested" on the page. Each set is read back.
 //! - With `UC_FAKE_DEVICE` set the real key is never opened, and a fake desktop claims no hotkey.
-use super::au05_hotkey::{self as hotkey, Action, Desktop, FakeDesktop};
+//! - Quick menu (`au05_menu`, 2026-11-17): a key with "Open quick menu" opens a menu window; knob turns move
+//!   (private events, or F23/F24 hotkeys if the knob is set to type them), the knob press (F19) chooses.
+//!   Profiles are named sets of key actions; "the target app" decides what "Target app" actions do. The
+//!   menu never writes to the key.
+use super::au05_hotkey::{self as hotkey, Action, Desktop, FakeDesktop, QUICK_MENU, TARGETS};
+use super::au05_menu::{self as menu, Input, MenuState, MenuView, Outcome};
 use super::sync::{restarting, MutexExt};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -60,26 +65,213 @@ fn settings_key(key: KeyId) -> &'static str {
 }
 
 pub fn default_settings() -> Value {
-    let actions: serde_json::Map<String, Value> = ACTION_KEYS
-        .iter()
-        .map(|(k, _)| (k.to_string(), json!({"kind":"none","value":"","app":""})))
-        .collect();
-    json!({"enabled": false, "actions": actions})
+    sanitize(&json!({}))
 }
 
-/// Keep only known keys with valid values.
-pub fn sanitize(v: &Value) -> Value {
-    let mut out = default_settings();
-    out["enabled"] = json!(v["enabled"].as_bool().unwrap_or(false));
+/// The four keys' actions, each `{kind, value, app}` with a known kind.
+fn sanitize_actions(v: &Value) -> Value {
+    let mut out = serde_json::Map::new();
     for (key, _) in ACTION_KEYS {
-        let a = &v["actions"][key];
+        let a = &v[key];
         let kind = a["kind"].as_str().filter(|k| hotkey::kind_known(k)).unwrap_or("none");
         let value = a["value"].as_str().filter(|s| s.len() <= 4096 && !s.contains('\0')).unwrap_or("");
         let app = a["app"].as_str().filter(|id| hotkey::app(id).is_some()).unwrap_or("");
         let custom = kind == "hotkey";
-        out["actions"][key] = json!({"kind": kind, "value": if custom { value } else { "" }, "app": if custom { app } else { "" }});
+        out.insert(
+            key.to_string(),
+            json!({"kind": kind, "value": if custom { value } else { "" }, "app": if custom { app } else { "" }}),
+        );
     }
-    out
+    Value::Object(out)
+}
+
+/// Keep only known keys with valid values. The live `actions` always belong to the current profile.
+pub fn sanitize(v: &Value) -> Value {
+    let actions = sanitize_actions(&v["actions"]);
+    let source = v["profiles"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .cloned()
+        .unwrap_or_else(|| menu::default_profiles(&actions).as_array().cloned().unwrap_or_default());
+    let mut profiles: Vec<Value> = Vec::new();
+    for p in source {
+        let id = p["id"].as_str().unwrap_or("");
+        if profiles.len() >= menu::MAX_PROFILES || !menu::valid_id(id) || profiles.iter().any(|q| q["id"] == id) {
+            continue;
+        }
+        let name = menu::clean_label(&p["name"]);
+        profiles.push(json!({"id": id, "name": if name.is_empty() { id.to_string() } else { name },
+                             "actions": sanitize_actions(&p["actions"])}));
+    }
+    if profiles.is_empty() {
+        profiles = menu::default_profiles(&actions).as_array().cloned().unwrap_or_default();
+    }
+    let current = v["profile"]
+        .as_str()
+        .filter(|id| profiles.iter().any(|p| p["id"] == *id))
+        .map(str::to_string)
+        .unwrap_or_else(|| profiles[0]["id"].as_str().unwrap_or("").to_string());
+    for p in profiles.iter_mut() {
+        if p["id"] == current.as_str() {
+            p["actions"] = actions.clone();
+        }
+    }
+    let ids: Vec<String> = profiles.iter().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
+    let entries = if v["menu"].is_array() { v["menu"].clone() } else { menu::default_menu() };
+    json!({
+        "enabled": v["enabled"].as_bool().unwrap_or(false),
+        "actions": actions,
+        "profiles": profiles,
+        "profile": current,
+        "target": v["target"].as_str().filter(|t| TARGETS.contains(t)).unwrap_or("claude"),
+        "menu": menu::sanitize_menu(&entries, &ids),
+        "knobInput": if v["knobInput"] == "hotkeys" { "hotkeys" } else { "events" },
+        "scrollWhenClosed": v["scrollWhenClosed"].as_bool().unwrap_or(false),
+    })
+}
+
+/// Switch to another profile: its key actions apply at once (no device write). A profile without a menu key
+/// keeps the current menu key, so the menu can always switch back.
+fn switch_profile(au: &mut Value, id: &str) -> Result<(), String> {
+    let current = au["profile"].as_str().unwrap_or("").to_string();
+    let actions = au["actions"].clone();
+    let profiles = au["profiles"].as_array_mut().ok_or("No profiles")?;
+    let mut next = profiles.iter().find(|p| p["id"] == id).ok_or("Choose a saved profile")?["actions"].clone();
+    for p in profiles.iter_mut() {
+        if p["id"] == current.as_str() {
+            p["actions"] = actions.clone();
+        }
+    }
+    if !ACTION_KEYS.iter().any(|(k, _)| next[k]["kind"] == QUICK_MENU) {
+        for (k, _) in ACTION_KEYS {
+            if actions[k]["kind"] == QUICK_MENU {
+                next[k] = actions[k].clone();
+            }
+        }
+    }
+    au["actions"] = next;
+    au["profile"] = json!(id);
+    Ok(())
+}
+
+fn profile_id(name: &str, profiles: &[Value]) -> String {
+    let slug: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).take(20).collect();
+    let base = match slug.trim_matches('-') {
+        "" => "profile".to_string(),
+        s => s.to_string(),
+    };
+    let mut id = base.clone();
+    let mut n = 2;
+    while profiles.iter().any(|p| p["id"] == id.as_str()) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
+}
+
+/// Apply a page patch to the saved `au05` settings. Returns log lines (names only, no typed text).
+/// `{enabled?, action?: {control, kind, value, app}, profile?, target?, menu?, knobInput?, scrollWhenClosed?,
+///   profileEdit?: {op: add|rename|remove, id?, name?}}`
+pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String> {
+    *au = sanitize(au);
+    let mut lines = Vec::new();
+    if let Some(v) = patch.get("enabled") {
+        let v = v.as_bool().ok_or("Invalid Vibe Key setting")?;
+        au["enabled"] = json!(v);
+        lines.push(format!("page enabled = {v}"));
+    }
+    if let Some(a) = patch.get("action") {
+        let control = a["control"].as_str().unwrap_or("");
+        if !ACTION_KEYS.iter().any(|(k, _)| *k == control) {
+            return Err("Unknown Vibe Key control".into());
+        }
+        let (kind, value, app) = (a["kind"].as_str().unwrap_or(""), a["value"].as_str().unwrap_or(""), a["app"].as_str().unwrap_or(""));
+        // A custom hotkey with an empty value is saved while the user is still typing; it does nothing.
+        validate_action(kind, value, app)?;
+        au["actions"][control] = json!({"kind": kind, "value": value, "app": app});
+        let app_note = if app.is_empty() { String::new() } else { format!(" (app {app})") };
+        lines.push(format!("page action {control} = {kind}{app_note}"));
+    }
+    if let Some(e) = patch.get("profileEdit") {
+        let name = menu::clean_label(&e["name"]);
+        let id = e["id"].as_str().unwrap_or("").to_string();
+        let profiles = au["profiles"].as_array().cloned().unwrap_or_default();
+        let known = profiles.iter().any(|p| p["id"] == id.as_str());
+        match e["op"].as_str().unwrap_or("") {
+            "add" => {
+                if profiles.len() >= menu::MAX_PROFILES {
+                    return Err("At most 12 profiles".into());
+                }
+                if name.is_empty() {
+                    return Err("Give the profile a name".into());
+                }
+                // A new profile starts as a copy of the current key actions.
+                let new_id = profile_id(&name, &profiles);
+                let actions = au["actions"].clone();
+                if let Some(ps) = au["profiles"].as_array_mut() {
+                    ps.push(json!({"id": new_id, "name": name, "actions": actions}));
+                }
+                lines.push(format!("page profile added {new_id}"));
+            }
+            "rename" => {
+                if name.is_empty() || !known {
+                    return Err(if known { "Give the profile a name" } else { "Choose a saved profile" }.into());
+                }
+                for p in au["profiles"].as_array_mut().into_iter().flatten() {
+                    if p["id"] == id.as_str() {
+                        p["name"] = json!(name);
+                    }
+                }
+                lines.push(format!("page profile renamed {id}"));
+            }
+            "remove" => {
+                if !known {
+                    return Err("Choose a saved profile".into());
+                }
+                if profiles.len() <= 1 {
+                    return Err("Keep at least one profile".into());
+                }
+                if au["profile"] == id.as_str() {
+                    let other = profiles.iter().filter_map(|p| p["id"].as_str()).find(|p| *p != id).unwrap_or("").to_string();
+                    switch_profile(au, &other)?;
+                }
+                if let Some(ps) = au["profiles"].as_array_mut() {
+                    ps.retain(|p| p["id"] != id.as_str());
+                }
+                lines.push(format!("page profile removed {id}"));
+            }
+            _ => return Err("Unknown profile change".into()),
+        }
+    }
+    if let Some(id) = patch.get("profile") {
+        let id = id.as_str().ok_or("Choose a saved profile")?;
+        switch_profile(au, id)?;
+        lines.push(format!("profile = {id}"));
+    }
+    if let Some(t) = patch.get("target") {
+        let t = t.as_str().filter(|t| TARGETS.contains(t)).ok_or("Choose Claude or ChatGPT")?;
+        au["target"] = json!(t);
+        lines.push(format!("target = {t}"));
+    }
+    if let Some(m) = patch.get("menu") {
+        let m = if m == "default" { menu::default_menu() } else { m.clone() };
+        if !m.is_array() {
+            return Err("Invalid quick menu".into());
+        }
+        au["menu"] = m.clone();
+        lines.push(format!("page menu saved ({} entries)", m.as_array().map(|a| a.len()).unwrap_or(0)));
+    }
+    if let Some(k) = patch.get("knobInput") {
+        let k = k.as_str().filter(|k| *k == "events" || *k == "hotkeys").ok_or("Choose how knob turns reach the menu")?;
+        au["knobInput"] = json!(k);
+        lines.push(format!("page knob input = {k}"));
+    }
+    if let Some(v) = patch.get("scrollWhenClosed") {
+        au["scrollWhenClosed"] = json!(v.as_bool().ok_or("Invalid Vibe Key setting")?);
+        lines.push(format!("page scroll when closed = {v}"));
+    }
+    *au = sanitize(au);
+    Ok(lines)
 }
 
 /// Check one UC action before it is saved.
@@ -242,6 +434,7 @@ pub struct Au05 {
     config_lock: Mutex<()>,
     config: SessionConfig,
     log: Arc<Log>,
+    menu: Arc<MenuCtl>,
 }
 
 /// `devices/au05/device.log` (rotated at about 1 MB, like the other device logs). Command names and results
@@ -253,6 +446,199 @@ impl Log {
         if let Some(dir) = self.0.lock_or_recover().as_ref() {
             crate::device::log::log_in(dir, &format!("au05 {msg}"));
         }
+    }
+}
+
+/// Saves a settings patch through the app (profile or target chosen in the menu).
+pub type Persist = Arc<dyn Fn(Value) -> Result<(), String> + Send + Sync>;
+
+/// The quick menu and every hotkey press: routes key presses, knob turns and window input to the menu's
+/// state machine, shows it through the view, and runs what was chosen.
+pub struct MenuCtl {
+    state: Mutex<MenuState>,
+    /// The sanitized `au05` settings (menu, profiles, target, actions, knob input).
+    settings: Mutex<Value>,
+    view: Mutex<Option<Arc<dyn MenuView>>>,
+    persist: Mutex<Option<Persist>>,
+    desktop: Mutex<Option<std::sync::Weak<dyn Desktop>>>,
+    log: Arc<Log>,
+    status: Arc<Mutex<Status>>,
+    opened: AtomicU64,
+    /// The result of the last menu choice (shown on the page).
+    last: Arc<Mutex<Option<String>>>,
+}
+
+impl MenuCtl {
+    fn settings(&self) -> Value {
+        self.settings.lock_or_recover().clone()
+    }
+    pub fn is_open(&self) -> bool {
+        self.state.lock_or_recover().open
+    }
+
+    /// One input for the menu (`source` is for the log).
+    pub fn input(self: &Arc<Self>, input: Input, source: &str) {
+        let settings = self.settings();
+        let (outcome, was_open, view) = {
+            let mut st = self.state.lock_or_recover();
+            let was = st.open;
+            let o = st.step(&settings["menu"], input, Instant::now());
+            (o, was, st.view(&settings))
+        };
+        let open = view["open"] == true;
+        if let Some(v) = self.view.lock_or_recover().clone() {
+            if open {
+                v.show(&view, !was_open);
+            } else if was_open {
+                v.hide();
+            }
+        }
+        match outcome {
+            Outcome::Opened => {
+                self.log.line(&format!("menu opened ({source})"));
+                self.start_timer();
+            }
+            Outcome::Closed => self.log.line(&format!("menu closed ({source})")),
+            Outcome::Run(a, label) => {
+                self.log.line(&format!("menu chose {label}"));
+                let action = saved_action(&json!({"x": a}), "x");
+                self.run(action, None, true);
+            }
+            Outcome::Profile(id, label) => {
+                self.log.line(&format!("menu chose profile {label}"));
+                self.save(json!({"profile": id}), format!("Profile: {label}"));
+            }
+            Outcome::Target(t, label) => {
+                self.log.line(&format!("menu chose target {label}"));
+                self.save(json!({"target": t}), format!("Target app: {label}"));
+            }
+            Outcome::Unavailable(m) => self.log.line(&format!("menu: {m}")),
+            Outcome::Nothing | Outcome::Moved => {}
+        }
+    }
+
+    /// Closes the menu after `CLOSE_AFTER` without input. One timer per opening.
+    fn start_timer(self: &Arc<Self>) {
+        let generation = self.opened.fetch_add(1, Ordering::SeqCst) + 1;
+        let me = Arc::downgrade(self);
+        let _ = std::thread::Builder::new().name("uc-au05-menu-timer".into()).spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(200));
+            let Some(m) = me.upgrade() else { return };
+            if m.opened.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let (open, expired) = {
+                let st = m.state.lock_or_recover();
+                (st.open, st.expired(Instant::now()))
+            };
+            if !open {
+                return;
+            }
+            if expired {
+                m.input(Input::Close, "no input");
+                return;
+            }
+        });
+    }
+
+    /// Save a profile or target choice through the app (never on the hotkey thread: saving re-claims hotkeys).
+    fn save(self: &Arc<Self>, patch: Value, what: String) {
+        let me = self.clone();
+        let _ = std::thread::Builder::new().name("uc-au05-menu-save".into()).spawn(move || {
+            let persist = me.persist.lock_or_recover().clone();
+            let note = match persist.map(|p| p(patch)) {
+                Some(Ok(())) => what,
+                Some(Err(e)) => format!("{what}: {e}"),
+                None => format!("{what}: not saved (no app)"),
+            };
+            me.log.line(&format!("menu saved: {note}"));
+            *me.last.lock_or_recover() = Some(note);
+        });
+    }
+
+    /// Run an action on its own thread. `from_menu`: wait a moment so the menu window has gone first.
+    fn run(&self, action: Action, key: Option<KeyId>, from_menu: bool) {
+        let target = self.settings()["target"].as_str().unwrap_or("claude").to_string();
+        let action = action.resolve(&target);
+        let desk = self.desktop.lock_or_recover().clone();
+        let (status, log, last) = (self.status.clone(), self.log.clone(), self.last.clone());
+        let _ = std::thread::Builder::new().name("uc-au05-action".into()).spawn(move || {
+            if from_menu {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            let result = desk
+                .and_then(|d| d.upgrade())
+                .ok_or_else(|| "Unified Control is closing".to_string())
+                .and_then(|d| {
+                    super::sync::guarded("Vibe Key action", || d.run(&action)).unwrap_or_else(|| Err("The action crashed".into()))
+                });
+            let note = match result {
+                Ok(()) => format!("ran {}", action.label()),
+                Err(e) => format!("{}: {e}", action.label()),
+            };
+            match key {
+                Some(k) => {
+                    log.line(&format!("hotkey {}: {note}", k.control().name()));
+                    push_event(&status, k.control(), true, k.control().own_code().unwrap_or(0), Some(note.clone()));
+                }
+                None => log.line(&format!("menu: {note}")),
+            }
+            if from_menu {
+                *last.lock_or_recover() = Some(note);
+            }
+        });
+    }
+
+    /// A claimed hotkey arrived (on the hotkey thread: return quickly).
+    pub fn hotkey(self: &Arc<Self>, vk: u16) {
+        let settings = self.settings();
+        let open = self.is_open();
+        if vk == hotkey::VK_F23 || vk == hotkey::VK_F24 {
+            let right = vk == hotkey::VK_F23;
+            if open {
+                self.input(if right { Input::Next } else { Input::Prev }, "knob");
+            } else if settings["scrollWhenClosed"] == true {
+                if let Some(d) = self.desktop.lock_or_recover().clone().and_then(|d| d.upgrade()) {
+                    // Turning right scrolls down, like the factory knob.
+                    let _ = d.scroll(if right { -1 } else { 1 });
+                }
+            }
+            return;
+        }
+        let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
+        if open && key == KeyId::KnobPress {
+            self.input(Input::Choose, "knob press");
+            return;
+        }
+        let action = saved_action(&settings["actions"], settings_key(key));
+        match action {
+            Action::QuickMenu => self.input(Input::Toggle, key.control().name()),
+            Action::Nothing => {}
+            action => {
+                if open {
+                    self.input(Input::Close, "another key");
+                }
+                self.run(action, Some(key), false);
+            }
+        }
+    }
+
+    pub fn status(&self) -> Value {
+        let settings = self.settings();
+        let view = self.state.lock_or_recover().view(&settings);
+        json!({
+            "view": view,
+            "entries": settings["menu"],
+            "profiles": settings["profiles"].as_array().map(|ps| ps.iter().map(|p| json!({"id": p["id"], "name": p["name"]})).collect::<Vec<_>>()),
+            "profile": settings["profile"],
+            "target": settings["target"],
+            "targets": TARGETS.iter().map(|t| json!({"id": t, "name": menu::target_name(t)})).collect::<Vec<_>>(),
+            "knobInput": settings["knobInput"],
+            "scrollWhenClosed": settings["scrollWhenClosed"],
+            "closeAfterS": menu::CLOSE_AFTER.as_secs(),
+            "windowAvailable": self.view.lock_or_recover().is_some(),
+            "last": self.last.lock_or_recover().clone(),
+        })
     }
 }
 
@@ -307,21 +693,34 @@ impl Au05 {
             Some(f) => Some(f.clone()),
             None => real_desktop,
         };
+        let status = Arc::new(Mutex::new(Status {
+            enabled: false,
+            state: "disabled",
+            message: "Vibe Key is disabled".into(),
+            known: Known::default(),
+            events: VecDeque::new(),
+            last_error: None,
+            pending_sets: 0,
+            stalls: 0,
+            sent: 0,
+            generation: 0,
+            jobs: Default::default(),
+        }));
+        let log = Arc::new(Log::default());
+        let menu = Arc::new(MenuCtl {
+            state: Mutex::new(MenuState::default()),
+            settings: Mutex::new(default_settings()),
+            view: Mutex::new(None),
+            persist: Mutex::new(None),
+            desktop: Mutex::new(desktop.as_ref().map(Arc::downgrade)),
+            log: log.clone(),
+            status: status.clone(),
+            opened: AtomicU64::new(0),
+            last: Arc::new(Mutex::new(None)),
+        });
         let au = Arc::new(Self {
             fake: fake.then(FakeHandle::default),
-            status: Arc::new(Mutex::new(Status {
-                enabled: false,
-                state: "disabled",
-                message: "Vibe Key is disabled".into(),
-                known: Known::default(),
-                events: VecDeque::new(),
-                last_error: None,
-                pending_sets: 0,
-                stalls: 0,
-                sent: 0,
-                generation: 0,
-                jobs: Default::default(),
-            })),
+            status: status.clone(),
             actions: Arc::new(Mutex::new(default_settings()["actions"].clone())),
             tx: Mutex::new(None),
             thread: Mutex::new(None),
@@ -331,30 +730,45 @@ impl Au05 {
             hotkeys: Mutex::new(BTreeMap::new()),
             config_lock: Mutex::new(()),
             config,
-            log: Arc::new(Log::default()),
+            log,
+            menu: menu.clone(),
         });
         if let Some(d) = &au.desktop {
-            let (status, actions, desk, log) = (au.status.clone(), au.actions.clone(), Arc::downgrade(d), au.log.clone());
-            d.set_handler(Arc::new(move |vk| {
-                let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
-                let action = saved_action(&actions.lock_or_recover(), settings_key(key));
-                let (status, desk, log) = (status.clone(), desk.clone(), log.clone());
-                // Never run an action on the hotkey thread.
-                let _ = std::thread::Builder::new().name("uc-au05-action".into()).spawn(move || {
-                    let result = desk.upgrade().ok_or_else(|| "Unified Control is closing".to_string()).and_then(|d| {
-                        super::sync::guarded("Vibe Key action", || d.run(&action))
-                            .unwrap_or_else(|| Err("The action crashed".into()))
-                    });
-                    let note = match result {
-                        Ok(()) => format!("ran {}", action.label()),
-                        Err(e) => format!("{}: {e}", action.label()),
-                    };
-                    log.line(&format!("hotkey {}: {note}", key.control().name()));
-                    push_event(&status, key.control(), true, key.control().own_code().unwrap_or(0), Some(note));
-                });
-            }));
+            // Actions never run on the hotkey thread (MenuCtl::run spawns one per action).
+            d.set_handler(Arc::new(move |vk| menu.hotkey(vk)));
         }
         au
+    }
+
+    /// The app shell's menu window. Never set in tests, fake or quiet instances.
+    pub fn set_menu_view(&self, view: Arc<dyn MenuView>) {
+        *self.menu.view.lock_or_recover() = Some(view);
+    }
+    /// How a profile or target chosen in the menu is saved (through the app's settings).
+    pub fn set_persist(&self, persist: Persist) {
+        *self.menu.persist.lock_or_recover() = Some(persist);
+    }
+    /// Input from the menu window or the page: `state`, `next`, `prev`, `choose`, `back`, `close`,
+    /// `toggle`, `pick` (with `index`). Returns the menu's view.
+    pub fn menu_input(&self, op: &str, index: Option<usize>) -> Result<Value, String> {
+        let input = match op {
+            "state" => None,
+            "next" => Some(Input::Next),
+            "prev" => Some(Input::Prev),
+            "choose" => Some(Input::Choose),
+            "back" => Some(Input::Back),
+            "close" => Some(Input::Close),
+            "toggle" => Some(Input::Toggle),
+            "pick" => Some(Input::Pick(index.ok_or("Choose a row")?)),
+            _ => return Err("Unknown menu input".into()),
+        };
+        if let Some(i) = input {
+            if i == Input::Toggle && !self.status.lock_or_recover().enabled {
+                return Err("Enable the Vibe Key first".into());
+            }
+            self.menu.input(i, "window");
+        }
+        Ok(self.menu.status()["view"].clone())
     }
 
     /// One line in the Vibe Key log (for the app layer: page action choices).
@@ -381,7 +795,8 @@ impl Au05 {
             return;
         };
         let actions = self.actions.lock_or_recover().clone();
-        let wanted: Vec<u16> = if enabled {
+        let settings = self.menu.settings();
+        let mut wanted: Vec<u16> = if enabled {
             ACTION_KEYS
                 .iter()
                 .filter(|(k, _)| saved_action(&actions, k) != Action::Nothing)
@@ -390,15 +805,35 @@ impl Au05 {
         } else {
             Vec::new()
         };
+        let any_menu = ACTION_KEYS.iter().any(|(k, _)| saved_action(&actions, k) == Action::QuickMenu);
+        // The knob press (F19) chooses in the menu, even when it has no action of its own.
+        if enabled && any_menu && !wanted.contains(&hotkey::VK_F19) {
+            wanted.push(hotkey::VK_F19);
+        }
+        // Knob turns as F23/F24 (only if the knob is set to type them): the menu, or UC's own scrolling.
+        if enabled && settings["knobInput"] == "hotkeys" && (any_menu || settings["scrollWhenClosed"] == true) {
+            wanted.extend([hotkey::VK_F23, hotkey::VK_F24]);
+        }
         let results = d.set_hotkeys(&wanted);
         for (key, id) in ACTION_KEYS {
             let vk = own_vk(id);
+            let what = match saved_action(&actions, key) {
+                Action::Nothing if any_menu && id == KeyId::KnobPress => "chooses in the quick menu".to_string(),
+                a => a.label(),
+            };
             let line = match results.get(&vk) {
-                Some(Ok(())) => format!("hotkey {key} claimed ({})", saved_action(&actions, key).label()),
+                Some(Ok(())) => format!("hotkey {key} claimed ({what})"),
                 Some(Err(e)) => format!("hotkey {key} not claimed: {e}"),
                 None => continue,
             };
             self.log.line(&line);
+        }
+        for (vk, name) in [(hotkey::VK_F23, "knob right F23"), (hotkey::VK_F24, "knob left F24")] {
+            match results.get(&vk) {
+                Some(Ok(())) => self.log.line(&format!("hotkey {name} claimed")),
+                Some(Err(e)) => self.log.line(&format!("hotkey {name} not claimed: {e}")),
+                None => {}
+            }
         }
         if wanted.is_empty() {
             self.log.line("hotkeys released");
@@ -411,7 +846,11 @@ impl Au05 {
         let _guard = self.config_lock.lock_or_recover();
         let settings = sanitize(settings);
         *self.actions.lock_or_recover() = settings["actions"].clone();
+        *self.menu.settings.lock_or_recover() = settings.clone();
         let enabled = settings["enabled"].as_bool().unwrap_or(false);
+        if !enabled && self.menu.is_open() {
+            self.menu.input(Input::Close, "disabled");
+        }
         let running = self.tx.lock_or_recover().is_some();
         if enabled && !running {
             self.start();
@@ -438,6 +877,7 @@ impl Au05 {
             stop: self.stop.clone(),
             config: self.config.clone(),
             log: self.log.clone(),
+            menu: self.menu.clone(),
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -480,6 +920,9 @@ impl Au05 {
     /// Stop the worker and release every hotkey (quit).
     pub fn shutdown(&self) {
         let _guard = self.config_lock.lock_or_recover();
+        if self.menu.is_open() {
+            self.menu.input(Input::Close, "quit");
+        }
         self.stop_worker();
         self.apply_hotkeys(false);
     }
@@ -552,6 +995,11 @@ impl Au05 {
         let s = self.status.lock_or_recover().clone();
         let k = &s.known;
         let hotkeys = self.hotkeys.lock_or_recover().clone();
+        let hotkey_state = |vk: u16| match hotkeys.get(&vk) {
+            None => json!({"state": "off"}),
+            Some(Ok(())) => json!({"state": "ready"}),
+            Some(Err(e)) => json!({"state": "failed", "message": e}),
+        };
         let fake = self.fake.is_some();
         let keys: Vec<Value> = KeyId::ALL
             .iter()
@@ -628,6 +1076,12 @@ impl Au05 {
             "actions": self.actions.lock_or_recover().clone(),
             "hotkeysAvailable": self.desktop.is_some(),
             "catalogue": hotkey::catalogue_json(),
+            "menu": self.menu.status(),
+            "menuHotkeys": {
+                "choose": hotkey_state(hotkey::VK_F19),
+                "knobRight": hotkey_state(hotkey::VK_F23),
+                "knobLeft": hotkey_state(hotkey::VK_F24),
+            },
             "lastError": s.last_error,
             "busy": s.pending_sets > 0,
             // Which settings were checked on the real key; the page labels the others "Untested".
@@ -653,6 +1107,17 @@ impl Au05 {
                 let name = v["control"].as_str().unwrap_or("");
                 let control = CONTROLS.iter().find(|(k, _)| *k == name).ok_or("Unknown control")?.1;
                 fake.click(control);
+                // Knob turns as F23/F24 (as if the knob were set to type them), when that input is chosen.
+                if self.menu.settings()["knobInput"] == "hotkeys" {
+                    let vk = match control {
+                        Control::KnobRight => Some(hotkey::VK_F23),
+                        Control::KnobLeft => Some(hotkey::VK_F24),
+                        _ => None,
+                    };
+                    if let (Some(vk), Some(d)) = (vk, &self.fake_desktop) {
+                        d.press(vk);
+                    }
+                }
                 // If the fake key typed its own code, deliver it to the fake hotkey layer, as Windows would.
                 if let Some(id) = KeyId::ALL.into_iter().find(|k| k.control() == control) {
                     let own = fake.lock().typing[id.index() as usize] == KeyTyping::own_code(id);
@@ -710,6 +1175,7 @@ struct Worker {
     stop: Arc<AtomicBool>,
     config: SessionConfig,
     log: Arc<Log>,
+    menu: Arc<MenuCtl>,
 }
 
 enum Purpose {
@@ -1029,8 +1495,18 @@ impl Worker {
             Output::Status(st) => {
                 self.status.lock_or_recover().known.battery = Some((st.millivolts, st.percent));
             }
-            // Private events are only shown (K1 and the knob turns send them). Actions use hotkeys.
-            Output::Control(e) => push_event(&self.status, e.control, e.pressed, e.code, None),
+            // Private events are shown (K1 and the knob turns send them). Actions use hotkeys; knob turns
+            // also move an open quick menu (unless the knob is set to type F23/F24 instead).
+            Output::Control(e) => {
+                push_event(&self.status, e.control, e.pressed, e.code, None);
+                if e.pressed && self.menu.is_open() && self.menu.settings()["knobInput"] != "hotkeys" {
+                    match e.control {
+                        Control::KnobRight => self.menu.input(Input::Next, "knob"),
+                        Control::KnobLeft => self.menu.input(Input::Prev, "knob"),
+                        _ => {}
+                    }
+                }
+            }
             Output::Done { ticket, request, result } => {
                 let purpose = tickets.remove(&ticket);
                 self.log.line(&match &result {

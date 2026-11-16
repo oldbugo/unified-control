@@ -17,6 +17,8 @@ facts".
 | Driver: encryption, messages, command allowlist, safe session, fake key, Windows transport | `oldbugo/uc-ulanzi`, crate `crates/ulanzi_au05` |
 | Worker: one background thread that owns the key | `src-tauri/src/core/au05.rs` |
 | Hotkeys, focus and synthetic keys (behind a trait, with a fake) | `src-tauri/src/core/au05_hotkey.rs` |
+| Quick menu: model, profiles, state machine | `src-tauri/src/core/au05_menu.rs` (wiring: `MenuCtl` in `au05.rs`) |
+| Quick menu window | `src-tauri/src/quick_menu.rs`, `public/quick-menu.html`, `public/js/quick-menu.js`, `public/css/quick-menu.css` |
 | Settings and commands | `src-tauri/src/core/app.rs` (`au05_*`), `commands.rs`, `settings.rs` (`au05`) |
 | Page, General switch and Home card | `public/js/au05-panel.js`, wired in `public/app.js` |
 | Page checks | `scripts/check-vibe-key.cjs` (headless fixtures), `scripts/check-native-vibe-key.cjs` (quiet debug app, fake key) |
@@ -149,18 +151,62 @@ type its own code is a background job shown under the choice: "Waiting for the k
 one key-typing command at a time, with the usual quiet time, time limits and no retry. If the key falls asleep
 before the job is written, the job waits again; any other failure ends the job with the error.
 
+## Quick menu (2026-11-17)
+
+User request: "a bit similar to what Logitech have" (the MX Master quick menu). Three keys are not enough, so
+one key opens a menu.
+
+- **Open and close.** Give any key (K1-K3 or the knob press) the action "Open quick menu". Pressing it opens
+  the menu; pressing it again, Esc, clicking another window, or about 8 seconds without input closes it.
+- **Move and choose.** Knob turns move the highlight (right = down). The knob press chooses. The knob press
+  sends no private event, so it chooses through its own code F19: the knob press must be set to a Unified
+  Control action (Nothing is fine). UC claims F19 while any key opens the menu. Arrow keys, Enter, Backspace
+  and mouse clicks work in the window too. Another key with an action closes the menu and runs its action.
+- **Knob input, two ways.** "Knob messages" (default, works now): the private knob events move the menu;
+  the factory scroll still reaches the window behind (accepted by the user: the menu takes focus).
+  "F23 / F24": for when the knob is set to type F23 (right) and F24 (left) instead of scrolling (needs a check
+  on the real key; UC does not set the knob yet). UC then claims F23/F24, and the option "Unified Control
+  scrolls when the menu is closed" turns the mouse wheel itself. Only one way is used at a time, so a turn
+  never moves twice.
+- **Place.** Not at the mouse: near the top-right corner of the primary monitor's work area. Drag it by its
+  title; the monitor (device name and rectangle) and the position are saved in `quick-menu.json` in the app
+  folder and used next time. If that monitor is gone, it goes back to the default place. Sizes are logical
+  pixels, so each monitor's scale applies. The window is topmost, out of the taskbar, and takes focus. After a
+  choice it closes first, then the action runs (and may bring Claude or ChatGPT forward).
+- **Menu model** (`au05.menu` in settings.json, data only): entries of type `action` (any catalogue action; the
+  editor does not offer custom shortcuts yet, though a saved one is kept), `profile` (switch profile), `target` (change the target app), `submenu` (up to three
+  levels, 64 entries) and `claudeSession` (reserved for "open a Claude session", a
+  `claude://claude.ai/epitaxy/<sessionId>` link; shown, does nothing yet). The page's editor adds, removes,
+  moves, renames and changes entries; "Reset to the default menu" restores the shipped one.
+- **Default menu:** Claude dictation, Claude new session, ChatGPT dictation, Switch profile (Claude / ChatGPT /
+  Media), Target app (Claude / ChatGPT), Play / pause, Screenshot.
+- **Profiles** (`au05.profiles`, `au05.profile`): a profile is a named set of actions for K1, K2, K3 and the
+  knob press. `au05.actions` are always the current profile's actions. Switching applies at once and writes
+  nothing to the key. A profile without a menu key keeps the current menu key, so the menu can always switch
+  back. On the first start after the update the "Claude" profile takes the user's current actions, so nothing
+  changes; "ChatGPT" (dictation, send) and "Media" (play/pause, next track) apply only when chosen.
+- **Target app** (`au05.target`, Claude or ChatGPT): the "Target app" actions (start dictation, send, new
+  session/chat) do the Claude or the ChatGPT action.
+- The page shows the current profile and target above the drawing; the menu shows them in its header.
+- Quiet and fake instances never create the window (`quick_menu::enabled`); the menu state is still there, so
+  tests drive it through the fake key and `au05_menu`.
+- Later, not built: an always-on small assistant that shows the current profile and target; Claude session
+  targeting (design to come).
+
 ## Log
 
 `%APPDATA%\UnifiedControl\devices\au05\device.log` (rotated at about 1 MB). It records: worker start and
 stop; receiver opened or not (error kind only); state changes (waiting, connected, asleep, paused, not found);
 every command queued and its result (for example "done set key typing K3 (1 entries): ok" or ": NoReply");
-page changes and action choices; key jobs; hotkey claimed, not claimed (with the reason) or released; and each
-action run with its result. It never records report bytes, the key, window titles or typed text.
+page changes and action choices; key jobs; hotkey claimed, not claimed (with the reason) or released; each
+action run with its result; the quick menu opened and closed (and why), each choice, profile and target
+changes, and menu edits (entry count only). It never records report bytes, the key, window titles or typed text.
 
 ## Tests
 
 - Driver: `cargo test -p ulanzi_au05` in uc-ulanzi (25 tests, fake key and pure functions).
-- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (14 tests, fake key and fake desktop).
+- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (14 tests, fake key and fake desktop), and
+  `cargo test --lib au05_menu` (the quick menu's state machine).
 - Page: `node scripts/check-vibe-key.cjs` (headless fixture; set `UC_PLAYWRIGHT_MODULE`).
 - Native: `node scripts/check-native-vibe-key.cjs` (quiet debug app with the fake key; also set `UC_TEST_EXE`).
 
@@ -184,3 +230,11 @@ action run with its result. It never records report bytes, the key, window title
    `Request::verified_on_hardware` in the driver.
 10. ChatGPT dictation: confirm the exe name, the window title and Ctrl + Shift + D.
 11. Later: "send now" for queued messages in Claude (needs the right shortcut).
+12. Quick menu: set K3 to "Open quick menu" and the knob press to a Unified Control action (Nothing). Press
+    K3 in another app: the menu appears near the top-right of the main screen and takes focus. Turn the knob:
+    the highlight moves (one step per click; note whether the window behind also scrolls). Press the knob:
+    the action runs once, and no F19 or Backspace reaches the app. Drag the menu to another monitor, close it,
+    open it again: it comes back there. Check a monitor with a different scale. Wait 8 s: it closes.
+13. Quick menu profiles: switch to ChatGPT and Media and back; confirm K3 still opens the menu.
+14. If the knob can be set to type F23/F24: choose "F23 / F24" under Knob turn, and check that turning moves
+    the menu and, with "Unified Control scrolls when the menu is closed", scrolls the window under the mouse.

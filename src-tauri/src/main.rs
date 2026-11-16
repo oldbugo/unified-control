@@ -7,6 +7,7 @@ mod instance_id;
 mod agent_transport;
 mod freeze_heartbeat;
 mod live_app;
+mod quick_menu;
 mod quit_cmd;
 mod relaunch;
 mod window;
@@ -131,6 +132,7 @@ fn main() {
             cc::au05_read_key,
             cc::au05_read_all,
             cc::au05_test_control,
+            cc::au05_menu,
             cc::dock_test_button,
             cc::dock_test_studio,
             cc::asset_import,
@@ -149,6 +151,12 @@ fn main() {
                 .0
                 .start_runtime(app.path().resource_dir()?)
                 .map_err(|error| std::io::Error::other(error.message))?;
+            // The Vibe Key quick menu window: never in quiet or fake instances (it must not appear in tests).
+            if quick_menu::enabled() {
+                if let Some(au05) = app.state::<Core>().0.au05.get() {
+                    au05.set_menu_view(Arc::new(quick_menu::TauriMenu::new(app.handle().clone())));
+                }
+            }
             let agent_core = app.state::<Core>().0.clone();
             match agent_transport::start(Arc::new(move |request| {
                 match agent_core.agent_call(

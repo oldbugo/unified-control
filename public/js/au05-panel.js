@@ -120,7 +120,8 @@ export class Au05Panel{
     root.querySelector('#au05-battery').textContent=s.battery?`${s.battery.percent} % (${(s.battery.millivolts/1000).toFixed(2)} V)`:'Not read yet';
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
-    const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected]);
+    const menuSig=s.menu?{...s.menu,view:undefined}:null;
+    const sig=JSON.stringify([s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(force||(sig!==this.lastSig&&!typing)){
@@ -155,9 +156,11 @@ export class Au05Panel{
     const cat=s.catalogue?.actions||[];
     const actionName=a=>{
       if(!a||a.kind==='none')return 'Nothing';
+      if(a.kind==='quickMenu')return 'Open quick menu';
       if(a.kind==='hotkey'){const app=(s.catalogue?.apps||[]).find(x=>x.id===a.app);return a.value?`${a.value}${app?` in ${app.name}`:''}`:'Custom (not set)';}
       const e=cat.find(x=>x.id===a.kind);return e?`${e.group==='Windows / media'?'':`${e.group} `}${e.label}`:a.kind;
     };
+    const keyOf=id=>(s.keys||[]).find(k=>k.key===id);
     const keyEditor=k=>{
       const a=s.actions?.[k.key]||{kind:'none',value:'',app:''};
       const job=k.job;
@@ -167,7 +170,7 @@ export class Au05Panel{
       const value=(effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
       const groups=[...new Set(cat.map(e=>e.group))];
       const options=`${value==='unknown'?opt('unknown','Not read yet: choose to set it','unknown'):''}
-        <optgroup label="Unified Control action">${opt('uc:none','Nothing (harmless: the key does nothing)',value)}${opt('uc:hotkey','Custom shortcut…',value)}</optgroup>
+        <optgroup label="Unified Control action">${opt('uc:none','Nothing (harmless: the key does nothing)',value)}${opt('uc:quickMenu','Open quick menu',value)}${opt('uc:hotkey','Custom shortcut…',value)}</optgroup>
         ${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(e=>e.group===g).map(e=>opt(`uc:${e.id}`,`${e.label}${e.keys&&e.keys!==e.label?` (${e.keys})`:''}${e.status==='verified'?'':' · unverified'}`,value)).join('')}</optgroup>`).join('')}
         <optgroup label="Stored on the key (works without Unified Control)">${opt('keys','Types keys…',value)}${opt('factory',`Factory default (${k.factory})`,value)}</optgroup>`;
       const entry=cat.find(e=>e.id===a.kind);
@@ -177,19 +180,23 @@ export class Au05Panel{
       const jobLine=job?`<p class="au05-job${job.state==='failed'?' attention':''}" role="status">${job.state==='done'?'Key updated.':esc(job.message)}${job.state==='failed'?` <button class="btn" type="button" data-au05-retry="${k.key}">Try again</button>`:''}</p>`:'';
       // An action without the key typing its own code yet (for example after a restart): offer to finish it.
       const finish=!job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<p class="attention">The key does not type ${esc(k.ownCode)} yet, so the action cannot run. <button class="btn" type="button" data-au05-retry="${k.key}">Set it up</button></p>`:'';
+      // The knob press chooses in the menu only when it types its own code (F19).
+      const press=keyOf('knobPress');
+      const menuHint=a.kind==='quickMenu'?`<p class="hint">Opens the quick menu. Turn the knob to move, press the knob to choose, press this key again, Esc or wait ${s.menu?.closeAfterS||8} seconds to close.</p>${press&&press.mode!=='uc'&&k.key!=='knobPress'?'<p class="attention">To choose with the knob press, set the knob press to a Unified Control action (Nothing is fine).</p>':''}`:'';
       const read=`<button class="btn" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
       return `<div class="au05-editor-head"><h2>${esc(ZONES[k.key])}</h2>${k.checked?'':' <span class="chip attention">Untested</span>'}</div>
       <p>Types now: ${esc(k.label||'Not read yet')}</p>
       <div class="field"><label for="au05-mode-${k.key}">What it does</label><select id="au05-mode-${k.key}" data-au05-mode="${k.key}"${this.native&&s.enabled===true?'':' disabled'}>${options}</select></div>
       <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${value==='keys'?'':'hidden'}>
       ${custom}${hot}${entry&&entry.status!=='verified'?`<p class="hint">Unverified shortcut: ${esc(entry.note)}. Check it in the app (Ctrl + / shows its shortcut list).</p>`:entry?`<p class="hint">${esc(entry.note)}.</p>`:''}
-      ${jobLine}${finish}<p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+      ${menuHint}${jobLine}${finish}<p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
       <p class="hint">A Unified Control action: the key types its own unused code (${esc(k.ownCode)}) and Unified Control runs the action in any app. Keys and Factory default are stored on the key.</p>
       ${read}`;
     };
-    const keyOf=id=>(s.keys||[]).find(k=>k.key===id);
+    const m=s.menu||{};
+    const anyMenu=Object.values(s.actions||{}).some(a=>a?.kind==='quickMenu');
     const assignment=id=>{
-      if(id==='knobTurn')return 'Factory scroll';
+      if(id==='knobTurn')return anyMenu?'Scroll · moves the menu':'Factory scroll';
       const k=keyOf(id),a=s.actions?.[id];
       const waiting=k?.job&&(k.job.state==='waiting'||k.job.state==='sending')?' (waiting)':'';
       if(a&&a.kind!=='none'&&(!k||k.mode==='uc'||k.mode==='unknown'||waiting))return actionName(a)+waiting;
@@ -215,8 +222,13 @@ export class Au05Panel{
       <path d="M78 434l14 14M92 434l-14 14" class="au05-icon"/>
       ${callout('knobTurn',78,131,110)}${callout('knobPress',126,118,140)}${callout('k1',240,133,257)}${callout('k2',332,133,349)}${callout('k3',424,133,441)}
     </svg>`;
+    const hk=s.menuHotkeys||{};
+    const hkText=h=>h?.state==='ready'?'claimed':h?.state==='failed'?esc(h.message||'not available'):'not claimed';
+    const knobEditor=`<div class="au05-editor-head"><h2>Knob turn</h2></div><p>Factory scroll: turning right scrolls down, turning left scrolls up, in the app under the mouse. While the quick menu is open, turning moves its highlight.</p>
+      <div class="field"><label for="au05-knob-input">How knob turns reach the quick menu</label><select id="au05-knob-input" data-au05-knob-input${this.native?'':' disabled'}>${opt('events','Knob messages (works now; the window behind may scroll too)',m.knobInput||'events')}${opt('hotkeys','F23 / F24 (only if the knob is set to type them)',m.knobInput||'events')}</select></div>
+      ${m.knobInput==='hotkeys'?`<label class="au05-check"><input type="checkbox" data-au05-scroll${m.scrollWhenClosed?' checked':''}${this.native?'':' disabled'}> Unified Control scrolls when the menu is closed</label><p class="hint">F23 (right): ${hkText(hk.knobRight)} · F24 (left): ${hkText(hk.knobLeft)}. Setting the knob to type F23 / F24 needs a check on the real key first; until then use Knob messages.</p>`:''}`;
     const editor=this.selected==='knobTurn'
-      ?`<div class="au05-editor-head"><h2>Knob turn</h2></div><p>Factory scroll: turning right scrolls down, turning left scrolls up, in the app under the mouse.</p><p class="hint">The knob turns also send their own messages to Unified Control, so they can run Unified Control actions in a later version. They flash here when you turn the knob.</p>`
+      ?knobEditor
       :keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="hint">Wake the key to read its controls.</p>';
     const standby=s.standbyS;const standbyOpts=STANDBY.some(([v])=>v===standby)||standby==null?STANDBY:[...STANDBY,[standby,minutes(standby)]];
     const sleepOpts=Object.entries(SLEEP).some(([v])=>Number(v)===s.sleepS)||s.sleepS==null?Object.entries(SLEEP):[...Object.entries(SLEEP),[String(s.sleepS),`${s.sleepS} seconds`]];
@@ -226,8 +238,37 @@ export class Au05Panel{
     const FIELDS=[['type','Type'],['time','Time'],['breatheLevel','Breathe level'],['breatheBrightness','Breathe brightness'],['alwaysOnBrightness','Always-on brightness']];
     const records=(light.records||[]).map((rec,r)=>`<tr><th scope="row">Record ${r}</th>${FIELDS.map(([f,label],i)=>`<td><select data-au05-record="${r}" data-au05-field="${f}" aria-label="Record ${r} ${label}"${dis}>${numbers(Math.max(fmax[f],rec[i]??0),rec[i])}</select></td>`).join('')}</tr>`).join('');
     const codes=(s.controlCodes||[]).map((c,i)=>c==null?'':`${['K1','K2','K3','Knob press','Knob right','Knob left'][i]} ${esc(c)} (raw ${esc(s.controlCodesRaw?.[i])})`).filter(Boolean).join(' · ');
-    return `<div class="au05-workspace"><div class="au05-drawing">${diagram}<p class="hint">Choose a key or the knob. A control lights up when you press or turn it.</p></div>
+    const native=this.native?'':' disabled';
+    const profiles=m.profiles||[],current=profiles.find(p=>p.id===m.profile);
+    const profileBar=`<div class="au05-profile-bar">
+      <div class="field"><label for="au05-profile">Profile</label><select id="au05-profile" data-au05-profile${native}>${profiles.map(p=>opt(p.id,p.name,m.profile)).join('')}</select></div>
+      <div class="field"><label for="au05-target">Target app</label><select id="au05-target" data-au05-target${native}>${(m.targets||[]).map(t=>opt(t.id,t.name,m.target)).join('')}</select></div>
+      <div class="field"><label for="au05-profile-name">Profile name</label><input id="au05-profile-name" data-au05-profile-name maxlength="60" value="${esc(current?.name||'')}"${native}></div>
+      <div class="au05-profile-tools"><button class="btn" type="button" data-au05-profile-op="add"${native}>New profile</button><button class="btn" type="button" data-au05-profile-op="remove"${native||profiles.length<2?' disabled':''}>Remove profile</button></div></div>
+      <p class="hint">A profile is a set of actions for K1, K2, K3 and the knob press; switching applies at once and writes nothing to the key. The target app decides what "Target app" actions do.</p>`;
+    const groups=[...new Set(cat.map(e=>e.group))];
+    const whatValue=e=>e.type==='action'?`a:${e.action?.kind}`:e.type==='profile'?`p:${e.profile}`:e.type==='target'?`t:${e.target}`:e.type==='submenu'?'submenu':'session';
+    const whatOptions=e=>{const v=whatValue(e);
+      return `${e.type==='action'&&e.action?.kind==='hotkey'?opt(v,`Custom shortcut ${e.action.value}`,v):''}${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(x=>x.group===g).map(x=>opt(`a:${x.id}`,`${x.group}: ${x.label}${x.status==='verified'?'':' · unverified'}`,v)).join('')}</optgroup>`).join('')}
+        <optgroup label="Switch profile">${profiles.map(p=>opt(`p:${p.id}`,`Profile: ${p.name}`,v)).join('')}</optgroup>
+        <optgroup label="Target app">${(m.targets||[]).map(t=>opt(`t:${t.id}`,`Target app: ${t.name}`,v)).join('')}</optgroup>
+        <optgroup label="Other">${opt('submenu','Sub-menu',v)}${opt('session','Open a Claude session (not built yet)',v)}</optgroup>`;};
+    const menuRows=[];
+    const walk=(list,path,depth)=>list.forEach((e,i)=>{
+      const p=[...path,i].join('.');
+      menuRows.push(`<li class="au05-menu-row" style="--depth:${depth}" data-qm-row="${p}">
+        <input id="qm-label-${p}" data-qm-label="${p}" maxlength="60" value="${esc(e.label)}" aria-label="Name of menu entry ${esc(e.label)}"${native}>
+        <select id="qm-what-${p}" data-qm-what="${p}" aria-label="What ${esc(e.label)} does"${native}>${whatOptions(e)}</select>
+        <span class="au05-menu-tools"><button class="btn" type="button" data-qm-op="up" data-qm-path="${p}" aria-label="Move ${esc(e.label)} up"${i===0?' disabled':native}>↑</button><button class="btn" type="button" data-qm-op="down" data-qm-path="${p}" aria-label="Move ${esc(e.label)} down"${i===list.length-1?' disabled':native}>↓</button><button class="btn" type="button" data-qm-op="remove" data-qm-path="${p}" aria-label="Remove ${esc(e.label)}"${native}>Remove</button>${e.type==='submenu'&&depth<1?`<button class="btn" type="button" data-qm-op="add" data-qm-path="${p}"${native}>Add inside</button>`:''}</span></li>`);
+      if(e.type==='submenu')walk(e.entries||[],[...path,i],depth+1);
+    });
+    walk(m.entries||[],[],0);
+    const menuSection=`<div class="settings-section-heading au05-device-heading"><div><h2>Quick menu</h2><p>Give a key the action "Open quick menu". Turn the knob to move, press the knob to choose; press the key again, Esc or wait ${m.closeAfterS||8} seconds to close. The menu appears near the top-right corner of the main screen; drag it by its title to move it, and it opens there next time.</p></div><div class="au05-device-actions"><button class="btn" type="button" data-qm-op="open"${this.native&&s.enabled===true?'':' disabled'}>Open the menu</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset to the default menu</button></div></div>
+      <section class="settings-list"><ul class="au05-menu-list" aria-label="Quick menu entries">${menuRows.join('')||'<li class="hint">The menu is empty.</li>'}</ul>
+      <div class="setting-row"><button class="btn" type="button" data-qm-op="add-top"${native}>Add entry</button>${m.last?`<span class="hint">Last choice: ${esc(m.last)}</span>`:''}</div></section>`;
+    return `${profileBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}<p class="hint">Choose a key or the knob. A control lights up when you press or turn it.</p></div>
     <aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside></div>
+    ${menuSection}
     <div class="settings-section-heading au05-device-heading"><div><h2>Device settings</h2><p>Settings marked Untested were not yet checked on the real key. Each change is read back from the key.</p></div><div class="au05-device-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
     <div class="au05-settings-grid"><div><h3 class="au05-sub">Power</h3>
     <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong>${this.untested('standbyTime')}<p>The key sleeps after this much idle time. Press a key to wake it.${raw(standby==null?null:`${standby} s`)}</p></div>
@@ -286,9 +327,50 @@ export class Au05Panel{
     catch(error){this.setNote(errorText(error),true);}
     finally{this.paint(true);}
   }
+  // The quick menu is saved whole after each edit (add, remove, move, rename, change what an entry does).
+  editMenu(fn){
+    const entries=structuredClone(this.state?.menu?.entries||[]);
+    fn(entries);this.configure({menu:entries});
+  }
+  static locate(entries,path){
+    const parts=String(path).split('.').map(Number);let list=entries;
+    for(const i of parts.slice(0,-1))list=list[i]?.entries||[];
+    return [list,parts[parts.length-1]];
+  }
+  entryFor(what,old){
+    const s=this.state||{},m=s.menu||{};
+    if(what.startsWith('a:')){const id=what.slice(2),x=(s.catalogue?.actions||[]).find(e=>e.id===id);
+      return {type:'action',label:x?`${x.group==='Windows / media'?'':`${x.group} `}${x.label}`:id,action:{kind:id,value:'',app:''}};}
+    if(what.startsWith('p:')){const id=what.slice(2);return {type:'profile',label:(m.profiles||[]).find(p=>p.id===id)?.name||id,profile:id};}
+    if(what.startsWith('t:')){const id=what.slice(2);return {type:'target',label:(m.targets||[]).find(t=>t.id===id)?.name||id,target:id};}
+    if(what==='submenu')return {type:'submenu',label:old?.type==='submenu'?old.label:'Sub-menu',entries:old?.entries||[]};
+    return {type:'claudeSession',label:'Claude session',session:''};
+  }
+  menuOp(op,path){
+    if(op==='open'){this.invoke('au05_menu',{input:{op:'toggle'}}).catch(error=>this.setNote(errorText(error),true));return;}
+    if(op==='reset'){this.configure({menu:'default'});return;}
+    const fresh=()=>this.entryFor('a:claudeDictation');
+    this.editMenu(entries=>{
+      if(op==='add-top'){entries.push(fresh());return;}
+      const [list,i]=Au05Panel.locate(entries,path);
+      if(op==='up'&&i>0)[list[i-1],list[i]]=[list[i],list[i-1]];
+      if(op==='down'&&i<list.length-1)[list[i+1],list[i]]=[list[i],list[i+1]];
+      if(op==='remove')list.splice(i,1);
+      if(op==='add'&&list[i]?.type==='submenu')(list[i].entries||=[]).push(fresh());
+    });
+  }
   // Delegated events from the page.
   handle(e){
     const t=e.target;
+    const qm=e.type==='click'&&t.closest?.('[data-qm-op]');
+    if(qm){this.menuOp(qm.dataset.qmOp,qm.dataset.qmPath);return true;}
+    const pop=e.type==='click'&&t.closest?.('[data-au05-profile-op]');
+    if(pop){
+      const m=this.state?.menu||{};
+      if(pop.dataset.au05ProfileOp==='add')this.configure({profileEdit:{op:'add',name:`Profile ${(m.profiles||[]).length+1}`}});
+      else if(confirm(`Remove the profile "${(m.profiles||[]).find(p=>p.id===m.profile)?.name||''}"? Its key actions are deleted.`))this.configure({profileEdit:{op:'remove',id:m.profile}});
+      return true;
+    }
     if(e.type==='click'&&t.closest?.('[data-au05="reconnect"]')){
       this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting. Press a key to wake the Vibe Key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
@@ -305,6 +387,13 @@ export class Au05Panel{
     const read=e.type==='click'&&t.closest?.('[data-au05-read]');
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
+    if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
+    if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}
+    if(t.dataset.au05Profile!==undefined){this.configure({profile:t.value});return true;}
+    if(t.dataset.au05Target!==undefined){this.configure({target:t.value});return true;}
+    if(t.dataset.au05ProfileName!==undefined){this.configure({profileEdit:{op:'rename',id:this.state?.menu?.profile,name:t.value}});return true;}
+    if(t.dataset.au05KnobInput!==undefined){this.configure({knobInput:t.value});return true;}
+    if(t.dataset.au05Scroll!==undefined){this.configure({scrollWhenClosed:t.checked});return true;}
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
     if(t.dataset.au05Record){this.change({setting:'lightRecord',record:Number(t.dataset.au05Record),field:t.dataset.au05Field,value:Number(t.value)});return true;}
     if(t.dataset.au05Mode){

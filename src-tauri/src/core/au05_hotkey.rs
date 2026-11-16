@@ -17,6 +17,9 @@ pub const VK_F19: u16 = 0x82;
 pub const VK_F20: u16 = 0x83;
 pub const VK_F21: u16 = 0x84;
 pub const VK_F22: u16 = 0x85;
+/// Knob turns, when the knob is set to type them (not set by UC yet: needs a check on the real key).
+pub const VK_F23: u16 = 0x86;
+pub const VK_F24: u16 = 0x87;
 
 /// An app UC can bring forward before it presses the keys.
 #[derive(Debug, PartialEq, Eq)]
@@ -47,6 +50,8 @@ pub enum Effect {
     Keys(&'static str),
     /// A media key through the dock's reviewed media sender ("Play / pause").
     Media(&'static str),
+    /// Follows the target app (quick menu): the Claude entry or the ChatGPT entry.
+    Target(&'static str, &'static str),
 }
 
 /// One action in the catalogue. Data only: add apps and actions here.
@@ -74,7 +79,7 @@ const fn e(
 ) -> Entry {
     Entry { id, group, label, app, effect, status, note }
 }
-use Effect::{Keys, Media};
+use Effect::{Keys, Media, Target};
 const CL: Option<&str> = Some("claude");
 const GPT: Option<&str> = Some("chatgpt");
 
@@ -104,6 +109,9 @@ pub const CATALOGUE: &[Entry] = &[
     e("chatgptSend", "ChatGPT", "Send message", GPT, Keys("Enter"), "unverified", "Standard Enter"),
     e("chatgptShortcuts", "ChatGPT", "Show all shortcuts", GPT, Keys("Ctrl + /"), "unverified", "Third-party report"),
     e("chatgptCompanion", "ChatGPT", "Companion window", None, Keys("Alt + Space"), "unverified", "Third-party report; the hotkey can be changed in ChatGPT"),
+    e("targetDictation", "Target app", "Start dictation", None, Target("claudeDictation", "chatgptDictation"), "unverified", "Follows the target app (Claude checked; ChatGPT a third-party report)"),
+    e("targetSend", "Target app", "Send message", None, Target("claudeSend", "chatgptSend"), "unverified", "Follows the target app"),
+    e("targetNew", "Target app", "New session / new chat", None, Target("claudeNewSession", "chatgptNewChat"), "unverified", "Follows the target app"),
     e("enter", "Windows / media", "Enter in the focused app", None, Keys("Enter"), "verified", "Standard key"),
     e("playPause", "Windows / media", "Play / pause", None, Media("Play / pause"), "verified", "Standard media key"),
     e("nextTrack", "Windows / media", "Next track", None, Media("Next track"), "verified", "Standard media key"),
@@ -119,17 +127,21 @@ pub const CATALOGUE: &[Entry] = &[
 pub fn entry(id: &str) -> Option<&'static Entry> {
     CATALOGUE.iter().find(|e| e.id == id)
 }
-/// Every saved kind: "none", "hotkey" (custom combination) or a catalogue id.
+/// The apps "the target app" can mean (quick menu).
+pub const TARGETS: [&str; 2] = ["claude", "chatgpt"];
+
+/// Every saved kind: "none", "hotkey" (custom combination), "quickMenu" or a catalogue id.
 pub fn kind_known(kind: &str) -> bool {
-    kind == "none" || kind == "hotkey" || entry(kind).is_some()
+    kind == "none" || kind == "hotkey" || kind == QUICK_MENU || entry(kind).is_some()
 }
+pub const QUICK_MENU: &str = "quickMenu";
 
 /// The catalogue for the page, grouped in order.
 pub fn catalogue_json() -> serde_json::Value {
     serde_json::json!({
         "actions": CATALOGUE.iter().map(|e| serde_json::json!({
             "id": e.id, "group": e.group, "label": e.label, "status": e.status, "note": e.note,
-            "keys": match e.effect { Keys(k) => k, Media(m) => m },
+            "keys": match e.effect { Keys(k) => k, Media(m) => m, Target(..) => "Follows the target app" },
         })).collect::<Vec<_>>(),
         "apps": APPS.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "verified": a.verified})).collect::<Vec<_>>(),
     })
@@ -140,6 +152,8 @@ pub fn catalogue_json() -> serde_json::Value {
 pub enum Action {
     Nothing,
     Entry(&'static Entry),
+    /// Open (or close) the quick menu.
+    QuickMenu,
     /// A custom key combination, sent to the focused app or after bringing an app forward.
     Custom { keys: String, app: Option<&'static App> },
 }
@@ -148,6 +162,7 @@ impl Action {
     pub fn from_setting(kind: &str, value: &str, app_id: &str) -> Option<Self> {
         Some(match kind {
             "none" => Action::Nothing,
+            QUICK_MENU => Action::QuickMenu,
             // A custom combination that is still being typed does nothing.
             "hotkey" if value.trim().is_empty() => Action::Nothing,
             "hotkey" => Action::Custom { keys: value.to_string(), app: app(app_id) },
@@ -157,21 +172,35 @@ impl Action {
     pub fn label(&self) -> String {
         match self {
             Action::Nothing => "nothing".into(),
+            Action::QuickMenu => "Open quick menu".into(),
             Action::Entry(e) => format!("{}: {}", e.group, e.label),
             Action::Custom { keys, app: Some(a) } => format!("{keys} in {}", a.name),
             Action::Custom { keys, app: None } => keys.clone(),
         }
     }
-    /// The app to bring forward first (exe, title), and what to send.
+    /// A "Target app" action becomes the Claude or the ChatGPT action. Others are unchanged.
+    pub fn resolve(self, target: &str) -> Self {
+        match self {
+            Action::Entry(Entry { effect: Target(claude, chatgpt), .. }) => {
+                let id = if target == "chatgpt" { chatgpt } else { claude };
+                entry(id).map(Action::Entry).unwrap_or(Action::Nothing)
+            }
+            other => other,
+        }
+    }
+    /// The app to bring forward first (exe, title), and what to send. A "Target app" action must be resolved
+    /// first; the quick menu action is not sent anywhere.
     pub fn plan(&self) -> Option<(Option<(&'static str, &'static str)>, PendingAction)> {
         let target = |a: Option<&'static App>| a.map(|a| (a.exe, a.title));
         match self {
-            Action::Nothing => None,
+            Action::Nothing | Action::QuickMenu => None,
+            Action::Entry(Entry { effect: Target(..), .. }) => None,
             Action::Entry(e) => Some((
                 target(e.app.and_then(app)),
                 match e.effect {
                     Keys(k) => PendingAction { kind: "hotkey".into(), value: k.into() },
                     Media(m) => PendingAction { kind: "media".into(), value: m.into() },
+                    Target(..) => unreachable!("matched above"),
                 },
             )),
             Action::Custom { keys, app } => {
@@ -205,6 +234,8 @@ pub trait Desktop: Send + Sync {
     fn set_hotkeys(&self, vks: &[u16]) -> BTreeMap<u16, Result<(), String>>;
     /// Run an action (may move focus and send keys). Called on its own thread.
     fn run(&self, action: &Action) -> Result<(), String>;
+    /// Turn the mouse wheel by whole notches (negative = down), for "UC scrolls when the menu is closed".
+    fn scroll(&self, notches: i32) -> Result<(), String>;
 }
 
 // ---------- fake ----------
@@ -266,6 +297,10 @@ impl Desktop for FakeDesktop {
             None => what,
         };
         self.ran.lock_or_recover().push(text);
+        Ok(())
+    }
+    fn scroll(&self, notches: i32) -> Result<(), String> {
+        self.ran.lock_or_recover().push(format!("scroll {notches}"));
         Ok(())
     }
 }
@@ -410,6 +445,21 @@ mod native {
             }
             self.actions.lock_or_recover().execute(&send)
         }
+        fn scroll(&self, notches: i32) -> Result<(), String> {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT};
+            let n = notches.clamp(-10, 10);
+            if n == 0 {
+                return Ok(());
+            }
+            let input = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: (n * 120) as u32, dwFlags: MOUSEEVENTF_WHEEL, time: 0, dwExtraInfo: 0 },
+                },
+            };
+            let sent = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) };
+            if sent == 1 { Ok(()) } else { Err("Windows did not accept the scroll".into()) }
+        }
     }
 
     struct Find {
@@ -539,9 +589,16 @@ mod tests {
         assert!(validate("hotkey", "Ctrl + Enter", "notepad").is_err());
         assert!(validate("hotkey", "Ctrl", "").is_err());
         assert!(validate("shell", "", "").is_err());
+        assert_eq!(Action::from_setting("quickMenu", "", ""), Some(Action::QuickMenu));
+        assert_eq!(Action::QuickMenu.plan(), None);
+        let target = Action::from_setting("targetDictation", "", "").unwrap();
+        assert_eq!(target.plan(), None, "a target action must be resolved first");
+        assert_eq!(target.clone().resolve("claude"), Action::Entry(entry("claudeDictation").unwrap()));
+        assert_eq!(target.resolve("chatgpt"), Action::Entry(entry("chatgptDictation").unwrap()));
         // Every catalogue entry is a valid plan for the reviewed senders.
         for e in CATALOGUE {
-            let (_, send) = Action::Entry(e).plan().unwrap();
+            let (_, send) = Action::Entry(e).resolve("chatgpt").plan().unwrap();
+            assert!(Action::Entry(e).resolve("claude").plan().is_some(), "{}", e.id);
             assert!(super::super::actions::plan_action(&send).is_ok(), "{}", e.id);
             assert!(e.app.is_none_or(|a| app(a).is_some()), "{}", e.id);
         }

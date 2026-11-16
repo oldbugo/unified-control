@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vibe Key quick menu</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/quick-menu.css">
+<script type="module" src="js/quick-menu.js"></script>
+</head>
+<body>
+<main class="qm" aria-label="Vibe Key quick menu">
+  <header class="qm-head" data-tauri-drag-region>
+    <div class="qm-title" id="qm-title" data-tauri-drag-region>Quick menu</div>
+    <div class="qm-context" id="qm-context" data-tauri-drag-region></div>
+  </header>
+  <ul class="qm-rows" id="qm-rows" role="listbox" aria-labelledby="qm-title"></ul>
+  <footer class="qm-foot" id="qm-foot" role="status">Knob: move · press: choose · Esc: close</footer>
+</main>
+</body>
+</html>
