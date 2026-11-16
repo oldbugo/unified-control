@@ -11,9 +11,9 @@
 //!   2026-11-16). A key set to "Unified Control action" types its own unused code (F20/F21/F22/F19), and UC
 //!   claims that code as a global hotkey (`au05_hotkey`). Hotkeys are claimed only while the key is enabled
 //!   and an action is chosen, and released on disable and quit.
-//! - On a real key UC sends only commands that were checked on the real key
-//!   (`Request::verified_on_hardware`). Other commands work with the fake key only, until the orchestrator
-//!   checks them.
+//! - Every known setting can be sent to a real key (user request 2026-11-16: "expose all the parameters in
+//!   the app so I can test it out all at once"). Settings not checked on the real key
+//!   (`Request::verified_on_hardware`) are labelled "Untested" on the page. Each set is read back.
 //! - With `UC_FAKE_DEVICE` set the real key is never opened, and a fake desktop claims no hotkey.
 use super::au05_hotkey::{self as hotkey, Action, Desktop, FakeDesktop};
 use super::sync::{restarting, MutexExt};
@@ -24,7 +24,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulanzi_au05::fake::FakeHandle;
-use ulanzi_au05::protocol::{self, Control, KeyId, KeyTyping, LightState, MicNr, Request, SleepTime};
+use ulanzi_au05::protocol::{self, Control, KeyId, KeyTyping, LightField, LightState, MicNr, Request, SleepTime};
 use ulanzi_au05::{Failure, Output, Session, SessionConfig, SessionState, Transport};
 
 /// The six controls in the order of their device index (test clicks and the event list).
@@ -100,7 +100,18 @@ pub enum Change {
     LightBrightness(u8),
     MicNrLevel(u8),
     KeyTyping(KeyId, KeyTyping),
+    LightRecord { record: u8, field: LightField, value: u8 },
+    HooksMode(u8),
 }
+
+/// Page names of the light record fields.
+pub const LIGHT_FIELDS: [(&str, LightField); 5] = [
+    ("type", LightField::Type),
+    ("time", LightField::Time),
+    ("breatheLevel", LightField::BreatheLevel),
+    ("breatheBrightness", LightField::BreatheBrightness),
+    ("alwaysOnBrightness", LightField::AlwaysOnBrightness),
+];
 
 /// Parse a page request `{setting, value, key?, mode?, keys?}`.
 pub fn parse_change(v: &Value) -> Result<Change, String> {
@@ -119,6 +130,16 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
         "lightMode" => Ok(Change::LightMode(byte()?)),
         "lightBrightness" => Ok(Change::LightBrightness(byte()?)),
         "micNr" => Ok(Change::MicNrLevel(byte()?)),
+        "hooksMode" => Ok(Change::HooksMode(byte()?)),
+        "lightRecord" => {
+            let record = v["record"].as_u64().and_then(|r| u8::try_from(r).ok()).ok_or("Choose a light record")?;
+            let field = LIGHT_FIELDS
+                .iter()
+                .find(|(n, _)| Some(*n) == v["field"].as_str())
+                .map(|(_, f)| *f)
+                .ok_or("Choose a light field")?;
+            Ok(Change::LightRecord { record, field, value: byte()? })
+        }
         "keyTyping" => {
             let key = ACTION_KEYS
                 .iter()
@@ -148,6 +169,8 @@ struct Known {
     hooks_mode: Option<u8>,
     mic: Option<MicNr>,
     keys: [Option<KeyTyping>; 4],
+    standby_status: Option<u8>,
+    codes: [Option<u8>; 6],
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +215,8 @@ enum Cmd {
     Change(Change, Sender<Result<(), String>>),
     /// Read one key's typing list (cmd 0x50), only on the user's request.
     ReadKey(KeyId, Sender<Result<(), String>>),
+    /// Queue every get except key typing (the page's "Read all settings").
+    ReadAll(Sender<Result<(), String>>),
     Reconnect,
     Stop,
 }
@@ -388,6 +413,15 @@ impl Au05 {
             .map_err(|_| "The Vibe Key did not answer in time".to_string())?
     }
 
+    /// Queue every get except key typing, one at a time with the usual pacing. Returns once queued.
+    pub fn read_all(&self) -> Result<(), String> {
+        let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
+        let (rtx, rrx) = mpsc::channel();
+        tx.send(Cmd::ReadAll(rtx)).map_err(|_| "The Vibe Key worker is unavailable")?;
+        rrx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "The Vibe Key worker did not answer".to_string())?
+    }
+
     /// Read one key's typing list from the key (one at a time; the reply can take up to 20 s).
     pub fn read_key(&self, key: KeyId) -> Result<(), String> {
         let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
@@ -432,8 +466,9 @@ impl Au05 {
                     "factory": id.factory_label(),
                     "ownCode": protocol::usage_name(id.control().own_code().unwrap_or(0)),
                     "hotkey": hotkey,
-                    // On a real key the knob press typing is not checked yet; the page shows it read-only.
-                    "canSet": fake || Request::GetKeyTyping(id).verified_on_hardware(),
+                    // Every key can be set; the knob press typing is not checked on the real key yet.
+                    "canSet": true,
+                    "checked": Request::GetKeyTyping(id).verified_on_hardware(),
                 })
             })
             .collect();
@@ -459,7 +494,11 @@ impl Au05 {
             "light": k.light.map(|l| json!({"mode": l.mode, "brightness": l.brightness, "records": l.records})),
             "lightRange": {"modeMax": protocol::LIGHT_MODE_MAX, "brightnessMax": protocol::LIGHT_BRIGHTNESS_MAX},
             "hooksMode": k.hooks_mode,
-            "micNr": k.mic.map(|m| json!({"level": m.level})),
+            "micNr": k.mic.map(|m| json!({"level": m.level, "a": m.a, "b": m.b})),
+            "standbyStatus": k.standby_status,
+            "controlCodes": k.codes.iter().map(|c| c.map(protocol::usage_name)).collect::<Vec<_>>(),
+            "controlCodesRaw": k.codes,
+            "lightFieldMax": LIGHT_FIELDS.iter().map(|(n, f)| (n.to_string(), json!(f.max()))).collect::<serde_json::Map<_, _>>(),
             "micNrMax": protocol::MIC_NR_LEVEL_MAX,
             "keys": keys,
             "events": events,
@@ -467,9 +506,17 @@ impl Au05 {
             "hotkeysAvailable": self.desktop.is_some(),
             "lastError": s.last_error,
             "busy": s.pending_sets > 0,
-            // Which page settings a real key accepts now. The fake accepts all.
-            "realKeyChecked": {"standbyTime": true, "keyTyping": true, "sleepTime": false,
-                               "lightMode": false, "lightBrightness": false, "micNr": false},
+            // Which settings were checked on the real key; the page labels the others "Untested".
+            "checked": {
+                "standbyTime": Request::SetStandbyTime(600).verified_on_hardware(),
+                "keyTyping": Request::SetKeyTyping(KeyId::K1, KeyTyping::factory()).verified_on_hardware(),
+                "sleepTime": Request::SetSleepTime(SleepTime::new(0).unwrap()).verified_on_hardware(),
+                "lightMode": Request::SetLightMode(0).verified_on_hardware(),
+                "lightBrightness": Request::SetLightBrightness(0).verified_on_hardware(),
+                "lightRecord": Request::SetLightRecord { record: 0, field: LightField::Type, value: 0 }.verified_on_hardware(),
+                "hooksMode": Request::SetHooksMode(0).verified_on_hardware(),
+                "micNr": Request::SetMicNr(MicNr { level: 0, a: 0, b: 0 }).verified_on_hardware(),
+            },
             "diagnostics": {"sent": s.sent, "stalls": s.stalls, "generation": s.generation},
         })
     }
@@ -599,7 +646,7 @@ impl Worker {
             while Instant::now() < until && !self.stop.load(Ordering::SeqCst) {
                 match rx.lock_or_recover().recv_timeout(Duration::from_millis(100)) {
                     Ok(Cmd::Stop) => return,
-                    Ok(Cmd::Change(_, r)) | Ok(Cmd::ReadKey(_, r)) => {
+                    Ok(Cmd::Change(_, r)) | Ok(Cmd::ReadKey(_, r)) | Ok(Cmd::ReadAll(r)) => {
                         let _ = r.send(Err("The Vibe Key is not connected".into()));
                     }
                     Ok(Cmd::Reconnect) => break,
@@ -635,6 +682,22 @@ impl Worker {
                         self.status.lock_or_recover().last_error = None;
                     }
                     Ok(Cmd::Change(c, reply)) => self.submit_change(&mut session, &mut tickets, c, reply),
+                    Ok(Cmd::ReadAll(reply)) => {
+                        let mut result = Ok(());
+                        for r in read_all_settings() {
+                            let t = TICKETS.fetch_add(1, Ordering::Relaxed);
+                            match session.submit(t, r) {
+                                Ok(()) => {
+                                    tickets.insert(t, Purpose::Read);
+                                }
+                                Err(f) => {
+                                    result = Err(f.message());
+                                    break;
+                                }
+                            }
+                        }
+                        let _ = reply.send(result);
+                    }
                     Ok(Cmd::ReadKey(k, reply)) => {
                         if session.has_pending(Request::slow_reply) {
                             let _ = reply.send(Err("Another key is being read. Try again in a moment".into()));
@@ -742,13 +805,9 @@ impl Worker {
                 }
             },
             Change::KeyTyping(k, t) => Request::SetKeyTyping(k, t),
+            Change::LightRecord { record, field, value } => Request::SetLightRecord { record, field, value },
+            Change::HooksMode(m) => Request::SetHooksMode(m),
         };
-        if self.fake.is_none() && !request.verified_on_hardware() {
-            let _ = reply.send(Err(
-                "This setting is not yet checked on the real Vibe Key, so Unified Control does not send it".into(),
-            ));
-            return;
-        }
         if session.state() == SessionState::Paused {
             let _ = reply.send(Err(Failure::Paused.message()));
             return;
@@ -761,7 +820,10 @@ impl Worker {
         let read_back = match &request {
             Request::SetStandbyTime(_) => Some(Request::GetStandbyTime),
             Request::SetSleepTime(_) => Some(Request::GetSleepTime),
-            Request::SetLightMode(_) | Request::SetLightBrightness(_) => Some(Request::GetLight),
+            Request::SetLightMode(_) | Request::SetLightBrightness(_) | Request::SetLightRecord { .. } => {
+                Some(Request::GetLight)
+            }
+            Request::SetHooksMode(_) => Some(Request::GetHooksMode),
             Request::SetMicNr(_) => Some(Request::GetMicNr),
             _ => None,
         };
@@ -815,6 +877,8 @@ impl Worker {
             Request::GetSleepTime | Request::SetSleepTime(_) => k.sleep_s = Some(protocol::seconds(r)),
             Request::GetLight => k.light = Some(protocol::light(r)),
             Request::GetHooksMode => k.hooks_mode = Some(protocol::hooks_mode(r)),
+            Request::GetStandbyStatus => k.standby_status = Some(protocol::standby_status(r)),
+            Request::GetControlCode(i) => k.codes[*i as usize] = Some(protocol::control_code(r)),
             Request::GetMicNr => k.mic = Some(protocol::mic_nr(r)),
             // The set reply echoes the list as stored: 81 06 50 10 <btn> 01 <n> <entries>.
             Request::GetKeyTyping(id) | Request::SetKeyTyping(id, _) => {
@@ -836,6 +900,14 @@ fn read_all() -> Vec<Request> {
         Request::GetHooksMode,
         Request::GetMicNr,
     ]
+}
+
+/// The page's "Read all settings": every get except key typing (read per key on request).
+fn read_all_settings() -> Vec<Request> {
+    let mut v = vec![Request::GetBattery, Request::GetStandbyStatus];
+    v.extend(read_all().into_iter().filter(|r| *r != Request::GetBattery));
+    v.extend((0..6).map(Request::GetControlCode));
+    v
 }
 
 /// Later (stub only, not active): the light follows Claude Code's state through Claude Code hooks.
