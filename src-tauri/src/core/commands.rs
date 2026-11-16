@@ -225,6 +225,18 @@ pub async fn au05_configure(core: State<'_, Core>, patch: Value) -> Result<Value
     run(&core, move |app| app.au05_configure(&patch)).await
 }
 #[tauri::command]
+pub async fn claude_sessions_state(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| Ok(app.claude_state())).await
+}
+#[tauri::command]
+pub async fn claude_sessions_connect(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.claude_connect()).await
+}
+#[tauri::command]
+pub async fn claude_sessions_disconnect(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.claude_disconnect()).await
+}
+#[tauri::command]
 pub async fn au05_menu(core: State<'_, Core>, input: Value) -> Result<Value, CoreError> {
     run(&core, move |app| app.au05_menu(&input)).await
 }

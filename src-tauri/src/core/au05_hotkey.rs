@@ -234,8 +234,10 @@ pub trait Desktop: Send + Sync {
     fn set_hotkeys(&self, vks: &[u16]) -> BTreeMap<u16, Result<(), String>>;
     /// Run an action (may move focus and send keys). Called on its own thread.
     fn run(&self, action: &Action) -> Result<(), String>;
-    /// Turn the mouse wheel by whole notches (negative = down), for "UC scrolls when the menu is closed".
+    /// Turn the mouse wheel by whole notches (negative = down): the knob turn's "Scroll" action.
     fn scroll(&self, notches: i32) -> Result<(), String>;
+    /// Open a Claude session link (`claude://claude.ai/epitaxy/local_<uuid>`, checked by the caller).
+    fn open_link(&self, url: &str) -> Result<(), String>;
 }
 
 // ---------- fake ----------
@@ -301,6 +303,10 @@ impl Desktop for FakeDesktop {
     }
     fn scroll(&self, notches: i32) -> Result<(), String> {
         self.ran.lock_or_recover().push(format!("scroll {notches}"));
+        Ok(())
+    }
+    fn open_link(&self, url: &str) -> Result<(), String> {
+        self.ran.lock_or_recover().push(format!("open {url}"));
         Ok(())
     }
 }
@@ -459,6 +465,20 @@ mod native {
             };
             let sent = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) };
             if sent == 1 { Ok(()) } else { Err("Windows did not accept the scroll".into()) }
+        }
+        fn open_link(&self, url: &str) -> Result<(), String> {
+            use windows_sys::Win32::UI::Shell::ShellExecuteW;
+            use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+            if !url.starts_with("claude://claude.ai/epitaxy/local_") || !url.is_ascii() {
+                return Err("Not a Claude session link".into());
+            }
+            let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+            let (verb, file) = (wide("open"), wide(url));
+            let r = unsafe {
+                ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+            };
+            // ShellExecute returns a value above 32 on success.
+            if r as isize > 32 { Ok(()) } else { Err("Windows could not open the Claude session link".into()) }
         }
     }
 

@@ -135,6 +135,8 @@ pub fn sanitize(v: &Value) -> Value {
         "menu": menu::sanitize_menu(&entries, &ids),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
+        // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
+        "claudeSessions": v["claudeSessions"].as_bool().unwrap_or(false),
         "knobTurn": if v["knobTurn"] == "uc" { "uc" } else { "factory" },
         "knobTurnAction": v["knobTurnAction"].as_str().filter(|a| TURN_ACTIONS.contains(a)).unwrap_or("scroll"),
     })
@@ -470,6 +472,8 @@ impl Log {
 
 /// Saves a settings patch through the app (profile or target chosen in the menu).
 pub type Persist = Arc<dyn Fn(Value) -> Result<(), String> + Send + Sync>;
+/// The current Claude sessions (most recent first) and whether Claude sessions are connected.
+pub type SessionsFn = Arc<dyn Fn() -> (Vec<Value>, bool) + Send + Sync>;
 
 /// The quick menu and every hotkey press: routes key presses, knob turns and window input to the menu's
 /// state machine, shows it through the view, and runs what was chosen.
@@ -485,6 +489,7 @@ pub struct MenuCtl {
     opened: AtomicU64,
     /// The result of the last menu choice (shown on the page).
     last: Arc<Mutex<Option<String>>>,
+    sessions: Mutex<Option<SessionsFn>>,
 }
 
 impl MenuCtl {
@@ -506,13 +511,20 @@ impl MenuCtl {
     }
 
     /// One input for the menu (`source` is for the log).
+    /// The menu as shown: "Claude sessions" entries expanded to the current session list.
+    fn shown_menu(&self, settings: &Value) -> Value {
+        let (list, connected) = self.sessions.lock_or_recover().clone().map(|f| f()).unwrap_or_default();
+        menu::expand(&settings["menu"], &list, connected, now_ms())
+    }
+
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
         let settings = self.settings();
+        let shown = self.shown_menu(&settings);
         let (outcome, was_open, view) = {
             let mut st = self.state.lock_or_recover();
             let was = st.open;
-            let o = st.step(&settings["menu"], input, Instant::now());
-            (o, was, st.view(&settings))
+            let o = st.step(&shown, input, Instant::now());
+            (o, was, st.view(&settings, &shown))
         };
         let open = view["open"] == true;
         if let Some(v) = self.view.lock_or_recover().clone() {
@@ -540,6 +552,11 @@ impl MenuCtl {
             Outcome::Target(t, label) => {
                 self.log.line(&format!("menu chose target {label}"));
                 self.save(json!({"target": t}), format!("Target app: {label}"));
+            }
+            Outcome::Session(id, then) => {
+                // The label is the user's prompt text: never logged.
+                self.log.line("menu chose a Claude session");
+                self.open_session(id, then);
             }
             Outcome::Unavailable(m) => self.log.line(&format!("menu: {m}")),
             Outcome::Nothing | Outcome::Moved => {}
@@ -618,6 +635,29 @@ impl MenuCtl {
         });
     }
 
+    /// Open a Claude session, then (after it has had time to come forward) run the follow-up action.
+    fn open_session(self: &Arc<Self>, id: String, then: String) {
+        let Some(url) = super::claude_sessions::session_link(&id) else { return };
+        let me = self.clone();
+        let _ = std::thread::Builder::new().name("uc-au05-session".into()).spawn(move || {
+            std::thread::sleep(Duration::from_millis(150)); // the menu window goes first
+            let desk = me.desktop.lock_or_recover().clone().and_then(|d| d.upgrade());
+            let result = desk.ok_or_else(|| "Unified Control is closing".to_string()).and_then(|d| d.open_link(&url));
+            let note = match &result {
+                Ok(()) => "Opened a Claude session".to_string(),
+                Err(e) => format!("Claude session: {e}"),
+            };
+            me.log.line(&format!("menu: {note}"));
+            *me.last.lock_or_recover() = Some(note);
+            if result.is_ok() && then != "none" {
+                if let Some(e) = hotkey::entry(&then) {
+                    std::thread::sleep(Duration::from_millis(1200));
+                    me.run(Action::Entry(e), None, false);
+                }
+            }
+        });
+    }
+
     /// A claimed hotkey arrived (on the hotkey thread: return quickly).
     pub fn hotkey(self: &Arc<Self>, vk: u16) {
         let settings = self.settings();
@@ -667,7 +707,8 @@ impl MenuCtl {
 
     pub fn status(&self) -> Value {
         let settings = self.settings();
-        let view = self.state.lock_or_recover().view(&settings);
+        let shown = self.shown_menu(&settings);
+        let view = self.state.lock_or_recover().view(&settings, &shown);
         json!({
             "view": view,
             "entries": settings["menu"],
@@ -761,6 +802,7 @@ impl Au05 {
             status: status.clone(),
             opened: AtomicU64::new(0),
             last: Arc::new(Mutex::new(None)),
+            sessions: Mutex::new(None),
         });
         let au = Arc::new(Self {
             fake: fake.then(FakeHandle::default),
@@ -787,6 +829,10 @@ impl Au05 {
     /// The app shell's menu window. Never set in tests, fake or quiet instances.
     pub fn set_menu_view(&self, view: Arc<dyn MenuView>) {
         *self.menu.view.lock_or_recover() = Some(view);
+    }
+    /// Where the quick menu gets the Claude session list.
+    pub fn set_sessions(&self, f: SessionsFn) {
+        *self.menu.sessions.lock_or_recover() = Some(f);
     }
     /// How a profile or target chosen in the menu is saved (through the app's settings).
     pub fn set_persist(&self, persist: Persist) {

@@ -162,7 +162,11 @@ pub fn run_helper(args: &[String]) -> i32 {
     }
     if let Some(s) = &setup {
         let installed = PathBuf::from(exe);
-        let files = [installed.clone(), installed.with_file_name("UC-AgentRequest-v1.exe")];
+        let files = [
+            installed.clone(),
+            installed.with_file_name("UC-AgentRequest-v1.exe"),
+            installed.with_file_name("UC-ClaudeHook-v1.exe"),
+        ];
         if !valid_installer(s) {
             log("the installer is not valid any more: not run");
         } else if !wait_files_free(&files, Duration::from_secs(30)) {

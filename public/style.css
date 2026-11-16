@@ -301,3 +301,8 @@ input[type="checkbox"][role="switch"]:disabled { opacity:.5;cursor:default; }
 .au05-menu-row select { min-width:220px; max-width:320px; }
 .au05-menu-tools { display:flex; gap:var(--s1); margin-left:auto; }
 .au05-check { display:flex; align-items:center; gap:var(--s2); margin:var(--s2) 0; }
+.au05-sessions { list-style:none; margin:0; padding:var(--s3) var(--s4); }
+.au05-sessions ul { list-style:none; margin:var(--s1) 0 var(--s3); padding-left:var(--s4); }
+.au05-claude-preview { margin-top:var(--s3); }
+.au05-claude-preview pre { max-height:280px; overflow:auto; padding:var(--s3); background:var(--surface-2); border-radius:var(--r-sm); font-size:var(--fs-tiny); }
+.au05-device-actions .chip { align-self:center; }

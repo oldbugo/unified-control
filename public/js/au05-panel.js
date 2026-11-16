@@ -84,7 +84,17 @@ export class Au05Panel{
         if(z&&(e.key==='Enter'||e.key===' ')){e.preventDefault();this.select(z.dataset.au05Zone);}
       });
     }
-    this.paint(true);this.refresh();
+    this.paint(true);this.refresh();this.claudeRefresh();
+  }
+  async claudeRefresh(){
+    if(!this.native)return;
+    try{this.claudeFull=await this.invoke('claude_sessions_state');this.paint(true);}catch{}
+  }
+  async claudeOp(op){
+    try{const r=await this.invoke(op==='connect'?'claude_sessions_connect':'claude_sessions_disconnect');this.claudeFull=r.claude;
+      if(r.warning)this.setNote(r.warning,true);else this.setNote(op==='connect'?(r.backup?`Connected. Your Claude settings were backed up to ${r.backup} first.`:'Connected.'):'Disconnected. Unified Control removed only its own hook entries.');}
+    catch(error){this.setNote(errorText(error),true);}
+    await this.refresh();this.paint(true);
   }
   select(zone){
     if(!Object.hasOwn(ZONES,zone))return;
@@ -121,7 +131,7 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
+    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(force||(sig!==this.lastSig&&!typing)){
@@ -255,18 +265,19 @@ export class Au05Panel{
       <div class="au05-profile-tools"><button class="btn" type="button" data-au05-profile-op="add"${native}>New profile</button><button class="btn" type="button" data-au05-profile-op="remove"${native||profiles.length<2?' disabled':''}>Remove profile</button></div></div>
       <p class="hint">A profile is a set of actions for K1, K2, K3 and the knob press; switching applies at once and writes nothing to the key. The target app decides what "Target app" actions do.</p>`;
     const groups=[...new Set(cat.map(e=>e.group))];
-    const whatValue=e=>e.type==='action'?`a:${e.action?.kind}`:e.type==='profile'?`p:${e.profile}`:e.type==='target'?`t:${e.target}`:e.type==='submenu'?'submenu':'session';
+    const whatValue=e=>e.type==='action'?`a:${e.action?.kind}`:e.type==='profile'?`p:${e.profile}`:e.type==='target'?`t:${e.target}`:e.type==='submenu'?'submenu':e.type==='claudeSessions'?'sessions':'session';
     const whatOptions=e=>{const v=whatValue(e);
       return `${e.type==='action'&&e.action?.kind==='hotkey'?opt(v,`Custom shortcut ${e.action.value}`,v):''}${groups.map(g=>`<optgroup label="${esc(g)}">${cat.filter(x=>x.group===g).map(x=>opt(`a:${x.id}`,`${x.group}: ${x.label}${x.status==='verified'?'':' · unverified'}`,v)).join('')}</optgroup>`).join('')}
         <optgroup label="Switch profile">${profiles.map(p=>opt(`p:${p.id}`,`Profile: ${p.name}`,v)).join('')}</optgroup>
         <optgroup label="Target app">${(m.targets||[]).map(t=>opt(`t:${t.id}`,`Target app: ${t.name}`,v)).join('')}</optgroup>
-        <optgroup label="Other">${opt('submenu','Sub-menu',v)}${opt('session','Open a Claude session (not built yet)',v)}</optgroup>`;};
+        <optgroup label="Other">${opt('submenu','Sub-menu',v)}${opt('sessions','Claude sessions (the live list)',v)}${v==='session'?opt('session','One Claude session',v):''}</optgroup>`;};
+    const thenSelect=(e,p)=>e.type==='claudeSessions'?`<select id="qm-then-${p}" data-qm-then="${p}" aria-label="After opening the session"${native}>${opt('none','Then: nothing',e.then||'none')}${cat.filter(x=>x.group==='Claude'&&x.id!=='claudeStop').map(x=>opt(x.id,`Then: ${x.label}`,e.then||'none')).join('')}</select>`:'';
     const menuRows=[];
     const walk=(list,path,depth)=>list.forEach((e,i)=>{
       const p=[...path,i].join('.');
       menuRows.push(`<li class="au05-menu-row" style="--depth:${depth}" data-qm-row="${p}">
         <input id="qm-label-${p}" data-qm-label="${p}" maxlength="60" value="${esc(e.label)}" aria-label="Name of menu entry ${esc(e.label)}"${native}>
-        <select id="qm-what-${p}" data-qm-what="${p}" aria-label="What ${esc(e.label)} does"${native}>${whatOptions(e)}</select>
+        <select id="qm-what-${p}" data-qm-what="${p}" aria-label="What ${esc(e.label)} does"${native}>${whatOptions(e)}</select>${thenSelect(e,p)}
         <span class="au05-menu-tools"><button class="btn" type="button" data-qm-op="up" data-qm-path="${p}" aria-label="Move ${esc(e.label)} up"${i===0?' disabled':native}>↑</button><button class="btn" type="button" data-qm-op="down" data-qm-path="${p}" aria-label="Move ${esc(e.label)} down"${i===list.length-1?' disabled':native}>↓</button><button class="btn" type="button" data-qm-op="remove" data-qm-path="${p}" aria-label="Remove ${esc(e.label)}"${native}>Remove</button>${e.type==='submenu'&&depth<1?`<button class="btn" type="button" data-qm-op="add" data-qm-path="${p}"${native}>Add inside</button>`:''}</span></li>`);
       if(e.type==='submenu')walk(e.entries||[],[...path,i],depth+1);
     });
@@ -274,9 +285,20 @@ export class Au05Panel{
     const menuSection=`<div class="settings-section-heading au05-device-heading"><div><h2>Quick menu</h2><p>Give a key the action "Open quick menu". Turn the knob to move, press the knob to choose; press the key again, Esc or wait ${m.closeAfterS||8} seconds to close. The menu appears near the top-right corner of the main screen; drag it by its title to move it, and it opens there next time.</p></div><div class="au05-device-actions"><button class="btn" type="button" data-qm-op="open"${this.native&&s.enabled===true?'':' disabled'}>Open the menu</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset to the default menu</button></div></div>
       <section class="settings-list"><ul class="au05-menu-list" aria-label="Quick menu entries">${menuRows.join('')||'<li class="hint">The menu is empty.</li>'}</ul>
       <div class="setting-row"><button class="btn" type="button" data-qm-op="add-top"${native}>Add entry</button>${m.last?`<span class="hint">Last choice: ${esc(m.last)}</span>`:''}</div></section>`;
+    const cs=s.claude||{},full=this.claudeFull||{};
+    const when=ms=>ms?new Date(ms).toLocaleTimeString('en-AU',{hour12:false}):'';
+    const csStatus=full.blocked?`<span class="chip attention">Blocked</span>`:cs.connected?(full.hooks==='connected'?`<span class="chip accent">Connected</span>`:`<span class="chip attention">${full.hooks==='outdated'?'Needs reconnecting':'Hooks missing'}</span>`):'<span class="chip">Not connected</span>';
+    const groupsBy=[...new Set((cs.sessions||[]).map(x=>x.project||'Other'))];
+    const sessionList=(cs.sessions||[]).length?groupsBy.map(g=>`<li><strong>${esc(g)}</strong><ul>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<li>${esc(x.label||'Untitled session')} <span class="hint">${esc(x.state==='working'?'working':'idle')} · ${esc(when(x.last))}</span></li>`).join('')}</ul></li>`).join(''):`<li class="hint">${cs.connected?'No sessions yet. Start or use a Claude session; it appears here.':'Connect to see your Claude sessions here and in the quick menu.'}</li>`;
+    const claudeSection=`<div class="settings-section-heading au05-device-heading"><div><h2>Claude sessions</h2><p>Open a Claude session from the quick menu ("Claude sessions"). Unified Control adds its own hooks to your Claude settings; each hook tells Unified Control only the session, its folder, the time and the first words of the first prompt (as its name). Nothing else is read, and Claude is never slowed down.</p></div>
+      <div class="au05-device-actions">${csStatus}${cs.connected?`<button class="btn" type="button" data-claude-op="disconnect"${native}>Disconnect</button>`:`<button class="btn" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect Claude sessions</button>`}</div></div>
+      ${full.blocked?`<p class="attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="attention">${esc(full.error)}</p>`:''}
+      ${cs.connected&&full.hooks&&full.hooks!=='connected'&&!full.blocked?`<p class="attention">The hooks in your Claude settings are missing or point to another copy of Unified Control. <button class="btn" type="button" data-claude-op="connect"${native}>Connect again</button></p>`:''}
+      <section class="settings-list"><ul class="au05-sessions">${sessionList}</ul>${cs.connected?`<div class="setting-row"><span class="hint">${cs.lastEvent?`Last event received at ${esc(when(cs.lastEvent))}.`:'No event received yet: send a prompt in a Claude session to check the connection.'}</span></div>`:''}</section>
+      ${cs.connected?'':`<details class="au05-claude-preview"><summary>What Connect adds to ${esc(full.settingsPath||'your Claude settings')}</summary><p class="hint">Merged into the file: nothing else changes, though Claude's file is rewritten with standard formatting. A backup copy is saved next to it first (Unified Control keeps its last three). Disconnect removes exactly these entries; disconnect before uninstalling (the uninstaller also does it).</p><pre>${esc(full.preview||'')}</pre></details>`}`;
     return `${profileBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}<p class="hint">Choose a key or the knob. A control lights up when you press or turn it.</p></div>
     <aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside></div>
-    ${menuSection}
+    ${menuSection}${claudeSection}
     <div class="settings-section-heading au05-device-heading"><div><h2>Device settings</h2><p>Settings marked Untested were not yet checked on the real key. Each change is read back from the key.</p></div><div class="au05-device-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
     <div class="au05-settings-grid"><div><h3 class="au05-sub">Power</h3>
     <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong>${this.untested('standbyTime')}<p>The key sleeps after this much idle time. Press a key to wake it.${raw(standby==null?null:`${standby} s`)}</p></div>
@@ -363,7 +385,8 @@ export class Au05Panel{
     if(what.startsWith('p:')){const id=what.slice(2);return {type:'profile',label:(m.profiles||[]).find(p=>p.id===id)?.name||id,profile:id};}
     if(what.startsWith('t:')){const id=what.slice(2);return {type:'target',label:(m.targets||[]).find(t=>t.id===id)?.name||id,target:id};}
     if(what==='submenu')return {type:'submenu',label:old?.type==='submenu'?old.label:'Sub-menu',entries:old?.entries||[]};
-    return {type:'claudeSession',label:'Claude session',session:''};
+    if(what==='sessions')return {type:'claudeSessions',label:'Claude sessions',then:'none'};
+    return old?.type==='claudeSession'?old:{type:'claudeSessions',label:'Claude sessions',then:'none'};
   }
   menuOp(op,path){
     if(op==='open'){this.invoke('au05_menu',{input:{op:'toggle'}}).catch(error=>this.setNote(errorText(error),true));return;}
@@ -381,6 +404,8 @@ export class Au05Panel{
   // Delegated events from the page.
   handle(e){
     const t=e.target;
+    const cop=e.type==='click'&&t.closest?.('[data-claude-op]');
+    if(cop){this.claudeOp(cop.dataset.claudeOp);return true;}
     const qm=e.type==='click'&&t.closest?.('[data-qm-op]');
     if(qm){this.menuOp(qm.dataset.qmOp,qm.dataset.qmPath);return true;}
     const pop=e.type==='click'&&t.closest?.('[data-au05-profile-op]');
@@ -407,6 +432,7 @@ export class Au05Panel{
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
+    if(t.dataset.qmThen!==undefined){const path=t.dataset.qmThen;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].then=t.value;});return true;}
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}
     if(t.dataset.au05Profile!==undefined){this.configure({profile:t.value});return true;}
     if(t.dataset.au05Target!==undefined){this.configure({target:t.value});return true;}
