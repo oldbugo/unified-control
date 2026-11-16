@@ -290,3 +290,5 @@ input[type="checkbox"][role="switch"]:disabled { opacity:.5;cursor:default; }
 .au05-sub { font-size:var(--fs-small); color:var(--text-muted); margin:var(--s3) 0 var(--s2); font-weight:600; }
 .au05-settings-grid .setting-row { padding:var(--s3) var(--s4); }
 @media (max-width: 900px) { .au05-workspace, .au05-settings-grid { grid-template-columns:minmax(0,1fr); } .au05-editor { position:static; } }
+.au05-job { margin:var(--s2) 0; font-size:var(--fs-small); }
+.au05-editor optgroup { font-weight:600; }

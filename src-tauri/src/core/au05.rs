@@ -62,7 +62,7 @@ fn settings_key(key: KeyId) -> &'static str {
 pub fn default_settings() -> Value {
     let actions: serde_json::Map<String, Value> = ACTION_KEYS
         .iter()
-        .map(|(k, _)| (k.to_string(), json!({"kind":"none","value":""})))
+        .map(|(k, _)| (k.to_string(), json!({"kind":"none","value":"","app":""})))
         .collect();
     json!({"enabled": false, "actions": actions})
 }
@@ -73,22 +73,28 @@ pub fn sanitize(v: &Value) -> Value {
     out["enabled"] = json!(v["enabled"].as_bool().unwrap_or(false));
     for (key, _) in ACTION_KEYS {
         let a = &v["actions"][key];
-        let kind = a["kind"].as_str().filter(|k| hotkey::ACTION_KINDS.contains(k)).unwrap_or("none");
+        let kind = a["kind"].as_str().filter(|k| hotkey::kind_known(k)).unwrap_or("none");
         let value = a["value"].as_str().filter(|s| s.len() <= 4096 && !s.contains('\0')).unwrap_or("");
-        out["actions"][key] = json!({"kind": kind, "value": if kind == "hotkey" { value } else { "" }});
+        let app = a["app"].as_str().filter(|id| hotkey::app(id).is_some()).unwrap_or("");
+        let custom = kind == "hotkey";
+        out["actions"][key] = json!({"kind": kind, "value": if custom { value } else { "" }, "app": if custom { app } else { "" }});
     }
     out
 }
 
 /// Check one UC action before it is saved.
-pub fn validate_action(kind: &str, value: &str) -> Result<(), String> {
-    hotkey::validate(kind, value)
+pub fn validate_action(kind: &str, value: &str, app: &str) -> Result<(), String> {
+    hotkey::validate(kind, value, app)
 }
 
 fn saved_action(actions: &Value, key: &str) -> Action {
     let a = &actions[key];
-    Action::from_setting(a["kind"].as_str().unwrap_or("none"), a["value"].as_str().unwrap_or(""))
-        .unwrap_or(Action::Nothing)
+    Action::from_setting(
+        a["kind"].as_str().unwrap_or("none"),
+        a["value"].as_str().unwrap_or(""),
+        a["app"].as_str().unwrap_or(""),
+    )
+    .unwrap_or(Action::Nothing)
 }
 
 /// A settings change the page can make. Each maps to exactly one allowlisted request.
@@ -195,6 +201,7 @@ struct Status {
     stalls: u64,
     sent: u64,
     generation: u64,
+    jobs: [Option<KeyJob>; 4],
 }
 
 fn push_event(status: &Mutex<Status>, control: Control, pressed: bool, code: u8, action: Option<String>) {
@@ -234,6 +241,52 @@ pub struct Au05 {
     /// Serialises start, stop and hotkey claims, so two commands can never start two sessions.
     config_lock: Mutex<()>,
     config: SessionConfig,
+    log: Arc<Log>,
+}
+
+/// `devices/au05/device.log` (rotated at about 1 MB, like the other device logs). Command names and results
+/// only: no report bytes, no key, no window titles or typed text.
+#[derive(Default)]
+pub struct Log(Mutex<Option<std::path::PathBuf>>);
+impl Log {
+    pub fn line(&self, msg: &str) {
+        if let Some(dir) = self.0.lock_or_recover().as_ref() {
+            crate::device::log::log_in(dir, &format!("au05 {msg}"));
+        }
+    }
+}
+
+/// A short, safe name for a request (no raw bytes).
+pub fn describe(r: &Request) -> String {
+    match r {
+        Request::GetBattery => "get battery".into(),
+        Request::GetStandbyStatus => "get standby status".into(),
+        Request::GetStandbyTime => "get standby time".into(),
+        Request::SetStandbyTime(s) => format!("set standby time {s} s"),
+        Request::GetSleepTime => "get power-off time".into(),
+        Request::SetSleepTime(t) => format!("set power-off time {} s", t.seconds()),
+        Request::GetControlCode(i) => format!("get control code {i}"),
+        Request::GetKeyTyping(k) => format!("get key typing {}", k.control().name()),
+        Request::SetKeyTyping(k, t) => format!("set key typing {} ({} entries)", k.control().name(), t.0.len()),
+        Request::GetLight => "get light".into(),
+        Request::SetLightMode(m) => format!("set light mode {m}"),
+        Request::SetLightBrightness(b) => format!("set light brightness {b}"),
+        Request::SetLightRecord { record, field, value } => format!("set light record {record} {field:?} {value}"),
+        Request::GetHooksMode => "get hooks mode".into(),
+        Request::SetHooksMode(m) => format!("set hooks mode {m}"),
+        Request::GetMicNr => "get mic noise reduction".into(),
+        Request::SetMicNr(m) => format!("set mic noise reduction level {}", m.level),
+    }
+}
+
+/// A background job that sets what one key types. Choosing an action never waits for the key: the job
+/// waits until the key is awake, then sends one set (one key-typing command at a time).
+#[derive(Clone, Debug)]
+struct KeyJob {
+    typing: KeyTyping,
+    /// "waiting", "sending", "done" or "failed".
+    state: &'static str,
+    message: String,
 }
 
 fn now_ms() -> u64 {
@@ -267,6 +320,7 @@ impl Au05 {
                 stalls: 0,
                 sent: 0,
                 generation: 0,
+                jobs: Default::default(),
             })),
             actions: Arc::new(Mutex::new(default_settings()["actions"].clone())),
             tx: Mutex::new(None),
@@ -277,13 +331,14 @@ impl Au05 {
             hotkeys: Mutex::new(BTreeMap::new()),
             config_lock: Mutex::new(()),
             config,
+            log: Arc::new(Log::default()),
         });
         if let Some(d) = &au.desktop {
-            let (status, actions, desk) = (au.status.clone(), au.actions.clone(), Arc::downgrade(d));
+            let (status, actions, desk, log) = (au.status.clone(), au.actions.clone(), Arc::downgrade(d), au.log.clone());
             d.set_handler(Arc::new(move |vk| {
                 let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
                 let action = saved_action(&actions.lock_or_recover(), settings_key(key));
-                let (status, desk) = (status.clone(), desk.clone());
+                let (status, desk, log) = (status.clone(), desk.clone(), log.clone());
                 // Never run an action on the hotkey thread.
                 let _ = std::thread::Builder::new().name("uc-au05-action".into()).spawn(move || {
                     let result = desk.upgrade().ok_or_else(|| "Unified Control is closing".to_string()).and_then(|d| {
@@ -294,11 +349,22 @@ impl Au05 {
                         Ok(()) => format!("ran {}", action.label()),
                         Err(e) => format!("{}: {e}", action.label()),
                     };
+                    log.line(&format!("hotkey {}: {note}", key.control().name()));
                     push_event(&status, key.control(), true, key.control().own_code().unwrap_or(0), Some(note));
                 });
             }));
         }
         au
+    }
+
+    /// One line in the Vibe Key log (for the app layer: page action choices).
+    pub fn log_line(&self, msg: &str) {
+        self.log.line(msg);
+    }
+
+    /// Write the log to this folder (`devices/au05`). Without it nothing is logged (tests).
+    pub fn set_log_dir(&self, dir: std::path::PathBuf) {
+        *self.log.0.lock_or_recover() = Some(dir);
     }
 
     pub fn fake_handle(&self) -> Option<&FakeHandle> {
@@ -324,7 +390,20 @@ impl Au05 {
         } else {
             Vec::new()
         };
-        *self.hotkeys.lock_or_recover() = d.set_hotkeys(&wanted);
+        let results = d.set_hotkeys(&wanted);
+        for (key, id) in ACTION_KEYS {
+            let vk = own_vk(id);
+            let line = match results.get(&vk) {
+                Some(Ok(())) => format!("hotkey {key} claimed ({})", saved_action(&actions, key).label()),
+                Some(Err(e)) => format!("hotkey {key} not claimed: {e}"),
+                None => continue,
+            };
+            self.log.line(&line);
+        }
+        if wanted.is_empty() {
+            self.log.line("hotkeys released");
+        }
+        *self.hotkeys.lock_or_recover() = results;
     }
 
     /// Apply the saved settings: start or stop the worker, take the UC actions and claim their hotkeys.
@@ -352,11 +431,13 @@ impl Au05 {
             s.message = "Looking for the Vibe Key receiver".into();
             s.generation += 1;
         }
+        self.log.line("worker start");
         let ctx = Worker {
             fake: self.fake.clone(),
             status: self.status.clone(),
             stop: self.stop.clone(),
             config: self.config.clone(),
+            log: self.log.clone(),
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -386,10 +467,14 @@ impl Au05 {
             let _ = h.join();
         }
         let mut s = self.status.lock_or_recover();
+        if s.enabled {
+            self.log.line("worker stop");
+        }
         s.enabled = false;
         s.state = "disabled";
         s.message = "Vibe Key is disabled".into();
         s.pending_sets = 0;
+        s.jobs = Default::default();
     }
 
     /// Stop the worker and release every hotkey (quit).
@@ -406,11 +491,37 @@ impl Au05 {
 
     /// Send one change to the key and wait for its answer (at most `SET_WAIT`).
     pub fn change(&self, change: Change) -> Result<(), String> {
+        if let Change::KeyTyping(key, typing) = change {
+            self.log.line(&format!("page change key typing {} ({} entries)", key.control().name(), typing.0.len()));
+            return self.set_key(key, typing);
+        }
+        self.log.line(&format!("page change {change:?}"));
         let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
         let (rtx, rrx) = mpsc::channel();
         tx.send(Cmd::Change(change, rtx)).map_err(|_| "The Vibe Key worker is unavailable")?;
         rrx.recv_timeout(SET_WAIT + Duration::from_secs(5))
             .map_err(|_| "The Vibe Key did not answer in time".to_string())?
+    }
+
+    /// Ask for a key to type `typing`. Returns at once: the worker sends it when the key is awake, and the
+    /// page follows the job's state ("Waiting for the key", "Sending", "Done" or the error).
+    pub fn set_key(&self, key: KeyId, typing: KeyTyping) -> Result<(), String> {
+        typing.validate()?;
+        let mut s = self.status.lock_or_recover();
+        if !s.enabled {
+            return Err("Enable the Vibe Key first".into());
+        }
+        if s.jobs[key.index() as usize].as_ref().is_some_and(|j| j.state == "sending") {
+            return Err("This key is being changed now. Try again in a moment".into());
+        }
+        s.jobs[key.index() as usize] = Some(KeyJob {
+            typing,
+            state: "waiting",
+            message: String::new(),
+        });
+        drop(s);
+        self.log.line(&format!("key job queued for {}", key.control().name()));
+        Ok(())
     }
 
     /// Queue every get except key typing, one at a time with the usual pacing. Returns once queued.
@@ -466,6 +577,18 @@ impl Au05 {
                     "factory": id.factory_label(),
                     "ownCode": protocol::usage_name(id.control().own_code().unwrap_or(0)),
                     "hotkey": hotkey,
+                    "job": s.jobs[id.index() as usize].as_ref().map(|j| {
+                        let message = match (j.state, s.state) {
+                            ("waiting", "not_found") => "Waiting for the receiver: plug it in".to_string(),
+                            ("waiting", "paused") => "Waiting: sending is paused after a slow reply".to_string(),
+                            ("waiting", "suspended") => "Stopped after slow replies: use Reconnect".to_string(),
+                            ("waiting", _) => "Waiting for the key: press any key to wake it".to_string(),
+                            ("sending", _) => "Sending to the key (it can take up to 20 seconds)".to_string(),
+                            ("done", _) => "Done".to_string(),
+                            _ => j.message.clone(),
+                        };
+                        json!({"state": j.state, "message": message, "label": j.typing.label(id)})
+                    }),
                     // Every key can be set; the knob press typing is not checked on the real key yet.
                     "canSet": true,
                     "checked": Request::GetKeyTyping(id).verified_on_hardware(),
@@ -504,6 +627,7 @@ impl Au05 {
             "events": events,
             "actions": self.actions.lock_or_recover().clone(),
             "hotkeysAvailable": self.desktop.is_some(),
+            "catalogue": hotkey::catalogue_json(),
             "lastError": s.last_error,
             "busy": s.pending_sets > 0,
             // Which settings were checked on the real key; the page labels the others "Untested".
@@ -585,11 +709,14 @@ struct Worker {
     status: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
     config: SessionConfig,
+    log: Arc<Log>,
 }
 
 enum Purpose {
     Read,
     Set(Sender<Result<(), String>>),
+    /// A key-typing job (see `KeyJob`).
+    Key(KeyId),
 }
 
 static TICKETS: AtomicU64 = AtomicU64::new(1);
@@ -598,8 +725,46 @@ impl Worker {
     fn set_state(&self, state: &'static str, message: &str) {
         let mut s = self.status.lock_or_recover();
         if s.state != state || s.message != message {
+            if s.state != state {
+                self.log.line(&format!("state {state}: {message}"));
+            }
             s.state = state;
             s.message = message.into();
+        }
+    }
+
+    /// Send the next waiting key job when the key is awake and no other key-typing command is pending.
+    fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
+        if session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) {
+            return;
+        }
+        let next = {
+            let s = self.status.lock_or_recover();
+            KeyId::ALL.into_iter().find_map(|k| {
+                s.jobs[k.index() as usize]
+                    .as_ref()
+                    .filter(|j| j.state == "waiting")
+                    .map(|j| (k, j.typing.clone()))
+            })
+        };
+        let Some((key, typing)) = next else { return };
+        let t = TICKETS.fetch_add(1, Ordering::Relaxed);
+        let request = Request::SetKeyTyping(key, typing);
+        let name = describe(&request);
+        let result = session.submit(t, request);
+        let mut s = self.status.lock_or_recover();
+        let job = s.jobs[key.index() as usize].as_mut().unwrap();
+        match result {
+            Ok(()) => {
+                job.state = "sending";
+                tickets.insert(t, Purpose::Key(key));
+                self.log.line(&format!("queued {name}"));
+            }
+            Err(f) => {
+                job.state = "failed";
+                job.message = f.message();
+                self.log.line(&format!("refused {name}: {}", f.message()));
+            }
         }
     }
 
@@ -627,10 +792,12 @@ impl Worker {
             match self.open() {
                 Ok(t) => {
                     backoff = Duration::from_secs(1);
+                    self.log.line("receiver opened");
                     self.connected(t, rx);
                 }
                 Err(e) => {
                     let missing = e.kind() == std::io::ErrorKind::NotFound;
+                    self.log.line(&format!("receiver not opened: {:?}", e.kind()));
                     self.set_state(
                         if missing { "not_found" } else { "error" },
                         if missing {
@@ -677,12 +844,14 @@ impl Worker {
                         return;
                     }
                     Ok(Cmd::Reconnect) => {
+                        self.log.line("page reconnect");
                         session.resume();
                         read_done = false;
                         self.status.lock_or_recover().last_error = None;
                     }
                     Ok(Cmd::Change(c, reply)) => self.submit_change(&mut session, &mut tickets, c, reply),
                     Ok(Cmd::ReadAll(reply)) => {
+                        self.log.line("page read all");
                         let mut result = Ok(());
                         for r in read_all_settings() {
                             let t = TICKETS.fetch_add(1, Ordering::Relaxed);
@@ -718,7 +887,8 @@ impl Worker {
             }
             let outputs = match session.tick(Duration::from_millis(25)) {
                 Ok(o) => o,
-                Err(_) => {
+                Err(e) => {
+                    self.log.line(&format!("transport error {:?}", e.kind()));
                     self.finish(&mut session, &mut tickets);
                     self.set_state("not_found", "The Vibe Key receiver was unplugged or stopped answering");
                     return;
@@ -727,6 +897,7 @@ impl Worker {
             for o in outputs {
                 self.handle(o, &mut tickets);
             }
+            self.start_jobs(&mut session, &mut tickets);
             let state = session.state();
             if state == SessionState::Awake && !read_done {
                 read_done = true;
@@ -764,7 +935,7 @@ impl Worker {
                 let mut s = self.status.lock_or_recover();
                 s.sent = session.sent;
                 s.stalls = session.stalled;
-                s.pending_sets = tickets.values().filter(|p| matches!(p, Purpose::Set(_))).count();
+                s.pending_sets = tickets.values().filter(|p| !matches!(p, Purpose::Read)).count();
             }
         }
         self.finish(&mut session, &mut tickets);
@@ -773,6 +944,12 @@ impl Worker {
     fn finish(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
         for o in session.fail_all(Failure::Closed) {
             self.handle(o, tickets);
+        }
+        // A key job that never reached the key waits for the next connection.
+        for j in self.status.lock_or_recover().jobs.iter_mut().flatten() {
+            if j.state == "sending" {
+                j.state = "waiting";
+            }
         }
         self.status.lock_or_recover().pending_sets = 0;
     }
@@ -828,8 +1005,10 @@ impl Worker {
             _ => None,
         };
         let t = TICKETS.fetch_add(1, Ordering::Relaxed);
+        let name = describe(&request);
         match session.submit(t, request) {
             Ok(()) => {
+                self.log.line(&format!("queued {name}"));
                 tickets.insert(t, Purpose::Set(reply));
                 if let Some(r) = read_back {
                     let rt = TICKETS.fetch_add(1, Ordering::Relaxed);
@@ -839,6 +1018,7 @@ impl Worker {
                 }
             }
             Err(f) => {
+                self.log.line(&format!("refused {name}: {}", f.message()));
                 let _ = reply.send(Err(f.message()));
             }
         }
@@ -853,6 +1033,10 @@ impl Worker {
             Output::Control(e) => push_event(&self.status, e.control, e.pressed, e.code, None),
             Output::Done { ticket, request, result } => {
                 let purpose = tickets.remove(&ticket);
+                self.log.line(&match &result {
+                    Ok(_) => format!("done {}: ok", describe(&request)),
+                    Err(f) => format!("done {}: {:?}", describe(&request), f),
+                });
                 match &result {
                     Ok(r) => self.learn(&request, r),
                     Err(f) => {
@@ -861,8 +1045,27 @@ impl Worker {
                         }
                     }
                 }
-                if let Some(Purpose::Set(reply)) = purpose {
-                    let _ = reply.send(result.map(|_| ()).map_err(|f| f.message()));
+                match purpose {
+                    Some(Purpose::Set(reply)) => {
+                        let _ = reply.send(result.map(|_| ()).map_err(|f| f.message()));
+                    }
+                    Some(Purpose::Key(key)) => {
+                        let mut s = self.status.lock_or_recover();
+                        if let Some(job) = s.jobs[key.index() as usize].as_mut() {
+                            match &result {
+                                Ok(_) => job.state = "done",
+                                // Never written (the key went to sleep first): wait for it again.
+                                Err(Failure::Asleep) | Err(Failure::Closed) | Err(Failure::Cancelled) => {
+                                    job.state = "waiting"
+                                }
+                                Err(f) => {
+                                    job.state = "failed";
+                                    job.message = f.message();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -961,6 +1164,44 @@ mod tests {
         au
     }
 
+    /// The reported "stuck" choice (2026-11-17): choosing a UC action must never wait for the key. The action
+    /// is saved at once (before the key's list is read), the key change waits visibly while the key is
+    /// asleep, and the page always ends in a clear state: done, or the error.
+    #[test]
+    fn choosing_a_uc_action_never_waits_for_the_key() {
+        let au = worker();
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        let fake = au.fake_handle().unwrap().clone();
+        // The key falls asleep before the user chooses; its K3 list was never read.
+        fake.sleep();
+        std::thread::sleep(Duration::from_millis(5200)); // past the test awake window
+        assert_eq!(au.status()["keys"][2]["mode"], "unknown");
+        let started = Instant::now();
+        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"claudeDictation"}}}));
+        au.change(Change::KeyTyping(KeyId::K3, KeyTyping::own_code(KeyId::K3))).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500), "the choice returns at once");
+        let s = au.status();
+        assert_eq!(s["actions"]["k3"]["kind"], "claudeDictation", "saved before the list is read");
+        assert_eq!(s["keys"][2]["hotkey"]["state"], "ready", "the hotkey is claimed at once");
+        assert_eq!(s["keys"][2]["job"]["state"], "waiting");
+        assert_eq!(s["keys"][2]["job"]["message"], "Waiting for the key: press any key to wake it");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(fake.received().iter().all(|p| p[2] != 0x50), "nothing is written to a sleeping key");
+        // Waking the key sends the change; the job ends in Done and the key now types its own code.
+        fake.wake();
+        let s = wait_for(&au, |s| s["keys"][2]["job"]["state"] == "done");
+        assert_eq!(s["keys"][2]["job"]["message"], "Done");
+        assert_eq!(s["keys"][2]["mode"], "uc");
+        // A failure ends in the error, not in a spinner.
+        fake.lock().drop_replies = 1;
+        au.change(Change::KeyTyping(KeyId::K3, KeyTyping::factory())).unwrap();
+        let s = wait_for(&au, |s| s["keys"][2]["job"]["state"] == "failed");
+        assert!(s["keys"][2]["job"]["message"].as_str().unwrap().contains("did not answer"));
+        assert_eq!(s["busy"], false);
+        au.shutdown();
+    }
+
     #[test]
     fn the_agent_light_stub_sends_nothing() {
         for s in [AgentLight::Idle, AgentLight::Working, AgentLight::NeedsApproval] {
@@ -972,15 +1213,15 @@ mod tests {
     fn settings_sanitize_to_off_and_no_actions() {
         let d = sanitize(&json!({}));
         assert_eq!(d["enabled"], false);
-        assert_eq!(d["actions"]["k3"], json!({"kind":"none","value":""}));
+        assert_eq!(d["actions"]["k3"], json!({"kind":"none","value":"","app":""}));
         assert!(d["actions"].get("knobRight").is_none(), "knob turns keep the factory scroll");
         let s = sanitize(&json!({"enabled":true,"actions":{"k1":{"kind":"claudeDictation"},"k3":{"kind":"hotkey","value":"Ctrl + Enter"},"k2":{"kind":"shell","value":"x"}}}));
         assert_eq!(s["enabled"], true);
         assert_eq!(s["actions"]["k1"]["kind"], "claudeDictation");
         assert_eq!(s["actions"]["k3"]["value"], "Ctrl + Enter");
         assert_eq!(s["actions"]["k2"]["kind"], "none", "unknown action kinds are dropped");
-        assert!(validate_action("hotkey", "Ctrl + Enter").is_ok());
-        assert!(validate_action("launch", "C:/x.exe").is_err(), "only reviewed kinds");
+        assert!(validate_action("hotkey", "Ctrl + Enter", "").is_ok());
+        assert!(validate_action("launch", "C:/x.exe", "").is_err(), "only reviewed kinds");
     }
 
     #[test]
@@ -1062,7 +1303,7 @@ mod tests {
         let s = wait_for(&au, |s| s["events"].as_array().unwrap().iter().any(|e| e["action"].is_string()));
         let ev = s["events"].as_array().unwrap().iter().find(|e| e["action"].is_string()).unwrap().clone();
         assert_eq!(ev["control"], "K3");
-        assert_eq!(ev["action"], "ran dictation in Claude");
+        assert_eq!(ev["action"], "ran Claude: Start dictation");
         assert_eq!(*desk.ran.lock_or_recover(), vec!["focus claude.exe, press Ctrl + D".to_string()]);
         // K2 types its factory Enter, not its own code: no hotkey press reaches UC.
         au.test_control(&json!({"op":"click","control":"k2"})).unwrap();
@@ -1113,7 +1354,7 @@ mod tests {
         au.test_control(&json!({"op":"click","control":"k3"})).unwrap();
         let s = wait_for(&au, |s| s["events"].as_array().unwrap().iter().any(|e| e["action"].is_string()));
         let ev = s["events"].as_array().unwrap().iter().find(|e| e["action"].is_string()).unwrap().clone();
-        assert_eq!(ev["action"], "Enter: The action crashed");
+        assert_eq!(ev["action"], "Windows / media: Enter in the focused app: The action crashed");
         au.change(Change::StandbyTime(650)).unwrap();
         assert_eq!(au.status()["state"], "connected");
         au.shutdown();

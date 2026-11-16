@@ -18,61 +18,178 @@ pub const VK_F20: u16 = 0x83;
 pub const VK_F21: u16 = 0x84;
 pub const VK_F22: u16 = 0x85;
 
+/// An app UC can bring forward before it presses the keys.
+#[derive(Debug, PartialEq, Eq)]
+pub struct App {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Executable file name, lower case.
+    pub exe: &'static str,
+    /// The window title starts with this.
+    pub title: &'static str,
+    /// True when finding and focusing this window was checked on the user's PC.
+    pub verified: bool,
+}
+pub const APPS: [App; 2] = [
+    // Checked by the K3 hotkey prototype on 2026-11-16 (user-confirmed: dictation started).
+    App { id: "claude", name: "Claude", exe: "claude.exe", title: "Claude", verified: true },
+    // Not checked: no source states the ChatGPT app's executable name or title.
+    App { id: "chatgpt", name: "ChatGPT", exe: "chatgpt.exe", title: "ChatGPT", verified: false },
+];
+pub fn app(id: &str) -> Option<&'static App> {
+    APPS.iter().find(|a| a.id == id)
+}
+
+/// What an action does after the app is in front (if any).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// A key combination through the dock's reviewed hotkey sender ("Ctrl + D").
+    Keys(&'static str),
+    /// A media key through the dock's reviewed media sender ("Play / pause").
+    Media(&'static str),
+}
+
+/// One action in the catalogue. Data only: add apps and actions here.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub id: &'static str,
+    pub group: &'static str,
+    pub label: &'static str,
+    /// The app to bring forward first, or `None` for the focused app / the whole system.
+    pub app: Option<&'static str>,
+    pub effect: Effect,
+    /// "verified" (vendor documentation or checked on the user's PC) or "unverified".
+    pub status: &'static str,
+    pub note: &'static str,
+}
+
+const fn e(
+    id: &'static str,
+    group: &'static str,
+    label: &'static str,
+    app: Option<&'static str>,
+    effect: Effect,
+    status: &'static str,
+    note: &'static str,
+) -> Entry {
+    Entry { id, group, label, app, effect, status, note }
+}
+use Effect::{Keys, Media};
+const CL: Option<&str> = Some("claude");
+const GPT: Option<&str> = Some("chatgpt");
+
+/// Sources (2026-11-16): Claude Code desktop docs (code.claude.com/docs/en/desktop) list Enter to send and Esc
+/// to interrupt; their other shortcuts are given for macOS ("swap Cmd for Ctrl"), so the Windows keys are
+/// inferred and marked unverified. Claude dictation Ctrl + D was checked on the user's PC. OpenAI's help pages
+/// could not be read; every ChatGPT shortcut is from third-party sites and marked unverified. Stop/interrupt is
+/// in the list but never a default (the user does not want a key to stop the agent by accident).
+pub const CATALOGUE: &[Entry] = &[
+    e("claudeDictation", "Claude", "Start dictation", CL, Keys("Ctrl + D"), "verified", "Checked on this PC"),
+    e("claudeSend", "Claude", "Send message", CL, Keys("Enter"), "verified", "Claude Code docs"),
+    e("claudeNewSession", "Claude", "New session", CL, Keys("Ctrl + N"), "unverified", "Inferred from the macOS list"),
+    e("claudeNextSession", "Claude", "Next session", CL, Keys("Ctrl + Tab"), "unverified", "Inferred from the macOS list"),
+    e("claudePrevSession", "Claude", "Previous session", CL, Keys("Ctrl + Shift + Tab"), "unverified", "Inferred from the macOS list"),
+    e("claudeModelMenu", "Claude", "Model menu", CL, Keys("Ctrl + Shift + I"), "unverified", "Inferred from the macOS list"),
+    e("claudePermissionMenu", "Claude", "Permission mode menu", CL, Keys("Ctrl + Shift + M"), "unverified", "Inferred from the macOS list"),
+    e("claudeSideChat", "Claude", "Side chat", CL, Keys("Ctrl + ;"), "unverified", "Inferred from the macOS list"),
+    e("claudeTerminal", "Claude", "Toggle terminal", CL, Keys("Ctrl + `"), "unverified", "Inferred from the macOS list"),
+    e("claudeDiff", "Claude", "Toggle diff pane", CL, Keys("Ctrl + Shift + D"), "unverified", "Inferred from the macOS list"),
+    e("claudeShortcuts", "Claude", "Show all shortcuts", CL, Keys("Ctrl + /"), "unverified", "Inferred from the macOS list"),
+    e("claudeQuickOpen", "Claude", "Open Claude from anywhere", None, Keys("Ctrl + Alt + Space"), "unverified", "Third-party report"),
+    e("claudeStop", "Claude", "Stop / interrupt (Esc)", CL, Keys("Esc"), "verified", "Claude Code docs. Stops the running turn"),
+    e("chatgptDictation", "ChatGPT", "Start dictation", GPT, Keys("Ctrl + Shift + D"), "unverified", "Third-party report"),
+    e("chatgptNewChat", "ChatGPT", "New chat", GPT, Keys("Ctrl + Shift + O"), "unverified", "Third-party report"),
+    e("chatgptSidebar", "ChatGPT", "Toggle sidebar", GPT, Keys("Ctrl + Shift + S"), "unverified", "Third-party report"),
+    e("chatgptFocusInput", "ChatGPT", "Focus the message box", GPT, Keys("Shift + Esc"), "unverified", "Third-party report"),
+    e("chatgptSend", "ChatGPT", "Send message", GPT, Keys("Enter"), "unverified", "Standard Enter"),
+    e("chatgptShortcuts", "ChatGPT", "Show all shortcuts", GPT, Keys("Ctrl + /"), "unverified", "Third-party report"),
+    e("chatgptCompanion", "ChatGPT", "Companion window", None, Keys("Alt + Space"), "unverified", "Third-party report; the hotkey can be changed in ChatGPT"),
+    e("enter", "Windows / media", "Enter in the focused app", None, Keys("Enter"), "verified", "Standard key"),
+    e("playPause", "Windows / media", "Play / pause", None, Media("Play / pause"), "verified", "Standard media key"),
+    e("nextTrack", "Windows / media", "Next track", None, Media("Next track"), "verified", "Standard media key"),
+    e("previousTrack", "Windows / media", "Previous track", None, Media("Previous track"), "verified", "Standard media key"),
+    e("volumeUp", "Windows / media", "Volume up", None, Media("Volume up"), "verified", "Standard media key"),
+    e("volumeDown", "Windows / media", "Volume down", None, Media("Volume down"), "verified", "Standard media key"),
+    e("mute", "Windows / media", "Mute sound", None, Media("Mute"), "verified", "Standard media key"),
+    e("micMute", "Windows / media", "Mute microphone in calls", None, Keys("Win + Alt + K"), "unverified", "Windows 11; only in call apps that support it"),
+    e("showDesktop", "Windows / media", "Show desktop", None, Keys("Win + D"), "verified", "Windows shortcut"),
+    e("taskView", "Windows / media", "Task view", None, Keys("Win + Tab"), "verified", "Windows shortcut"),
+    e("screenshot", "Windows / media", "Screenshot (Snipping Tool)", None, Keys("Win + Shift + S"), "verified", "Windows shortcut"),
+];
+pub fn entry(id: &str) -> Option<&'static Entry> {
+    CATALOGUE.iter().find(|e| e.id == id)
+}
+/// Every saved kind: "none", "hotkey" (custom combination) or a catalogue id.
+pub fn kind_known(kind: &str) -> bool {
+    kind == "none" || kind == "hotkey" || entry(kind).is_some()
+}
+
+/// The catalogue for the page, grouped in order.
+pub fn catalogue_json() -> serde_json::Value {
+    serde_json::json!({
+        "actions": CATALOGUE.iter().map(|e| serde_json::json!({
+            "id": e.id, "group": e.group, "label": e.label, "status": e.status, "note": e.note,
+            "keys": match e.effect { Keys(k) => k, Media(m) => m },
+        })).collect::<Vec<_>>(),
+        "apps": APPS.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "verified": a.verified})).collect::<Vec<_>>(),
+    })
+}
+
 /// The action UC runs when a key's own code arrives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Nothing,
-    /// Bring the Claude desktop app forward, then Ctrl + D (dictation, user-confirmed 2026-11-16).
-    ClaudeDictation,
-    /// Bring the ChatGPT desktop app forward, then Ctrl + Shift + D (reported, not confirmed).
-    ChatGptDictation,
-    /// Enter in the focused app (send / confirm).
-    Enter,
-    /// A custom key combination in the focused app, such as "Ctrl + Enter".
-    Hotkey(String),
+    Entry(&'static Entry),
+    /// A custom key combination, sent to the focused app or after bringing an app forward.
+    Custom { keys: String, app: Option<&'static App> },
 }
-pub const ACTION_KINDS: [&str; 5] = ["none", "claudeDictation", "chatgptDictation", "enter", "hotkey"];
 
 impl Action {
-    pub fn from_setting(kind: &str, value: &str) -> Option<Self> {
+    pub fn from_setting(kind: &str, value: &str, app_id: &str) -> Option<Self> {
         Some(match kind {
             "none" => Action::Nothing,
-            "claudeDictation" => Action::ClaudeDictation,
-            "chatgptDictation" => Action::ChatGptDictation,
-            "enter" => Action::Enter,
-            "hotkey" if !value.trim().is_empty() => Action::Hotkey(value.to_string()),
-            // A custom hotkey that is still being typed does nothing.
-            "hotkey" => Action::Nothing,
-            _ => return None,
+            // A custom combination that is still being typed does nothing.
+            "hotkey" if value.trim().is_empty() => Action::Nothing,
+            "hotkey" => Action::Custom { keys: value.to_string(), app: app(app_id) },
+            id => Action::Entry(entry(id)?),
         })
     }
     pub fn label(&self) -> String {
         match self {
             Action::Nothing => "nothing".into(),
-            Action::ClaudeDictation => "dictation in Claude".into(),
-            Action::ChatGptDictation => "dictation in ChatGPT".into(),
-            Action::Enter => "Enter".into(),
-            Action::Hotkey(v) => v.clone(),
+            Action::Entry(e) => format!("{}: {}", e.group, e.label),
+            Action::Custom { keys, app: Some(a) } => format!("{keys} in {}", a.name),
+            Action::Custom { keys, app: None } => keys.clone(),
         }
     }
-    /// The app to bring forward first (exe file name, window title prefix), and the keys to press.
-    pub fn plan(&self) -> Option<(Option<(&'static str, &'static str)>, String)> {
+    /// The app to bring forward first (exe, title), and what to send.
+    pub fn plan(&self) -> Option<(Option<(&'static str, &'static str)>, PendingAction)> {
+        let target = |a: Option<&'static App>| a.map(|a| (a.exe, a.title));
         match self {
             Action::Nothing => None,
-            Action::ClaudeDictation => Some((Some(("claude.exe", "Claude")), "Ctrl + D".into())),
-            Action::ChatGptDictation => Some((Some(("chatgpt.exe", "ChatGPT")), "Ctrl + Shift + D".into())),
-            Action::Enter => Some((None, "Enter".into())),
-            Action::Hotkey(v) => Some((None, v.clone())),
+            Action::Entry(e) => Some((
+                target(e.app.and_then(app)),
+                match e.effect {
+                    Keys(k) => PendingAction { kind: "hotkey".into(), value: k.into() },
+                    Media(m) => PendingAction { kind: "media".into(), value: m.into() },
+                },
+            )),
+            Action::Custom { keys, app } => {
+                Some((target(*app), PendingAction { kind: "hotkey".into(), value: keys.clone() }))
+            }
         }
     }
 }
 
 /// Check a saved action before it is stored.
-pub fn validate(kind: &str, value: &str) -> Result<(), String> {
-    match Action::from_setting(kind, value).ok_or("Choose a supported action")? {
-        Action::Hotkey(v) => super::actions::plan_action(&PendingAction {
+pub fn validate(kind: &str, value: &str, app_id: &str) -> Result<(), String> {
+    if !app_id.is_empty() && app(app_id).is_none() {
+        return Err("Choose a supported app".into());
+    }
+    match Action::from_setting(kind, value, app_id).ok_or("Choose a supported action")? {
+        Action::Custom { keys, .. } => super::actions::plan_action(&PendingAction {
             kind: "hotkey".into(),
-            value: v,
+            value: keys,
         })
         .map(|_| ()),
         _ => Ok(()),
@@ -142,10 +259,11 @@ impl Desktop for FakeDesktop {
         if self.crash.load(std::sync::atomic::Ordering::SeqCst) {
             panic!("test action crash");
         }
-        let (app, keys) = action.plan().ok_or("Nothing to do")?;
+        let (app, send) = action.plan().ok_or("Nothing to do")?;
+        let what = if send.kind == "media" { format!("media {}", send.value) } else { format!("press {}", send.value) };
         let text = match app {
-            Some((exe, _)) => format!("focus {exe}, press {keys}"),
-            None => format!("press {keys}"),
+            Some((exe, _)) => format!("focus {exe}, {what}"),
+            None => what,
         };
         self.ran.lock_or_recover().push(text);
         Ok(())
@@ -285,15 +403,12 @@ mod native {
         }
         fn run(&self, action: &Action) -> Result<(), String> {
             use super::super::actions::ActionSink;
-            let (app, keys) = action.plan().ok_or("Nothing to do")?;
+            let (app, send) = action.plan().ok_or("Nothing to do")?;
             if let Some((exe, title)) = app {
                 unsafe { bring_forward(exe, title) }?;
                 std::thread::sleep(Duration::from_millis(120));
             }
-            self.actions.lock_or_recover().execute(&PendingAction {
-                kind: "hotkey".into(),
-                value: keys,
-            })
+            self.actions.lock_or_recover().execute(&send)
         }
     }
 
@@ -414,16 +529,22 @@ mod tests {
     use super::*;
     #[test]
     fn actions_parse_and_plan() {
-        assert_eq!(Action::from_setting("claudeDictation", ""), Some(Action::ClaudeDictation));
-        assert_eq!(Action::from_setting("hotkey", ""), Some(Action::Nothing));
-        assert_eq!(Action::from_setting("launch", "x"), None);
-        assert_eq!(
-            Action::ClaudeDictation.plan(),
-            Some((Some(("claude.exe", "Claude")), "Ctrl + D".to_string()))
-        );
-        assert!(validate("hotkey", "Ctrl + Enter").is_ok());
-        assert!(validate("hotkey", "Ctrl").is_err());
-        assert!(validate("shell", "").is_err());
+        assert_eq!(Action::from_setting("claudeDictation", "", ""), Some(Action::Entry(entry("claudeDictation").unwrap())));
+        assert_eq!(Action::from_setting("hotkey", "", ""), Some(Action::Nothing));
+        assert_eq!(Action::from_setting("launch", "x", ""), None);
+        let (target, send) = Action::from_setting("claudeDictation", "", "").unwrap().plan().unwrap();
+        assert_eq!(target, Some(("claude.exe", "Claude")));
+        assert_eq!((send.kind.as_str(), send.value.as_str()), ("hotkey", "Ctrl + D"));
+        assert!(validate("hotkey", "Ctrl + Enter", "").is_ok());
+        assert!(validate("hotkey", "Ctrl + Enter", "notepad").is_err());
+        assert!(validate("hotkey", "Ctrl", "").is_err());
+        assert!(validate("shell", "", "").is_err());
+        // Every catalogue entry is a valid plan for the reviewed senders.
+        for e in CATALOGUE {
+            let (_, send) = Action::Entry(e).plan().unwrap();
+            assert!(super::super::actions::plan_action(&send).is_ok(), "{}", e.id);
+            assert!(e.app.is_none_or(|a| app(a).is_some()), "{}", e.id);
+        }
     }
     #[test]
     fn the_fake_delivers_only_claimed_keys_and_records_actions() {
@@ -439,7 +560,11 @@ mod tests {
         assert_eq!(*got.lock_or_recover(), vec![VK_F22]);
         d.set_hotkeys(&[]);
         assert!(!d.press(VK_F22), "released");
-        d.run(&Action::ClaudeDictation).unwrap();
-        assert_eq!(*d.ran.lock_or_recover(), vec!["focus claude.exe, press Ctrl + D".to_string()]);
+        d.run(&Action::from_setting("claudeDictation", "", "").unwrap()).unwrap();
+        d.run(&Action::from_setting("volumeUp", "", "").unwrap()).unwrap();
+        assert_eq!(
+            *d.ran.lock_or_recover(),
+            vec!["focus claude.exe, press Ctrl + D".to_string(), "media Volume up".to_string()]
+        );
     }
 }
