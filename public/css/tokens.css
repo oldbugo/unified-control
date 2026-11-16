@@ -30,6 +30,10 @@
   --warn-soft: rgba(240, 180, 60, .14);
   --danger-soft: rgba(255, 107, 107, .14);
 
+  /* marks: profiles (1-6) and app sections on the Vibe Key page (plain colours, no brand assets) */
+  --hue-1: #8abaff; --hue-2: #45c97a; --hue-3: #f0b43c; --hue-4: #c792ff; --hue-5: #5fd3d3; --hue-6: #ff8a8a;
+  --hue-claude: #e8915f; --hue-chatgpt: #4fc39a; --hue-system: #9aa2b1;
+
   /* pictures and editor overlays */
   --picture-bg: #000;
   --notch: #000;

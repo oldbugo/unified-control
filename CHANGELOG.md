@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.19.0 — 2026-11-17
+
+A clearer Vibe Key page. Profiles are cards along the top, with the Claude or
+ChatGPT target beside them. Choosing what a key does is a grid of icon cards
+grouped by app (Claude, ChatGPT, target app, Windows & media, Unified Control);
+the current choice is highlighted, shortcuts are small text and unconfirmed
+ones carry a small "?". Each key has a simple switch (Unified Control action,
+types keys, factory) and a small status label. The quick menu editor uses
+draggable cards, Claude sessions is one card with a Connect button, and the
+device settings are tidy cards. Most help text is gone. No change in behaviour.
+
 ## 0.18.0 — 2026-11-17
 
 Open Claude sessions from the Vibe Key quick menu. On the Vibe Key page,
