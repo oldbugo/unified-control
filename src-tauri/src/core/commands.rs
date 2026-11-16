@@ -225,6 +225,10 @@ pub async fn au05_configure(core: State<'_, Core>, patch: Value) -> Result<Value
     run(&core, move |app| app.au05_configure(&patch)).await
 }
 #[tauri::command]
+pub async fn au05_menu(core: State<'_, Core>, input: Value) -> Result<Value, CoreError> {
+    run(&core, move |app| app.au05_menu(&input)).await
+}
+#[tauri::command]
 pub async fn au05_change(core: State<'_, Core>, change: Value) -> Result<Value, CoreError> {
     run(&core, move |app| app.au05_change(&change)).await
 }

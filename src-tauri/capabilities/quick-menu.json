@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick-menu",
+  "description": "The Vibe Key quick menu window (local): its input and dragging only.",
+  "windows": [
+    "quickmenu"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "allow-au05-menu"
+  ]
+}

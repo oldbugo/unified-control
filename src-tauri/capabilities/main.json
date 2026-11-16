@@ -41,6 +41,7 @@
     "allow-au05-read-key",
     "allow-au05-read-all",
     "allow-au05-test-control",
+    "allow-au05-menu",
     "allow-dock-test-button",
     "allow-dock-test-studio",
     "allow-asset-import",

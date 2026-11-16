@@ -1,0 +1,428 @@
+//! Vibe Key quick menu (user request 2026-11-17, "a bit similar to what Logitech have").
+//!
+//! A key with the action "Open quick menu" opens a small menu window at a fixed place on a screen (not at the
+//! mouse). Knob turns move the highlight, the knob press chooses, the menu key again (or about 8 s without
+//! input) closes it. Esc, the arrow keys, Enter and mouse clicks work in the window too.
+//!
+//! Everything here is data and logic only: the menu model in settings.json (`au05.menu`, `au05.profiles`,
+//! `au05.profile`, `au05.target`), its checks, and the menu's state machine. The window itself is behind
+//! [`MenuView`]; tests and quiet instances have no view, so nothing ever appears on the desktop.
+use super::au05_hotkey::{self as hotkey, TARGETS};
+use serde_json::{json, Value};
+use std::time::{Duration, Instant};
+
+/// The menu closes after this long without input.
+pub const CLOSE_AFTER: Duration = Duration::from_secs(8);
+pub const MAX_DEPTH: usize = 3;
+pub const MAX_ENTRIES: usize = 64;
+pub const MAX_LABEL: usize = 60;
+pub const MAX_PROFILES: usize = 12;
+/// Entry types. "claudeSession" is reserved for "open a Claude session" (not built yet: kept, shown, does
+/// nothing when chosen).
+pub const ENTRY_TYPES: [&str; 5] = ["action", "profile", "target", "submenu", "claudeSession"];
+
+/// Shows the menu window. Implemented by the app shell (a Tauri window); never installed in tests, fake or
+/// quiet instances.
+pub trait MenuView: Send + Sync {
+    /// Show or update the menu. `first` is true when it has just opened (place it and take focus).
+    fn show(&self, view: &Value, first: bool);
+    fn hide(&self);
+}
+
+pub fn target_name(id: &str) -> &'static str {
+    hotkey::app(id).map(|a| a.name).unwrap_or("Claude")
+}
+
+fn action(kind: &str) -> Value {
+    json!({"kind": kind, "value": "", "app": ""})
+}
+fn act(label: &str, kind: &str) -> Value {
+    json!({"type": "action", "label": label, "action": action(kind)})
+}
+
+/// The shipped menu (orchestrator brief 2026-11-17).
+pub fn default_menu() -> Value {
+    json!([
+        act("Claude dictation", "claudeDictation"),
+        act("Claude new session", "claudeNewSession"),
+        act("ChatGPT dictation", "chatgptDictation"),
+        {"type": "submenu", "label": "Switch profile", "entries": [
+            {"type": "profile", "label": "Claude", "profile": "claude"},
+            {"type": "profile", "label": "ChatGPT", "profile": "chatgpt"},
+            {"type": "profile", "label": "Media", "profile": "media"},
+        ]},
+        {"type": "submenu", "label": "Target app", "entries": [
+            {"type": "target", "label": "Claude", "target": "claude"},
+            {"type": "target", "label": "ChatGPT", "target": "chatgpt"},
+        ]},
+        act("Play / pause", "playPause"),
+        act("Screenshot", "screenshot"),
+    ])
+}
+
+/// The shipped profiles. The first ("Claude") takes the user's current key actions, so nothing changes on
+/// an update; the others apply only when the user switches to them.
+pub fn default_profiles(current_actions: &Value) -> Value {
+    let set = |k1: &str, k2: &str| {
+        json!({"k1": action(k1), "k2": action(k2), "k3": action("none"), "knobPress": action("none")})
+    };
+    json!([
+        {"id": "claude", "name": "Claude", "actions": current_actions},
+        {"id": "chatgpt", "name": "ChatGPT", "actions": set("chatgptDictation", "chatgptSend")},
+        {"id": "media", "name": "Media", "actions": set("playPause", "nextTrack")},
+    ])
+}
+
+pub fn clean_label(v: &Value) -> String {
+    let s: String = v.as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(MAX_LABEL).collect();
+    s.trim().to_string()
+}
+
+/// A profile id: a-z, 0-9 and '-', at most 24 characters.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 24 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn valid_session(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Keep only valid entries (unknown types, unknown actions, missing profiles, too deep or too many are
+/// dropped). `profiles` is the list of profile ids.
+pub fn sanitize_menu(v: &Value, profiles: &[String]) -> Value {
+    let mut count = 0;
+    Value::Array(clean_level(v, profiles, 1, &mut count))
+}
+
+fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) -> Vec<Value> {
+    let mut out = Vec::new();
+    for e in v.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        if *count >= MAX_ENTRIES {
+            break;
+        }
+        let label = clean_label(&e["label"]);
+        let cleaned = match e["type"].as_str().unwrap_or("") {
+            "action" => {
+                let a = &e["action"];
+                let kind = a["kind"].as_str().unwrap_or("");
+                let value = a["value"].as_str().unwrap_or("");
+                let app = a["app"].as_str().unwrap_or("");
+                // The menu cannot open itself; "nothing" is not an entry.
+                if kind == hotkey::QUICK_MENU || kind == "none" || hotkey::validate(kind, value, app).is_err() {
+                    continue;
+                }
+                let custom = kind == "hotkey";
+                let fallback = hotkey::entry(kind).map(|x| format!("{} {}", x.group, x.label)).unwrap_or_else(|| value.to_string());
+                json!({"type": "action", "label": if label.is_empty() { fallback } else { label },
+                       "action": {"kind": kind, "value": if custom { value } else { "" }, "app": if custom { app } else { "" }}})
+            }
+            "profile" => {
+                let id = e["profile"].as_str().unwrap_or("");
+                if !profiles.iter().any(|p| p == id) {
+                    continue;
+                }
+                json!({"type": "profile", "label": if label.is_empty() { id.to_string() } else { label }, "profile": id})
+            }
+            "target" => {
+                let t = e["target"].as_str().unwrap_or("");
+                if !TARGETS.contains(&t) {
+                    continue;
+                }
+                json!({"type": "target", "label": if label.is_empty() { target_name(t).to_string() } else { label }, "target": t})
+            }
+            "submenu" => {
+                if depth >= MAX_DEPTH {
+                    continue;
+                }
+                *count += 1;
+                let entries = clean_level(&e["entries"], profiles, depth + 1, count);
+                out.push(json!({"type": "submenu", "label": if label.is_empty() { "Sub-menu".to_string() } else { label }, "entries": entries}));
+                continue;
+            }
+            "claudeSession" => {
+                let id = e["session"].as_str().unwrap_or("");
+                json!({"type": "claudeSession", "label": if label.is_empty() { "Claude session".to_string() } else { label },
+                       "session": if valid_session(id) { id } else { "" }})
+            }
+            _ => continue,
+        };
+        *count += 1;
+        out.push(cleaned);
+    }
+    out
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    /// The menu key: open, or close when open.
+    Toggle,
+    Next,
+    Prev,
+    Choose,
+    /// Up one level (the "Back" row, Backspace).
+    Back,
+    Close,
+    /// A mouse click on a row.
+    Pick(usize),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    Nothing,
+    Opened,
+    Moved,
+    Closed,
+    /// Run this saved action (`{kind, value, app}`) after the menu has closed.
+    Run(Value, String),
+    Profile(String, String),
+    Target(String, String),
+    /// Chosen but not available yet (stays open).
+    Unavailable(String),
+}
+
+/// The menu's state machine. Rows: in a sub-menu, row 0 is "Back" and row i is entry i-1.
+#[derive(Clone, Debug, Default)]
+pub struct MenuState {
+    pub open: bool,
+    path: Vec<usize>,
+    pub highlight: usize,
+    last_input: Option<Instant>,
+    pub note: Option<String>,
+}
+
+impl MenuState {
+    /// The entries of the current level. A path that no longer fits the menu (it was edited) goes back to
+    /// the top.
+    fn level(&mut self, menu: &Value) -> Vec<Value> {
+        let mut cur = menu.as_array().cloned().unwrap_or_default();
+        for (depth, &i) in self.path.clone().iter().enumerate() {
+            match cur.get(i).filter(|e| e["type"] == "submenu") {
+                Some(e) => cur = e["entries"].as_array().cloned().unwrap_or_default(),
+                None => {
+                    self.path.truncate(depth);
+                    self.highlight = 0;
+                    return self.level(menu);
+                }
+            }
+        }
+        cur
+    }
+    fn offset(&self) -> usize {
+        usize::from(!self.path.is_empty())
+    }
+    fn rows(&mut self, menu: &Value) -> usize {
+        self.level(menu).len() + self.offset()
+    }
+    fn close(&mut self) -> Outcome {
+        self.open = false;
+        self.path.clear();
+        self.highlight = 0;
+        self.note = None;
+        Outcome::Closed
+    }
+    /// True when the menu has been open without input for `CLOSE_AFTER`.
+    pub fn expired(&self, now: Instant) -> bool {
+        self.open && self.last_input.is_some_and(|t| now.duration_since(t) >= CLOSE_AFTER)
+    }
+
+    pub fn step(&mut self, menu: &Value, input: Input, now: Instant) -> Outcome {
+        if !self.open {
+            if input != Input::Toggle {
+                return Outcome::Nothing;
+            }
+            self.open = true;
+            self.path.clear();
+            self.highlight = 0;
+            self.note = None;
+            self.last_input = Some(now);
+            return Outcome::Opened;
+        }
+        self.last_input = Some(now);
+        let rows = self.rows(menu).max(1);
+        self.highlight = self.highlight.min(rows - 1);
+        match input {
+            Input::Toggle | Input::Close => self.close(),
+            Input::Next => {
+                self.highlight = (self.highlight + 1) % rows;
+                self.note = None;
+                Outcome::Moved
+            }
+            Input::Prev => {
+                self.highlight = (self.highlight + rows - 1) % rows;
+                self.note = None;
+                Outcome::Moved
+            }
+            Input::Back => match self.path.pop() {
+                None => self.close(),
+                Some(i) => {
+                    self.highlight = i + self.offset();
+                    self.note = None;
+                    Outcome::Moved
+                }
+            },
+            Input::Pick(i) => {
+                if i >= rows {
+                    return Outcome::Nothing;
+                }
+                self.highlight = i;
+                self.step(menu, Input::Choose, now)
+            }
+            Input::Choose => {
+                if self.offset() == 1 && self.highlight == 0 {
+                    return self.step(menu, Input::Back, now);
+                }
+                let level = self.level(menu);
+                let Some(e) = level.get(self.highlight - self.offset()).cloned() else {
+                    return Outcome::Nothing; // an empty menu
+                };
+                let label = e["label"].as_str().unwrap_or("").to_string();
+                match e["type"].as_str().unwrap_or("") {
+                    "submenu" => {
+                        self.path.push(self.highlight - self.offset());
+                        self.highlight = if e["entries"].as_array().is_some_and(|a| !a.is_empty()) { 1 } else { 0 };
+                        self.note = None;
+                        Outcome::Moved
+                    }
+                    "action" => {
+                        self.close();
+                        Outcome::Run(e["action"].clone(), label)
+                    }
+                    "profile" => {
+                        self.close();
+                        Outcome::Profile(e["profile"].as_str().unwrap_or("").to_string(), label)
+                    }
+                    "target" => {
+                        self.close();
+                        Outcome::Target(e["target"].as_str().unwrap_or("").to_string(), label)
+                    }
+                    _ => {
+                        let msg = "Opening a Claude session is not built yet".to_string();
+                        self.note = Some(msg.clone());
+                        Outcome::Unavailable(msg)
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the window shows. `settings` is the sanitized `au05` settings (for the header).
+    pub fn view(&mut self, settings: &Value) -> Value {
+        let menu = &settings["menu"];
+        let level = self.level(menu);
+        let profile = settings["profile"].as_str().unwrap_or("");
+        let target = settings["target"].as_str().unwrap_or("claude");
+        let profile_name = settings["profiles"]
+            .as_array()
+            .and_then(|ps| ps.iter().find(|p| p["id"] == profile))
+            .and_then(|p| p["name"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut rows = Vec::new();
+        if !self.path.is_empty() {
+            rows.push(json!({"label": "Back", "type": "back"}));
+        }
+        for e in &level {
+            let t = e["type"].as_str().unwrap_or("");
+            let detail = match t {
+                "action" => {
+                    let a = &e["action"];
+                    match hotkey::entry(a["kind"].as_str().unwrap_or("")) {
+                        Some(x) if x.status != "verified" => "unverified".to_string(),
+                        _ => String::new(),
+                    }
+                }
+                "claudeSession" => "not built yet".to_string(),
+                _ => String::new(),
+            };
+            let current = (t == "profile" && e["profile"] == profile) || (t == "target" && e["target"] == target);
+            rows.push(json!({"label": e["label"], "type": t, "detail": detail, "current": current}));
+        }
+        let mut title = vec!["Quick menu".to_string()];
+        let mut cur = menu.as_array().cloned().unwrap_or_default();
+        for &i in &self.path {
+            if let Some(e) = cur.get(i).cloned() {
+                title.push(e["label"].as_str().unwrap_or("").to_string());
+                cur = e["entries"].as_array().cloned().unwrap_or_default();
+            }
+        }
+        json!({
+            "open": self.open,
+            "title": title,
+            "rows": rows,
+            "highlight": self.highlight,
+            "profile": profile_name,
+            "target": target_name(target),
+            "note": self.note,
+            "closeAfterS": CLOSE_AFTER.as_secs(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The menu's state machine (the one test the brief asks for): open, move with wrap-around, into a
+    /// sub-menu and back, choose, toggle closed, time out, and the reserved session entry.
+    #[test]
+    fn the_quick_menu_opens_moves_chooses_and_closes() {
+        let profiles = vec!["claude".to_string(), "chatgpt".to_string(), "media".to_string()];
+        let menu = sanitize_menu(&default_menu(), &profiles);
+        assert_eq!(menu.as_array().unwrap().len(), 7);
+        let t0 = Instant::now();
+        let mut m = MenuState::default();
+        assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Nothing, "closed: knob turns do nothing");
+        assert_eq!(m.step(&menu, Input::Toggle, t0), Outcome::Opened);
+        assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
+        assert_eq!(m.highlight, 6, "wraps to the last row");
+        assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Moved);
+        assert_eq!(m.highlight, 0);
+        // Into "Switch profile": row 0 is Back, the first profile is highlighted.
+        m.highlight = 3;
+        assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Moved);
+        assert_eq!(m.highlight, 1);
+        let settings = json!({"menu": menu, "profile": "claude", "target": "claude",
+                              "profiles": [{"id": "claude", "name": "Claude"}]});
+        let v = m.view(&settings);
+        assert_eq!(v["title"], json!(["Quick menu", "Switch profile"]));
+        assert_eq!(v["rows"][0]["type"], "back");
+        assert_eq!(v["rows"][1]["current"], true, "the current profile is marked");
+        assert_eq!(v["profile"], "Claude");
+        // Back returns to the sub-menu's row; choosing again and picking ChatGPT switches the profile.
+        assert_eq!(m.step(&menu, Input::Pick(0), t0), Outcome::Moved);
+        assert_eq!(m.highlight, 3);
+        m.step(&menu, Input::Choose, t0);
+        assert_eq!(m.step(&menu, Input::Pick(2), t0), Outcome::Profile("chatgpt".into(), "ChatGPT".into()));
+        assert!(!m.open, "a choice closes the menu");
+        // An action runs after closing; the menu key closes an open menu.
+        m.step(&menu, Input::Toggle, t0);
+        match m.step(&menu, Input::Choose, t0) {
+            Outcome::Run(a, label) => {
+                assert_eq!(a["kind"], "claudeDictation");
+                assert_eq!(label, "Claude dictation");
+            }
+            o => panic!("{o:?}"),
+        }
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(m.step(&menu, Input::Toggle, t0), Outcome::Closed);
+        // About 8 s without input closes it; any input restarts the time.
+        m.step(&menu, Input::Toggle, t0);
+        m.step(&menu, Input::Next, t0 + Duration::from_secs(5));
+        assert!(!m.expired(t0 + Duration::from_secs(12)));
+        assert!(m.expired(t0 + Duration::from_secs(13)));
+        // The reserved session entry stays open with a note; Back at the top closes.
+        let session = json!([{"type": "claudeSession", "label": "Fix the cooler", "session": "abc-123"}]);
+        let mut s = MenuState::default();
+        s.step(&session, Input::Toggle, t0);
+        assert!(matches!(s.step(&session, Input::Choose, t0), Outcome::Unavailable(_)));
+        assert!(s.open);
+        assert_eq!(s.step(&session, Input::Back, t0), Outcome::Closed);
+        // Sanitising drops what the menu cannot run.
+        let bad = json!([{"type": "action", "action": {"kind": "quickMenu"}}, {"type": "action", "action": {"kind": "shell"}},
+                         {"type": "profile", "profile": "gone"}, {"type": "target", "target": "notepad"},
+                         {"type": "submenu", "entries": [{"type": "submenu", "entries": [{"type": "submenu", "entries": []}]}]}]);
+        let clean = sanitize_menu(&bad, &profiles);
+        assert_eq!(clean.as_array().unwrap().len(), 1, "only the sub-menu is kept");
+        assert!(clean[0]["entries"][0]["entries"].as_array().unwrap().is_empty(), "at most three levels");
+    }
+}
