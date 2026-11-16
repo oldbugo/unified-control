@@ -1,6 +1,6 @@
 // Ulanzi AU05 Vibe Key: the General switch, the Home summary and the device page.
 // Settings stored on the key are sent as they are changed (no Save button). UC's own settings
-// (the switch and a UC action per control) are saved in settings.json at once.
+// (the switch and a UC action per key) are saved in settings.json at once.
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="7.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16.5" cy="12" r="1.5"/><path d="M12 4v3"/></svg>';
 export const AU05_ICON=ICON;
@@ -8,9 +8,7 @@ const STATES={
   disabled:'Disabled',starting:'Starting',waiting:'Waiting for the key',connected:'Connected',asleep:'Asleep',
   paused:'Paused',suspended:'Stopped',not_found:'Not plugged in',error:'Error',
 };
-const CONTROLS=[['k1','K1'],['k2','K2'],['k3','K3'],['knobPress','Knob press'],['knobRight','Knob turn right'],['knobLeft','Knob turn left']];
-const ACTIONS={none:'No UC action',hotkey:'Hotkey',media:'Media key',text:'Type text'};
-const MEDIA=['Play / pause','Next track','Previous track','Volume up','Volume down','Mute'];
+const ACTIONS={none:'Nothing (harmless)',claudeDictation:'Start dictation in Claude',chatgptDictation:'Start dictation in ChatGPT (not checked yet)',enter:'Send (Enter)',hotkey:'Custom key combination…'};
 const STANDBY=[[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes'],[600,'10 minutes'],[900,'15 minutes'],[1800,'30 minutes'],[3600,'1 hour']];
 const SLEEP={3600:'1 hour',7200:'2 hours',10800:'3 hours',14400:'4 hours',0:'Never'};
 const errorText=e=>typeof e==='string'?e:e?.error||e?.message||'The Vibe Key request failed';
@@ -108,24 +106,20 @@ export class Au05Panel{
     const dis=name=>off||!this.canSet(name)?' disabled':'';
     const opt=(v,label,sel)=>`<option value="${esc(v)}"${String(v)===String(sel)?' selected':''}>${esc(label)}</option>`;
     const keyRows=(s.keys||[]).map(k=>{
-      const id=`au05-type-${k.key}`;
-      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)} types</strong><p>Now: ${esc(k.label||'Not read yet')}</p></div>
-      <div class="au05-key-controls"><select id="${id}" data-au05-type="${k.key}" aria-label="What ${esc(k.name)} types"${dis('keyTyping')}>
-      ${opt('unknown','Not read yet',k.mode==='unknown'?'unknown':'')}${opt('factory',`Factory default (${k.factory})`,k.mode)}${opt('harmless',`Harmless (types ${k.harmless})`,k.mode)}${opt('keys','Keys…',k.mode)}</select>
-      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${dis('keyTyping')}></div></div>`;
-    }).join('');
-    const actionRows=CONTROLS.map(([key,label])=>{
-      const a=s.actions?.[key]||{kind:'none',value:''};
-      const value=a.kind==='media'?`<select data-au05-action-value="${key}" aria-label="${label} media key"${off?' disabled':''}>${MEDIA.map(m=>opt(m,m,a.value)).join('')}</select>`:
-        a.kind==='none'?'':`<input data-au05-action-value="${key}" maxlength="200" placeholder="${a.kind==='hotkey'?'Ctrl + Enter':'Text to type'}" aria-label="${label} action value" value="${esc(a.value)}"${off?' disabled':''}>`;
-      return `<div class="setting-row"><div><strong>${label}</strong></div><div class="au05-key-controls"><select data-au05-action="${key}" aria-label="UC action for ${label}"${!this.native||s.enabled!==true?' disabled':''}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>${value}</div></div>`;
+      const a=s.actions?.[k.key]||{kind:'none',value:''};
+      const lock=off||!k.canSet?' disabled':'';
+      const hot=k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:'';
+      const uc=k.mode==='uc'?`<select data-au05-action="${k.key}" aria-label="Unified Control action for ${esc(k.name)}"${off?' disabled':''}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>
+        ${a.kind==='hotkey'?`<input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}"${off?' disabled':''}>`:''}${hot}`:'';
+      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)}</strong><p>Types now: ${esc(k.label||'Not read yet')}</p>${k.canSet?'':'<p class="hint">Not yet checked on the real key, so Unified Control does not change it.</p>'}</div>
+      <div class="au05-key-controls"><select data-au05-mode="${k.key}" aria-label="What ${esc(k.name)} does"${lock}>
+      ${k.mode==='unknown'?opt('unknown','Not read yet','unknown'):''}${opt('uc','Unified Control action',k.mode)}${opt('keys','Types keys…',k.mode)}${opt('factory',`Factory default (${k.factory})`,k.mode)}</select>
+      <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${lock}>${uc}</div></div>`;
     }).join('');
     const standby=s.standbyS;const standbyOpts=STANDBY.some(([v])=>v===standby)||standby==null?STANDBY:[...STANDBY,[standby,minutes(standby)]];
     const light=s.light||{};const range=s.lightRange||{modeMax:3,brightnessMax:10};
-    return `<div class="settings-section-heading"><h2>Keys</h2><p>What each key types is stored on the key and works in every app, even when Unified Control is closed. Choose Harmless for a key you do not want to type anything.</p></div>
+    return `<div class="settings-section-heading"><h2>Keys</h2><p>Unified Control action: the key types its own unused code (F19 to F22) and Unified Control runs the action you choose, in any app. Types keys and Factory default are stored on the key and also work when Unified Control is closed. The knob turns keep their factory scroll.</p></div>
     <section class="settings-list">${keyRows||'<div class="setting-row"><p class="hint">Wake the key to read its keys.</p></div>'}</section>
-    <div class="settings-section-heading"><h2>Unified Control actions</h2><p>Unified Control can also run an action when a control is pressed. Set the key to Harmless first, so it does not also type something.</p></div>
-    <section class="settings-list">${actionRows}</section>
     <div class="settings-section-heading"><h2>Power</h2></div>
     <section class="settings-list"><div class="setting-row"><div><strong>Standby time</strong><p>The key sleeps after this much idle time. Press a key to wake it.</p></div>
     <select data-au05-set="standbyTime" aria-label="Standby time"${dis('standbyTime')}>${standby==null?opt('', 'Not read yet',''):''}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select></div>
@@ -142,9 +136,15 @@ export class Au05Panel{
   }
   async change(change){
     this.sending++;this.setNote('Sending to the Vibe Key…');this.paint(true);
-    try{const st=await this.invoke('au05_change',{change});this.state=st;this.setNote('Saved on the Vibe Key.');}
-    catch(error){this.setNote(errorText(error),true);}
+    try{const st=await this.invoke('au05_change',{change});this.state=st;this.setNote('Saved on the Vibe Key.');return true;}
+    catch(error){this.setNote(errorText(error),true);return false;}
     finally{this.sending--;this.paint(true);this.onState();}
+  }
+  // Keys and factory default type on their own, so their UC action is cleared (its hotkey is released).
+  async setMode(key,mode,keys){
+    const ok=await this.change(mode==='keys'?{setting:'keyTyping',key,mode,keys}:{setting:'keyTyping',key,mode});
+    const a=this.state?.actions?.[key];
+    if(ok&&mode!=='uc'&&a&&a.kind!=='none')await this.action(key,'none','');
   }
   async action(control,kind,value){
     try{this.state=await this.invoke('au05_configure',{patch:{action:{control,kind,value}}});this.setNote('Saved.');}
@@ -160,21 +160,15 @@ export class Au05Panel{
     }
     if(e.type!=='change')return false;
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
-    if(t.dataset.au05Type){
-      const key=t.dataset.au05Type,input=this.container.querySelector(`[data-au05-keys="${key}"]`);
+    if(t.dataset.au05Mode){
+      const key=t.dataset.au05Mode,input=this.container.querySelector(`[data-au05-keys="${key}"]`);
       if(t.value==='keys'){input.hidden=false;input.focus();return true;}
-      if(t.value!=='unknown')this.change({setting:'keyTyping',key,mode:t.value});
-      return true;
+      if(t.value==='unknown')return true;
+      this.setMode(key,t.value);return true;
     }
-    if(t.dataset.au05Keys){this.change({setting:'keyTyping',key:t.dataset.au05Keys,mode:'keys',keys:t.value});return true;}
-    if(t.dataset.au05Action){
-      const key=t.dataset.au05Action,kind=t.value;
-      this.action(key,kind,kind==='media'?MEDIA[0]:'');return true;
-    }
-    if(t.dataset.au05ActionValue){
-      const key=t.dataset.au05ActionValue,kind=this.state?.actions?.[key]?.kind||'none';
-      this.action(key,kind,t.value);return true;
-    }
+    if(t.dataset.au05Keys){this.setMode(t.dataset.au05Keys,'keys',t.value);return true;}
+    if(t.dataset.au05Action){this.action(t.dataset.au05Action,t.value,'');return true;}
+    if(t.dataset.au05ActionValue){this.action(t.dataset.au05ActionValue,'hotkey',t.value);return true;}
     return false;
   }
 }

@@ -191,10 +191,23 @@ impl App {
             settings.0["dock"]["enabled"].as_bool().unwrap_or(false),
             settings.0["dock"]["brightness"].as_u64().unwrap_or(50) as u8,
         );
-        let au05 = super::au05::Au05::new(
-            fake,
-            super::au05::native_runner(resource_dir.clone(), self.base.clone(), fake),
-        );
+        // The real hotkey layer is created only for a real key; fake instances use a fake desktop that claims
+        // no hotkey, moves no focus and sends no input.
+        #[cfg(windows)]
+        let desktop: Option<Arc<dyn super::au05_hotkey::Desktop>> = if fake {
+            None
+        } else {
+            super::au05_hotkey::WindowsDesktop::start(super::actions::NativeActions::new(
+                resource_dir.clone(),
+                self.base.clone(),
+                false,
+            ))
+            .ok()
+            .map(|d| d as Arc<dyn super::au05_hotkey::Desktop>)
+        };
+        #[cfg(not(windows))]
+        let desktop = None;
+        let au05 = super::au05::Au05::new(fake, desktop);
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
@@ -613,17 +626,13 @@ impl App {
         let action = patch.get("action");
         if let Some(a) = action {
             let control = a["control"].as_str().unwrap_or("");
-            if !super::au05::CONTROLS.iter().any(|(k, _)| *k == control) {
+            if !super::au05::ACTION_KEYS.iter().any(|(k, _)| *k == control) {
                 return Err(CoreError::new("Unknown Vibe Key control"));
             }
             let kind = a["kind"].as_str().unwrap_or("");
             let value = a["value"].as_str().unwrap_or("");
-            // An empty value is saved while the user is still choosing; it does nothing when pressed.
-            if kind != "none" && !value.is_empty() {
-                super::au05::validate_action(kind, value).map_err(CoreError::new)?;
-            } else if !super::au05::ACTION_KINDS.contains(&kind) {
-                return Err(CoreError::new("Choose a supported action"));
-            }
+            // A custom hotkey with an empty value is saved while the user is still typing; it does nothing.
+            super::au05::validate_action(kind, value).map_err(CoreError::new)?;
         }
         let saved = self
             .settings

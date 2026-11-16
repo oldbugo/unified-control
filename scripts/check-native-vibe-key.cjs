@@ -38,30 +38,34 @@ async function run(){
     assert.equal(saved.au05.enabled,true,'the switch is saved at once');
     st=await until(async()=>{const s=await invoke('au05_state');return s.keys?.[2]?.mode!=='unknown'&&s.micNr?s:null;},'first read of the fake key');
     assert.equal(st.state,'connected');assert.equal(st.fake,true);
-    assert.equal(st.standbyS,600);assert.equal(st.keys[2].mode,'harmless');assert.equal(st.battery.percent,30);
+    assert.equal(st.standbyS,600);assert.equal(st.keys[2].mode,'uc');assert.equal(st.battery.percent,30);
 
     await page.locator('[data-page="vibekey"]').click();
-    await page.waitForSelector('select[data-au05-type="k1"]');
-    await page.locator('select[data-au05-type="k1"]').selectOption('keys');
+    await page.waitForSelector('select[data-au05-mode="k1"]');
+    await page.locator('select[data-au05-mode="k1"]').selectOption('keys');
     const keys=page.locator('input[data-au05-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
     await until(async()=>(await invoke('au05_state')).keys[0].label==='Ctrl + D','K1 typing read back');
     await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
     await until(async()=>(await invoke('au05_state')).standbyS===900,'standby read back');
+    assert.deepEqual((await invoke('au05_test_control',{patch:{op:'state'}})).fake.hotkeysClaimed,[],'no hotkey without an action');
     await page.locator('select[data-au05-action="k3"]').selectOption('hotkey');
     const value=page.locator('input[data-au05-action-value="k3"]');await value.fill('Ctrl + Enter');await value.press('Tab');
     await until(async()=>(await invoke('au05_state')).actions.k3.value==='Ctrl + Enter','K3 UC action saved');
+    assert.equal((await invoke('au05_state')).keys[2].hotkey.state,'ready');
 
     await invoke('au05_test_control',{patch:{op:'click',control:'k3'}});
-    st=await until(async()=>{const s=await invoke('au05_state');return s.events.find(e=>e.control==='K3'&&e.pressed)?s:null;},'K3 event');
-    const ev=st.events.find(e=>e.control==='K3'&&e.pressed);
-    assert.equal(ev.code,'F22');assert.match(ev.action,/hotkey: Ctrl \+ Enter/);
-    await page.waitForFunction(()=>/K3 down/.test(document.getElementById('au05-events')?.textContent||''));
+    st=await until(async()=>{const s=await invoke('au05_state');return s.events.find(e=>e.control==='K3'&&e.action)?s:null;},'K3 hotkey action');
+    const ev=st.events.find(e=>e.control==='K3'&&e.action);
+    assert.equal(ev.code,'F22');assert.equal(ev.action,'ran Ctrl + Enter');
+    await page.waitForFunction(()=>/ran Ctrl \+ Enter/.test(document.getElementById('au05-events')?.textContent||''));
 
     fake=(await invoke('au05_test_control',{patch:{op:'state'}})).fake;
     assert.deepEqual(fake.forbidden,[],'every command was on the allowlist');
     assert.ok(fake.received.includes('01 06 50 00 00 01 02 03 01 02 07'),'K1 Ctrl + D frame as proven');
     assert.ok(fake.received.includes('01 01 2c 02 84 03'),'standby 900 s (the fake log drops trailing zero bytes)');
-    assert.deepEqual(fake.typed,['F22'],'K3 typed only its harmless code');
+    assert.deepEqual(fake.typed,['F22'],'K3 typed only its own code');
+    assert.deepEqual(fake.hotkeysClaimed,[0x85],'only F22 is claimed (fake desktop: nothing real)');
+    assert.deepEqual(fake.actionsRun,['press Ctrl + Enter']);
 
     // A stalling key pauses sending; the app stays responsive.
     await invoke('au05_test_control',{patch:{op:'stallWrites',value:true}});
@@ -83,8 +87,9 @@ async function run(){
 
     await page.locator('[data-page="general"]').click();await page.locator('#au05-enabled').uncheck();
     await until(async()=>(await invoke('au05_state')).state==='disabled','disable');
+    assert.deepEqual((await invoke('au05_test_control',{patch:{op:'state'}})).fake.hotkeysClaimed,[],'disable releases the hotkeys');
     assert.deepEqual(errors,[]);
-    console.log('PASS: quiet native Vibe Key; opt-in switch saved; fake key read; key typing and standby changes read back; UC action on the private event; allowlist only; stall pause and Reconnect; disable. No physical device opened.');
+    console.log('PASS: quiet native Vibe Key; opt-in switch saved; fake key read; key typing and standby changes read back; UC action through the claimed F22 hotkey (fake desktop) and release on disable; allowlist only; stall pause and Reconnect; disable. No physical device opened.');
     console.log(`Isolated test data: ${home}`);
     await browser.close().catch(()=>{});
   }finally{

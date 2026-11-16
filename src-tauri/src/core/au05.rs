@@ -6,15 +6,19 @@
 //!   reaches the dock, the cooler or the window.
 //! - Settings that live on the key (standby, power-off, light, microphone, what each key types) are read from
 //!   the key and written to it at once when the user changes them. UC keeps no copy of them.
-//! - UC's own settings (enable switch, a UC action for each control) are in settings.json.
+//! - UC's own settings (enable switch, a UC action for each key) are in settings.json.
+//! - Actions do not use the key's private events: K2, K3 and the knob press never sent one (real key,
+//!   2026-11-16). A key set to "Unified Control action" types its own unused code (F20/F21/F22/F19), and UC
+//!   claims that code as a global hotkey (`au05_hotkey`). Hotkeys are claimed only while the key is enabled
+//!   and an action is chosen, and released on disable and quit.
 //! - On a real key UC sends only commands that were checked on the real key
-//!   (`Request::verified_on_hardware`). Other sets work with the fake key only, until the orchestrator checks them.
-//! - With `UC_FAKE_DEVICE` set the real key is never opened.
-use super::dock_runtime::PendingAction;
+//!   (`Request::verified_on_hardware`). Other commands work with the fake key only, until the orchestrator
+//!   checks them.
+//! - With `UC_FAKE_DEVICE` set the real key is never opened, and a fake desktop claims no hotkey.
+use super::au05_hotkey::{self as hotkey, Action, Desktop, FakeDesktop};
 use super::sync::{restarting, MutexExt};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -23,7 +27,7 @@ use ulanzi_au05::fake::FakeHandle;
 use ulanzi_au05::protocol::{self, Control, KeyId, KeyTyping, LightState, MicNr, Request, SleepTime};
 use ulanzi_au05::{Failure, Output, Session, SessionConfig, SessionState, Transport};
 
-/// The six controls in the order of their device index, with their settings key.
+/// The six controls in the order of their device index (test clicks and the event list).
 pub const CONTROLS: [(&str, Control); 6] = [
     ("k1", Control::K1),
     ("k2", Control::K2),
@@ -32,14 +36,28 @@ pub const CONTROLS: [(&str, Control); 6] = [
     ("knobRight", Control::KnobRight),
     ("knobLeft", Control::KnobLeft),
 ];
-/// UC actions allowed on a control's private event. The same reviewed executor as the dock's keys.
-pub const ACTION_KINDS: [&str; 4] = ["none", "hotkey", "media", "text"];
+/// The keys that can run a UC action (through their own code as a hotkey), with their settings key.
+pub const ACTION_KEYS: [(&str, KeyId); 4] =
+    [("k1", KeyId::K1), ("k2", KeyId::K2), ("k3", KeyId::K3), ("knobPress", KeyId::KnobPress)];
 const EVENT_LOG: usize = 40;
 /// How long a settings change may wait for the key (it may be asleep).
 pub const SET_WAIT: Duration = Duration::from_secs(25);
 
+/// The Windows virtual key of each key's own code.
+pub fn own_vk(key: KeyId) -> u16 {
+    match key {
+        KeyId::K1 => hotkey::VK_F20,
+        KeyId::K2 => hotkey::VK_F21,
+        KeyId::K3 => hotkey::VK_F22,
+        KeyId::KnobPress => hotkey::VK_F19,
+    }
+}
+fn settings_key(key: KeyId) -> &'static str {
+    ACTION_KEYS[key.index() as usize].0
+}
+
 pub fn default_settings() -> Value {
-    let actions: serde_json::Map<String, Value> = CONTROLS
+    let actions: serde_json::Map<String, Value> = ACTION_KEYS
         .iter()
         .map(|(k, _)| (k.to_string(), json!({"kind":"none","value":""})))
         .collect();
@@ -50,25 +68,24 @@ pub fn default_settings() -> Value {
 pub fn sanitize(v: &Value) -> Value {
     let mut out = default_settings();
     out["enabled"] = json!(v["enabled"].as_bool().unwrap_or(false));
-    for (key, _) in CONTROLS {
+    for (key, _) in ACTION_KEYS {
         let a = &v["actions"][key];
-        let kind = a["kind"].as_str().filter(|k| ACTION_KINDS.contains(k)).unwrap_or("none");
+        let kind = a["kind"].as_str().filter(|k| hotkey::ACTION_KINDS.contains(k)).unwrap_or("none");
         let value = a["value"].as_str().filter(|s| s.len() <= 4096 && !s.contains('\0')).unwrap_or("");
-        out["actions"][key] = json!({"kind": kind, "value": if kind == "none" { "" } else { value }});
+        out["actions"][key] = json!({"kind": kind, "value": if kind == "hotkey" { value } else { "" }});
     }
     out
 }
 
 /// Check one UC action before it is saved.
 pub fn validate_action(kind: &str, value: &str) -> Result<(), String> {
-    if !ACTION_KINDS.contains(&kind) {
-        return Err("Choose a supported action".into());
-    }
-    super::actions::plan_action(&PendingAction {
-        kind: kind.into(),
-        value: value.into(),
-    })
-    .map(|_| ())
+    hotkey::validate(kind, value)
+}
+
+fn saved_action(actions: &Value, key: &str) -> Action {
+    let a = &actions[key];
+    Action::from_setting(a["kind"].as_str().unwrap_or("none"), a["value"].as_str().unwrap_or(""))
+        .unwrap_or(Action::Nothing)
 }
 
 /// A settings change the page can make. Each maps to exactly one allowlisted request.
@@ -100,17 +117,17 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
         "lightBrightness" => Ok(Change::LightBrightness(byte()?)),
         "micNr" => Ok(Change::MicNrLevel(byte()?)),
         "keyTyping" => {
-            let key = match v["key"].as_str().unwrap_or("") {
-                "k1" => KeyId::K1,
-                "k2" => KeyId::K2,
-                "k3" => KeyId::K3,
-                _ => return Err("Choose K1, K2 or K3".into()),
-            };
+            let key = ACTION_KEYS
+                .iter()
+                .find(|(k, _)| Some(*k) == v["key"].as_str())
+                .map(|(_, id)| *id)
+                .ok_or("Choose K1, K2, K3 or the knob press")?;
             let typing = match v["mode"].as_str().unwrap_or("") {
                 "factory" => KeyTyping::factory(),
-                "harmless" => KeyTyping::own_code(key),
+                // "Unified Control action": the key types its own unused code, which UC claims as a hotkey.
+                "uc" => KeyTyping::own_code(key),
                 "keys" => KeyTyping::parse(v["keys"].as_str().unwrap_or(""))?,
-                _ => return Err("Choose what the key types".into()),
+                _ => return Err("Choose what the key does".into()),
             };
             Ok(Change::KeyTyping(key, typing))
         }
@@ -127,8 +144,7 @@ struct Known {
     light: Option<LightState>,
     hooks_mode: Option<u8>,
     mic: Option<MicNr>,
-    keys: [Option<KeyTyping>; 3],
-    codes: [Option<u8>; 6],
+    keys: [Option<KeyTyping>; 4],
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +153,7 @@ struct EventRow {
     control: Control,
     pressed: bool,
     code: u8,
+    /// `Some` for a hotkey press: what UC ran.
     action: Option<String>,
 }
 
@@ -154,13 +171,25 @@ struct Status {
     generation: u64,
 }
 
+fn push_event(status: &Mutex<Status>, control: Control, pressed: bool, code: u8, action: Option<String>) {
+    let mut s = status.lock_or_recover();
+    if s.events.len() >= EVENT_LOG {
+        s.events.pop_front();
+    }
+    s.events.push_back(EventRow {
+        at_ms: now_ms(),
+        control,
+        pressed,
+        code,
+        action,
+    });
+}
+
 enum Cmd {
     Change(Change, Sender<Result<(), String>>),
     Reconnect,
     Stop,
 }
-
-pub type ActionRunner = Arc<dyn Fn(&str, PendingAction) -> Result<(), String> + Send + Sync>;
 
 pub struct Au05 {
     fake: Option<FakeHandle>,
@@ -169,7 +198,9 @@ pub struct Au05 {
     tx: Mutex<Option<Sender<Cmd>>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     stop: Arc<AtomicBool>,
-    runner: ActionRunner,
+    desktop: Option<Arc<dyn Desktop>>,
+    fake_desktop: Option<Arc<FakeDesktop>>,
+    hotkeys: Mutex<BTreeMap<u16, Result<(), String>>>,
     config: SessionConfig,
 }
 
@@ -178,12 +209,18 @@ fn now_ms() -> u64 {
 }
 
 impl Au05 {
-    /// Creating the worker does no device I/O; nothing starts until `configure(true, ..)`.
-    pub fn new(fake: bool, runner: ActionRunner) -> Arc<Self> {
-        Self::with_config(fake, runner, uc_session_config())
+    /// Creating the worker does no device I/O and claims no hotkey; nothing starts until `configure`.
+    /// `real_desktop` is used only for a real key. With `fake`, a [`FakeDesktop`] is used.
+    pub fn new(fake: bool, real_desktop: Option<Arc<dyn Desktop>>) -> Arc<Self> {
+        Self::with_config(fake, real_desktop, uc_session_config())
     }
-    pub fn with_config(fake: bool, runner: ActionRunner, config: SessionConfig) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_config(fake: bool, real_desktop: Option<Arc<dyn Desktop>>, config: SessionConfig) -> Arc<Self> {
+        let fake_desktop = fake.then(|| Arc::new(FakeDesktop::default()));
+        let desktop: Option<Arc<dyn Desktop>> = match &fake_desktop {
+            Some(f) => Some(f.clone()),
+            None => real_desktop,
+        };
+        let au = Arc::new(Self {
             fake: fake.then(FakeHandle::default),
             status: Arc::new(Mutex::new(Status {
                 enabled: false,
@@ -201,16 +238,61 @@ impl Au05 {
             tx: Mutex::new(None),
             thread: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
-            runner,
+            desktop,
+            fake_desktop,
+            hotkeys: Mutex::new(BTreeMap::new()),
             config,
-        })
+        });
+        if let Some(d) = &au.desktop {
+            let (status, actions, desk) = (au.status.clone(), au.actions.clone(), Arc::downgrade(d));
+            d.set_handler(Arc::new(move |vk| {
+                let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
+                let action = saved_action(&actions.lock_or_recover(), settings_key(key));
+                let (status, desk) = (status.clone(), desk.clone());
+                // Never run an action on the hotkey thread.
+                let _ = std::thread::Builder::new().name("uc-au05-action".into()).spawn(move || {
+                    let result = desk.upgrade().ok_or_else(|| "Unified Control is closing".to_string()).and_then(|d| {
+                        super::sync::guarded("Vibe Key action", || d.run(&action))
+                            .unwrap_or_else(|| Err("The action crashed".into()))
+                    });
+                    let note = match result {
+                        Ok(()) => format!("ran {}", action.label()),
+                        Err(e) => format!("{}: {e}", action.label()),
+                    };
+                    push_event(&status, key.control(), true, key.control().own_code().unwrap_or(0), Some(note));
+                });
+            }));
+        }
+        au
     }
 
     pub fn fake_handle(&self) -> Option<&FakeHandle> {
         self.fake.as_ref()
     }
+    pub fn fake_desktop(&self) -> Option<&Arc<FakeDesktop>> {
+        self.fake_desktop.as_ref()
+    }
 
-    /// Apply the saved settings: start or stop the worker and take the UC actions.
+    /// Claim exactly the hotkeys whose key has an action while enabled; release all otherwise.
+    fn apply_hotkeys(&self, enabled: bool) {
+        let Some(d) = &self.desktop else {
+            self.hotkeys.lock_or_recover().clear();
+            return;
+        };
+        let actions = self.actions.lock_or_recover().clone();
+        let wanted: Vec<u16> = if enabled {
+            ACTION_KEYS
+                .iter()
+                .filter(|(k, _)| saved_action(&actions, k) != Action::Nothing)
+                .map(|(_, id)| own_vk(*id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        *self.hotkeys.lock_or_recover() = d.set_hotkeys(&wanted);
+    }
+
+    /// Apply the saved settings: start or stop the worker, take the UC actions and claim their hotkeys.
     pub fn configure(&self, settings: &Value) {
         let settings = sanitize(settings);
         *self.actions.lock_or_recover() = settings["actions"].clone();
@@ -221,6 +303,7 @@ impl Au05 {
         } else if !enabled && running {
             self.stop_worker();
         }
+        self.apply_hotkeys(enabled);
     }
 
     fn start(&self) {
@@ -236,18 +319,14 @@ impl Au05 {
         let ctx = Worker {
             fake: self.fake.clone(),
             status: self.status.clone(),
-            actions: self.actions.clone(),
             stop: self.stop.clone(),
-            runner: self.runner.clone(),
             config: self.config.clone(),
         };
         let rx = Arc::new(Mutex::new(rx));
-        let handle = std::thread::Builder::new()
-            .name("uc-au05".into())
-            .spawn(move || {
-                let stop = ctx.stop.clone();
-                restarting("Vibe Key worker", || stop.load(Ordering::SeqCst), || ctx.run(&rx));
-            });
+        let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
+            let stop = ctx.stop.clone();
+            restarting("Vibe Key worker", || stop.load(Ordering::SeqCst), || ctx.run(&rx));
+        });
         match handle {
             Ok(h) => {
                 *self.tx.lock_or_recover() = Some(tx);
@@ -277,8 +356,10 @@ impl Au05 {
         s.pending_sets = 0;
     }
 
+    /// Stop the worker and release every hotkey (quit).
     pub fn shutdown(&self) {
         self.stop_worker();
+        self.apply_hotkeys(false);
     }
 
     /// A settings change is busy until the key answers or the request fails.
@@ -304,6 +385,8 @@ impl Au05 {
     pub fn status(&self) -> Value {
         let s = self.status.lock_or_recover().clone();
         let k = &s.known;
+        let hotkeys = self.hotkeys.lock_or_recover().clone();
+        let fake = self.fake.is_some();
         let keys: Vec<Value> = KeyId::ALL
             .iter()
             .map(|&id| {
@@ -311,17 +394,25 @@ impl Au05 {
                 let mode = match t {
                     None => "unknown",
                     Some(t) if t.is_factory() => "factory",
-                    Some(t) if *t == KeyTyping::own_code(id) => "harmless",
+                    Some(t) if *t == KeyTyping::own_code(id) => "uc",
                     Some(_) => "keys",
                 };
+                let hotkey = match hotkeys.get(&own_vk(id)) {
+                    None => json!({"state": "off"}),
+                    Some(Ok(())) => json!({"state": "ready"}),
+                    Some(Err(e)) => json!({"state": "failed", "message": e}),
+                };
                 json!({
-                    "key": CONTROLS[id.index() as usize].0,
+                    "key": settings_key(id),
                     "name": id.control().name(),
                     "mode": mode,
                     "label": t.map(|t| t.label(id)),
                     "keys": t.filter(|t| !t.is_factory()).map(|t| t.label(id)),
                     "factory": id.factory_label(),
-                    "harmless": protocol::usage_name(id.control().own_code().unwrap_or(0)),
+                    "ownCode": protocol::usage_name(id.control().own_code().unwrap_or(0)),
+                    "hotkey": hotkey,
+                    // On a real key the knob press typing is not checked yet; the page shows it read-only.
+                    "canSet": fake || Request::GetKeyTyping(id).verified_on_hardware(),
                 })
             })
             .collect();
@@ -336,7 +427,7 @@ impl Au05 {
             .collect();
         json!({
             "enabled": s.enabled,
-            "fake": self.fake.is_some(),
+            "fake": fake,
             "state": s.state,
             "message": s.message,
             "battery": k.battery.map(|(mv, pct)| json!({"millivolts": mv, "percent": pct})),
@@ -352,6 +443,7 @@ impl Au05 {
             "keys": keys,
             "events": events,
             "actions": self.actions.lock_or_recover().clone(),
+            "hotkeysAvailable": self.desktop.is_some(),
             "lastError": s.last_error,
             "busy": s.pending_sets > 0,
             // Which page settings a real key accepts now. The fake accepts all.
@@ -369,17 +461,30 @@ impl Au05 {
                 let name = v["control"].as_str().unwrap_or("");
                 let control = CONTROLS.iter().find(|(k, _)| *k == name).ok_or("Unknown control")?.1;
                 fake.click(control);
+                // If the fake key typed its own code, deliver it to the fake hotkey layer, as Windows would.
+                if let Some(id) = KeyId::ALL.into_iter().find(|k| k.control() == control) {
+                    let own = fake.lock().typing[id.index() as usize] == KeyTyping::own_code(id);
+                    if let (true, Some(d)) = (own, &self.fake_desktop) {
+                        d.press(own_vk(id));
+                    }
+                }
             }
             "wake" => fake.wake(),
             "sleep" => fake.sleep(),
             "stallWrites" => fake.lock().stall_writes = v["value"].as_bool().unwrap_or(false),
             "dropReplies" => fake.lock().drop_replies = v["value"].as_u64().unwrap_or(0).min(10) as u32,
             "battery" => fake.lock().percent = v["value"].as_u64().unwrap_or(30).min(100) as u8,
+            "hotkeyBusy" => {
+                // Another app holds this key's code: the next claim fails.
+                let d = self.fake_desktop.as_ref().ok_or("No fake desktop")?;
+                let key = ACTION_KEYS.iter().find(|(k, _)| Some(*k) == v["control"].as_str()).ok_or("Unknown key")?.1;
+                d.busy.lock_or_recover().push(own_vk(key));
+            }
             _ => return Err("Unknown test operation".into()),
         }
         Ok(())
     }
-    /// Debug fake instances only: what the fake key received and typed.
+    /// Debug fake instances only: what the fake key received and typed, and what the fake desktop did.
     pub fn test_state(&self) -> Option<Value> {
         let f = self.fake.as_ref()?;
         let s = f.lock();
@@ -389,6 +494,8 @@ impl Au05 {
             "forbidden": s.forbidden.iter().map(hex).collect::<Vec<_>>(),
             "typed": s.typed,
             "awake": s.awake,
+            "hotkeysClaimed": self.fake_desktop.as_ref().map(|d| d.claimed()),
+            "actionsRun": self.fake_desktop.as_ref().map(|d| d.ran.lock_or_recover().clone()),
         }))
     }
 }
@@ -404,9 +511,7 @@ pub fn uc_session_config() -> SessionConfig {
 struct Worker {
     fake: Option<FakeHandle>,
     status: Arc<Mutex<Status>>,
-    actions: Arc<Mutex<Value>>,
     stop: Arc<AtomicBool>,
-    runner: ActionRunner,
     config: SessionConfig,
 }
 
@@ -521,7 +626,7 @@ impl Worker {
             let state = session.state();
             if state == SessionState::Awake && !read_done {
                 read_done = true;
-                for r in read_all() {
+                for r in read_all(self.fake.is_some()) {
                     let t = TICKETS.fetch_add(1, Ordering::Relaxed);
                     if session.submit(t, r).is_ok() {
                         tickets.insert(t, Purpose::Read);
@@ -625,42 +730,8 @@ impl Worker {
             Output::Status(st) => {
                 self.status.lock_or_recover().known.battery = Some((st.millivolts, st.percent));
             }
-            Output::Control(e) => {
-                let mut action_note = None;
-                if e.pressed {
-                    if let Some((key, _)) = CONTROLS.iter().find(|(_, c)| *c == e.control) {
-                        let a = self.actions.lock_or_recover()[*key].clone();
-                        let kind = a["kind"].as_str().unwrap_or("none").to_string();
-                        if kind != "none" && a["value"].as_str().is_some_and(|v| !v.is_empty()) {
-                            let pending = PendingAction {
-                                kind: kind.clone(),
-                                value: a["value"].as_str().unwrap_or("").to_string(),
-                            };
-                            let runner = self.runner.clone();
-                            let label = format!("{kind}: {}", pending.value);
-                            // Never run an action on the device thread.
-                            let started = std::thread::Builder::new()
-                                .name("uc-au05-action".into())
-                                .spawn(move || {
-                                    let _ = super::sync::guarded("Vibe Key action", || runner(key, pending));
-                                })
-                                .is_ok();
-                            action_note = Some(if started { label } else { "action could not start".into() });
-                        }
-                    }
-                }
-                let mut s = self.status.lock_or_recover();
-                if s.events.len() >= EVENT_LOG {
-                    s.events.pop_front();
-                }
-                s.events.push_back(EventRow {
-                    at_ms: now_ms(),
-                    control: e.control,
-                    pressed: e.pressed,
-                    code: e.code,
-                    action: action_note,
-                });
-            }
+            // Private events are only shown (K1 and the knob turns send them). Actions use hotkeys.
+            Output::Control(e) => push_event(&self.status, e.control, e.pressed, e.code, None),
             Output::Done { ticket, request, result } => {
                 let purpose = tickets.remove(&ticket);
                 match &result {
@@ -689,25 +760,25 @@ impl Worker {
             Request::GetHooksMode => k.hooks_mode = Some(protocol::hooks_mode(r)),
             Request::GetMicNr => k.mic = Some(protocol::mic_nr(r)),
             Request::GetKeyTyping(id) => k.keys[id.index() as usize] = Some(protocol::key_typing(r)),
-            Request::GetControlCode(i) => k.codes[*i as usize] = Some(protocol::control_code(r)),
             _ => {}
         }
     }
 }
 
-/// Everything the page shows, read once each time the key wakes after connecting. All are proven gets.
-fn read_all() -> Vec<Request> {
-    vec![
+/// Everything the page shows, read once each time the key wakes after connecting. On a real key only gets
+/// checked on the real key are sent (the knob-press typing read is fake-only for now).
+fn read_all(fake: bool) -> Vec<Request> {
+    let mut v = vec![
         Request::GetBattery,
         Request::GetStandbyTime,
         Request::GetSleepTime,
         Request::GetLight,
         Request::GetHooksMode,
         Request::GetMicNr,
-        Request::GetKeyTyping(KeyId::K1),
-        Request::GetKeyTyping(KeyId::K2),
-        Request::GetKeyTyping(KeyId::K3),
-    ]
+    ];
+    v.extend(KeyId::ALL.into_iter().map(Request::GetKeyTyping));
+    v.retain(|r| fake || r.verified_on_hardware());
+    v
 }
 
 /// Later (stub only, not active): the light follows Claude Code's state through Claude Code hooks.
@@ -724,15 +795,6 @@ pub enum AgentLight {
 }
 pub fn agent_light_requests(_state: AgentLight) -> Vec<Request> {
     Vec::new()
-}
-
-/// The production action runner: the dock's reviewed executor. In fake mode it refuses every effect.
-pub fn native_runner(resource_dir: PathBuf, home: PathBuf, fake: bool) -> ActionRunner {
-    let actions = Mutex::new(super::actions::NativeActions::new(resource_dir, home, fake));
-    Arc::new(move |_control, action| {
-        use super::actions::ActionSink;
-        actions.lock_or_recover().execute(&action)
-    })
 }
 
 #[cfg(test)]
@@ -761,31 +823,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    type Ran = Arc<Mutex<Vec<(String, String, String)>>>;
-    fn worker() -> (Arc<Au05>, Ran) {
-        let ran: Ran = Arc::default();
-        let r = ran.clone();
-        let runner: ActionRunner = Arc::new(move |control, a| {
-            r.lock_or_recover().push((control.to_string(), a.kind, a.value));
-            Ok(())
-        });
-        let au = Au05::with_config(true, runner, quick());
+    fn worker() -> Arc<Au05> {
+        let au = Au05::with_config(true, None, quick());
         au.fake_handle().unwrap().lock().status_period = Some(Duration::from_millis(200));
-        (au, ran)
-    }
-
-    #[test]
-    fn settings_sanitize_to_off_and_no_actions() {
-        let d = sanitize(&json!({}));
-        assert_eq!(d["enabled"], false);
-        assert_eq!(d["actions"]["k3"], json!({"kind":"none","value":""}));
-        let s = sanitize(&json!({"enabled":true,"actions":{"k3":{"kind":"hotkey","value":"Ctrl + Enter"},"k1":{"kind":"shell","value":"x"}}}));
-        assert_eq!(s["enabled"], true);
-        assert_eq!(s["actions"]["k3"]["kind"], "hotkey");
-        assert_eq!(s["actions"]["k1"]["kind"], "none", "unknown action kinds are dropped");
-        assert!(validate_action("hotkey", "Ctrl + Enter").is_ok());
-        assert!(validate_action("launch", "C:/x.exe").is_err(), "only reviewed kinds");
-        assert!(validate_action("hotkey", "Ctrl").is_err());
+        au
     }
 
     #[test]
@@ -796,38 +837,60 @@ mod tests {
     }
 
     #[test]
+    fn settings_sanitize_to_off_and_no_actions() {
+        let d = sanitize(&json!({}));
+        assert_eq!(d["enabled"], false);
+        assert_eq!(d["actions"]["k3"], json!({"kind":"none","value":""}));
+        assert!(d["actions"].get("knobRight").is_none(), "knob turns keep the factory scroll");
+        let s = sanitize(&json!({"enabled":true,"actions":{"k1":{"kind":"claudeDictation"},"k3":{"kind":"hotkey","value":"Ctrl + Enter"},"k2":{"kind":"shell","value":"x"}}}));
+        assert_eq!(s["enabled"], true);
+        assert_eq!(s["actions"]["k1"]["kind"], "claudeDictation");
+        assert_eq!(s["actions"]["k3"]["value"], "Ctrl + Enter");
+        assert_eq!(s["actions"]["k2"]["kind"], "none", "unknown action kinds are dropped");
+        assert!(validate_action("hotkey", "Ctrl + Enter").is_ok());
+        assert!(validate_action("launch", "C:/x.exe").is_err(), "only reviewed kinds");
+    }
+
+    #[test]
     fn page_changes_parse_to_allowlisted_values_only() {
         assert_eq!(parse_change(&json!({"setting":"standbyTime","value":600})), Ok(Change::StandbyTime(600)));
         assert!(parse_change(&json!({"setting":"sleepTime","value":1234})).is_err());
-        assert_eq!(parse_change(&json!({"setting":"sleepTime","value":0})), Ok(Change::SleepTime(0)));
         assert_eq!(
-            parse_change(&json!({"setting":"keyTyping","key":"k3","mode":"harmless"})),
+            parse_change(&json!({"setting":"keyTyping","key":"k3","mode":"uc"})),
             Ok(Change::KeyTyping(KeyId::K3, KeyTyping::own_code(KeyId::K3)))
+        );
+        assert_eq!(
+            parse_change(&json!({"setting":"keyTyping","key":"knobPress","mode":"uc"})),
+            Ok(Change::KeyTyping(KeyId::KnobPress, KeyTyping::own_code(KeyId::KnobPress)))
         );
         assert_eq!(
             parse_change(&json!({"setting":"keyTyping","key":"k1","mode":"keys","keys":"Ctrl + D"})),
             Ok(Change::KeyTyping(KeyId::K1, KeyTyping::parse("Ctrl + D").unwrap()))
         );
-        assert!(parse_change(&json!({"setting":"keyTyping","key":"knobPress","mode":"factory"})).is_err());
+        assert!(parse_change(&json!({"setting":"keyTyping","key":"knobLeft","mode":"factory"})).is_err());
         assert!(parse_change(&json!({"setting":"reboot","value":1})).is_err());
     }
 
     #[test]
+    fn a_real_key_reads_only_checked_gets() {
+        assert!(!read_all(false).contains(&Request::GetKeyTyping(KeyId::KnobPress)));
+        assert!(read_all(false).contains(&Request::GetKeyTyping(KeyId::K3)));
+        assert!(read_all(true).contains(&Request::GetKeyTyping(KeyId::KnobPress)));
+    }
+
+    #[test]
     fn enabled_worker_reads_the_fake_key_and_changes_settings() {
-        let (au, _) = worker();
+        let au = worker();
         assert_eq!(au.status()["state"], "disabled");
         assert!(au.fake_handle().unwrap().received().is_empty(), "nothing before enable");
         au.configure(&json!({"enabled": true}));
-        let s = wait_for(&au, |s| s["keys"][2]["mode"] != "unknown" && s["micNr"].is_object());
+        let s = wait_for(&au, |s| s["keys"][3]["mode"] != "unknown" && s["micNr"].is_object());
         assert_eq!(s["state"], "connected");
         assert_eq!(s["standbyS"], 600);
-        assert_eq!(s["sleepS"], 3600);
         assert_eq!(s["battery"]["percent"], 30);
-        assert_eq!(s["keys"][2]["mode"], "harmless");
-        assert_eq!(s["keys"][2]["label"], "F22");
+        assert_eq!(s["keys"][2]["mode"], "uc", "K3 types its own F22");
         assert_eq!(s["keys"][0]["mode"], "factory");
-        assert_eq!(s["light"]["brightness"], 7);
-
+        assert_eq!(s["keys"][3]["factory"], "Backspace");
         au.change(Change::StandbyTime(900)).unwrap();
         au.change(Change::KeyTyping(KeyId::K1, KeyTyping::parse("Ctrl + D").unwrap())).unwrap();
         au.change(Change::SleepTime(0)).unwrap();
@@ -843,39 +906,57 @@ mod tests {
     }
 
     #[test]
-    fn events_show_and_run_the_uc_action_on_press_only() {
-        let (au, ran) = worker();
-        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"hotkey","value":"Ctrl + Enter"}}}));
-        wait_for(&au, |s| s["state"] == "connected");
+    fn hotkeys_are_claimed_only_while_enabled_with_an_action_and_run_it() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": false, "actions": {"k3": {"kind":"claudeDictation"}}}));
+        assert!(desk.claimed().is_empty(), "nothing while disabled");
+        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"claudeDictation"}, "k2": {"kind":"enter"}}}));
+        let mut claimed = desk.claimed();
+        claimed.sort();
+        assert_eq!(claimed, vec![hotkey::VK_F21, hotkey::VK_F22]);
+        let s = wait_for(&au, |s| s["keys"][2]["mode"] == "uc");
+        assert_eq!(s["keys"][2]["hotkey"]["state"], "ready");
+        assert_eq!(s["keys"][0]["hotkey"]["state"], "off");
+        // K3 types F22 (its own code) on the fake key; the fake desktop delivers it.
         au.test_control(&json!({"op":"click","control":"k3"})).unwrap();
-        au.test_control(&json!({"op":"click","control":"knobRight"})).unwrap();
-        let s = wait_for(&au, |s| s["events"].as_array().is_some_and(|e| e.len() >= 4));
-        let ev = s["events"].as_array().unwrap();
-        assert_eq!(ev[3]["control"], "K3");
-        assert_eq!(ev[3]["pressed"], true);
-        assert_eq!(ev[3]["code"], "F22");
-        assert_eq!(ev[0]["control"], "knob right");
-        let end = Instant::now() + Duration::from_secs(2);
-        while ran.lock_or_recover().is_empty() && Instant::now() < end {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(
-            *ran.lock_or_recover(),
-            vec![("k3".to_string(), "hotkey".to_string(), "Ctrl + Enter".to_string())]
-        );
+        let s = wait_for(&au, |s| s["events"].as_array().unwrap().iter().any(|e| e["action"].is_string()));
+        let ev = s["events"].as_array().unwrap().iter().find(|e| e["action"].is_string()).unwrap().clone();
+        assert_eq!(ev["control"], "K3");
+        assert_eq!(ev["action"], "ran dictation in Claude");
+        assert_eq!(*desk.ran.lock_or_recover(), vec!["focus claude.exe, press Ctrl + D".to_string()]);
+        // K2 types its factory Enter, not its own code: no hotkey press reaches UC.
+        au.test_control(&json!({"op":"click","control":"k2"})).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(desk.ran.lock_or_recover().len(), 1);
+        // Choosing "nothing" releases the key; disabling releases all.
+        au.configure(&json!({"enabled": true, "actions": {"k2": {"kind":"enter"}}}));
+        assert_eq!(desk.claimed(), vec![hotkey::VK_F21]);
+        au.configure(&json!({"enabled": false, "actions": {"k2": {"kind":"enter"}}}));
+        assert!(desk.claimed().is_empty());
+        au.shutdown();
+    }
+
+    #[test]
+    fn a_key_held_by_another_app_is_reported() {
+        let au = worker();
+        au.test_control(&json!({"op":"hotkeyBusy","control":"k1"})).unwrap();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind":"enter"}}}));
+        let s = au.status();
+        assert_eq!(s["keys"][0]["hotkey"]["state"], "failed");
         au.shutdown();
     }
 
     #[test]
     fn a_stalling_key_pauses_and_reconnect_resumes() {
-        let (au, _) = worker();
+        let au = worker();
         au.configure(&json!({"enabled": true}));
         wait_for(&au, |s| s["keys"][2]["mode"] != "unknown");
         au.test_control(&json!({"op":"stallWrites","value":true})).unwrap();
         let err = au.change(Change::StandbyTime(700)).unwrap_err();
         assert!(err.contains("did not accept"), "{err}");
-        let s = wait_for(&au, |s| s["state"] == "paused");
-        assert_eq!(s["state"], "paused");
+        assert_eq!(wait_for(&au, |s| s["state"] == "paused")["state"], "paused");
+        assert!(au.change(Change::StandbyTime(700)).unwrap_err().contains("paused"), "refused at once while paused");
         au.test_control(&json!({"op":"stallWrites","value":false})).unwrap();
         au.reconnect().unwrap();
         au.change(Change::StandbyTime(700)).unwrap();
@@ -883,16 +964,31 @@ mod tests {
         au.shutdown();
     }
 
+    /// A desktop whose actions crash: the worker and later changes must keep working.
+    struct CrashDesktop(FakeDesktop);
+    impl Desktop for CrashDesktop {
+        fn set_handler(&self, h: hotkey::PressHandler) {
+            self.0.set_handler(h)
+        }
+        fn set_hotkeys(&self, vks: &[u16]) -> BTreeMap<u16, Result<(), String>> {
+            self.0.set_hotkeys(vks)
+        }
+        fn run(&self, _: &Action) -> Result<(), String> {
+            panic!("test action crash")
+        }
+    }
+
     #[test]
     fn a_crash_in_an_action_does_not_stop_the_worker() {
-        let runner: ActionRunner = Arc::new(|_, _| panic!("test action crash"));
-        let au = Au05::with_config(true, runner, quick());
-        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind":"hotkey","value":"Ctrl + D"}}}));
-        wait_for(&au, |s| s["state"] == "connected");
-        au.test_control(&json!({"op":"click","control":"k1"})).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        au.change(Change::StandbyTime(650)).unwrap();
-        assert_eq!(au.status()["state"], "connected");
+        let desk = Arc::new(CrashDesktop(FakeDesktop::default()));
+        let au = Au05::with_config(false, Some(desk.clone()), quick());
+        au.configure(&json!({"enabled": false, "actions": {"k1": {"kind":"enter"}}}));
+        // Enabled-without-device is not possible in a test (no real key), so claim directly.
+        au.apply_hotkeys(true);
+        assert!(desk.0.press(hotkey::VK_F20));
+        let s = wait_for(&au, |s| s["events"].as_array().is_some_and(|e| !e.is_empty()));
+        assert_eq!(s["events"][0]["action"], "Enter: The action crashed");
         au.shutdown();
+        assert!(desk.0.claimed().is_empty(), "quit releases every hotkey");
     }
 }

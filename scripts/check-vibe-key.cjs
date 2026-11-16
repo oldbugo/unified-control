@@ -17,17 +17,18 @@ const server=http.createServer((req,res)=>{
     const keys=Array.from({length:14},()=>({a:{kind:'text',text:''},b:{kind:'text',text:''},action:'none',value:''}));
     const layout={version:1,currentProfile:'p',currentPage:'pg',profiles:[{id:'p',name:'Fixture',pages:[{id:'pg',name:'Main',keys}]}]};
     const none={kind:'none',value:''};
-    // A real key (fake:false): only the checked settings may be sent.
+    // A real key (fake:false): only checked settings may be sent; the knob press typing is not checked yet.
     window.__au05={enabled:false,fake:false,state:'disabled',message:'Vibe Key is disabled',battery:null,standbyS:null,sleepS:null,light:null,micNr:null,
-      keys:[],events:[],actions:{k1:none,k2:none,k3:none,knobPress:none,knobRight:none,knobLeft:none},
+      keys:[],events:[],actions:{k1:none,k2:none,k3:none,knobPress:none},hotkeysAvailable:true,
       realKeyChecked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,micNr:false},
       lightRange:{modeMax:3,brightnessMax:10},micNrMax:3};
+    const key=(key,name,mode,label,factory,ownCode,canSet=true)=>({key,name,mode,label,keys:mode==='keys'?label:null,factory,ownCode,canSet,hotkey:{state:'off'}});
+    const hotkeys=()=>{for(const k of window.__au05.keys)k.hotkey={state:window.__au05.enabled&&window.__au05.actions[k.key].kind!=='none'?'ready':'off'};};
     const connected=()=>Object.assign(window.__au05,{state:'connected',message:'Connected',battery:{millivolts:3608,percent:30},standbyS:600,sleepS:3600,
       light:{mode:2,brightness:7},micNr:{level:0},
-      keys:[{key:'k1',name:'K1',mode:'factory',label:'Factory default (Win + H)',keys:null,factory:'Win + H',harmless:'F20'},
-            {key:'k2',name:'K2',mode:'factory',label:'Factory default (Enter)',keys:null,factory:'Enter',harmless:'F21'},
-            {key:'k3',name:'K3',mode:'harmless',label:'F22',keys:'F22',factory:'Esc',harmless:'F22'}],
-      events:[{at:Date.now(),control:'K3',pressed:true,code:'F22',action:null}]});
+      keys:[key('k1','K1','factory','Factory default (Win + H)','Win + H','F20'),key('k2','K2','factory','Factory default (Enter)','Enter','F21'),
+            key('k3','K3','uc','F22','Esc','F22'),key('knobPress','knob press','unknown',null,'Backspace','F19',false)],
+      events:[{at:Date.now(),control:'knob right',pressed:true,code:'F23',action:null}]});
     window.__writes=[];
     window.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(command,args)=>{
       if(command==='app_state')return {appVersion:'fixture',page:'home',fake:true,dock:{enabled:false,state:'disabled'},cooler:{enabled:false,state:'disabled'},au05:structuredClone(window.__au05)};
@@ -39,13 +40,13 @@ const server=http.createServer((req,res)=>{
         window.__writes.push({command,...args});
         if('enabled' in args.patch){window.__au05.enabled=args.patch.enabled;if(args.patch.enabled)connected();else window.__au05.state='disabled';}
         if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value};
-        return structuredClone(window.__au05);
+        hotkeys();return structuredClone(window.__au05);
       }
       if(command==='au05_change'){
         window.__writes.push({command,...args});
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
-        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='harmless'?k.harmless:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;}
+        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;}
         return structuredClone(window.__au05);
       }
       if(command==='au05_reconnect'){window.__writes.push({command});return structuredClone(window.__au05);}
@@ -56,46 +57,61 @@ const server=http.createServer((req,res)=>{
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
   const nav=id=>page.locator(`.nav-item[data-page="${id}"]`);
+  const writes=()=>page.evaluate(()=>window.__writes);
   assert.equal(await nav('vibekey').isHidden(),true,'the Vibe Key is hidden until enabled');
-  assert.deepEqual(await page.evaluate(()=>window.__writes),[],'presentation enables nothing');
+  assert.deepEqual(await writes(),[],'presentation enables nothing');
 
   await nav('general').click();
   assert.equal(await page.locator('#au05-enabled').isChecked(),false,'off by default');
   await page.locator('#au05-enabled').check();
   await page.waitForFunction(()=>!document.querySelector('[data-page="vibekey"]').hidden);
-  assert.deepEqual(await page.evaluate(()=>window.__writes[0]),{command:'au05_configure',patch:{enabled:true}});
+  assert.deepEqual((await writes())[0],{command:'au05_configure',patch:{enabled:true}});
   await nav('home').click();
   assert.match(await page.locator('.device-card[data-go="vibekey"]').textContent(),/battery 30 %/);
 
   await nav('vibekey').click();
-  await page.waitForSelector('#au05-controls select[data-au05-type="k3"]');
+  await page.waitForSelector('select[data-au05-mode="k3"]');
   assert.match(await page.locator('#au05-battery').textContent(),/30 %/);
-  assert.equal(await page.locator('select[data-au05-type="k3"]').inputValue(),'harmless');
-  assert.match(await page.locator('#au05-events').textContent(),/K3 down/);
+  assert.equal(await page.locator('select[data-au05-mode="k3"]').inputValue(),'uc','K3 types its own code: a UC action');
+  assert.match(await page.locator('#au05-events').textContent(),/knob right down/);
   // Unchecked settings are shown but cannot be sent to a real key.
   for(const name of ['sleepTime','lightMode','lightBrightness','micNr'])
     assert.equal(await page.locator(`select[data-au05-set="${name}"]`).isDisabled(),true,name);
+  assert.equal(await page.locator('select[data-au05-mode="knobPress"]').isDisabled(),true,'knob press typing is not checked on the real key');
   assert.equal(await page.locator('select[data-au05-set="standbyTime"]').isDisabled(),false);
 
-  await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_change'&&w.change.setting==='standbyTime'));
-  await page.locator('select[data-au05-type="k1"]').selectOption('keys');
+  // K3: a UC action. Choosing it saves the action; the hotkey shows as ready.
+  await page.locator('select[data-au05-action="k3"]').selectOption('claudeDictation');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.kind==='claudeDictation'));
+  await page.waitForFunction(()=>/Ready · F22/.test(document.querySelector('.au05-key:nth-child(3)')?.textContent||''));
+  // K2: switch to a UC action (the key is set to type F21), then a custom key combination.
+  await page.locator('select[data-au05-mode="k2"]').selectOption('uc');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.key==='k2'&&w.change.mode==='uc'));
+  await page.waitForSelector('select[data-au05-action="k2"]');
+  await page.locator('select[data-au05-action="k2"]').selectOption('hotkey');
+  const combo=page.locator('input[data-au05-action-value="k2"]');await combo.waitFor();
+  await combo.fill('Ctrl + Enter');await combo.press('Tab');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.value==='Ctrl + Enter'));
+  // K1: keys typed by the key itself.
+  await page.locator('select[data-au05-mode="k1"]').selectOption('keys');
   const keysInput=page.locator('input[data-au05-keys="k1"]');
   assert.equal(await keysInput.isVisible(),true);
   await keysInput.fill('Ctrl + D');await keysInput.press('Tab');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_change'&&w.change.keys==='Ctrl + D'));
-  await page.locator('select[data-au05-action="k3"]').selectOption('hotkey');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k3'));
-  const value=page.locator('input[data-au05-action-value="k3"]');
-  await value.fill('Ctrl + Enter');await value.press('Tab');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.value==='Ctrl + Enter'));
-  const changes=await page.evaluate(()=>window.__writes.filter(w=>w.command==='au05_change').map(w=>w.change));
-  assert.deepEqual(changes,[{setting:'standbyTime',value:900},{setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'}]);
-  assert.match(await page.locator('#au05-note').textContent(),/Saved/);
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.keys==='Ctrl + D'));
+  // Switching K3 to factory default clears its UC action (releases the hotkey).
+  await page.locator('select[data-au05-mode="k3"]').selectOption('factory');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k3'&&w.patch.action.kind==='none'));
+  await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='standbyTime'));
+  const changes=(await writes()).filter(w=>w.command==='au05_change').map(w=>w.change);
+  assert.deepEqual(changes,[{setting:'keyTyping',key:'k2',mode:'uc'},{setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'},
+    {setting:'keyTyping',key:'k3',mode:'factory'},{setting:'standbyTime',value:900}]);
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_reconnect'));
 
   const output=path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(output,{recursive:true});
+  await page.locator('select[data-au05-mode="k3"]').selectOption('uc');
+  await page.waitForSelector('select[data-au05-action="k3"]');
   for(const [width,height]of[[1440,1000],[800,700],[600,700]]){
     await page.setViewportSize({width,height});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no overflow at ${width}`);
