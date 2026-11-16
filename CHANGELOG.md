@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.0 — 2026-11-17
+
+Cooler engine 4.23.0. The cooler screen hung three times (6, 11 and 17 Nov)
+when Live started again about 8 s after Unified Control stopped it for an
+update. Now, after a Live stop, the first new connect waits until 30 s have
+passed. This also covers the new cooler worker after an update. The wait is a
+Live setting: "Wait before Live starts again after a stop" (no wait, 10, 20,
+30, 60 or 120 seconds; 30 by default). The step that switches the screen into
+Live may now take up to 2 s (was 0.5 s). The USB commands and their order are
+unchanged. Not yet verified on hardware: the next update with Live on is the
+test.
+
 ## 0.15.0 — 2026-11-17
 
 Choosing a Unified Control action for a Vibe Key key no longer gets stuck.

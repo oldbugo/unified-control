@@ -213,6 +213,9 @@
             <select id="lvLock"><option value="loop">Show Embedded</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
           <div class="src-row"><div class="src-top"><label for="lvShut" class="src-name">Turn the screen off when the PC shuts down</label><input type="checkbox" id="lvShut" role="switch"></div>
             <p class="muted small">Off: the screen keeps showing Embedded.</p></div>
+          <div class="field"><label for="lvSettle">Wait before Live starts again after a stop</label>
+            <select id="lvSettle"><option value="0">No wait</option><option value="10">10 seconds</option><option value="20">20 seconds</option><option value="30" selected>30 seconds (recommended)</option><option value="60">60 seconds</option><option value="120">120 seconds</option></select>
+            <p class="muted small">Gives the screen time to settle, for example while Unified Control updates. A quick restart made the screen hang before.</p></div>
           <div class="src-row"><div class="src-top"><label for="lvAuto" class="src-name">Start CoolerScreen when Windows starts</label><input type="checkbox" id="lvAuto" role="switch"></div>
             <p class="muted small">Starts in the tray. Uninstalling removes it.</p></div>
         </div>

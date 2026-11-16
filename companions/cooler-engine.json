@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/oldbugo/coolerscreen.git",
-  "revision": "d84b30f0cd0d0876b685fbd0102b7a1b75e175fe",
-  "engineVersion": "4.22.0",
+  "revision": "df7aaa98f85ba6bc012d8b5cd60e92dffde58b3c",
+  "engineVersion": "4.23.0",
   "ffmpegSha256": "04E1307997530F9CF2FE35CBA2CA7E8875CA91DA02F89D6C7243DF819C94AD00"
 }

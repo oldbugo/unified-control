@@ -112,6 +112,13 @@ const server=http.createServer((req,res)=>{
     const before=await page.evaluate(()=>window.__calls.filter(c=>c.args.command==='live_set').length);
     await page.evaluate(()=>window.postMessage({channel:'uc-cooler-v1',type:'call',id:999,command:'live_set',args:{}},location.origin));
     await page.waitForTimeout(60);assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.args.command==='live_set').length),before,'wrong message source cannot invoke the cooler');
+    assert.equal(await frame.locator('#lvSettle').inputValue(),'30','the settle wait after a Live stop defaults to 30 s (engine 4.23.0)');
+    await frame.evaluate(()=>{const e=document.getElementById('lvSettle');e.value='0';e.dispatchEvent(new Event('change'));});
+    await page.waitForFunction(()=>window.__calls.some(c=>c.args.command==='live_set'&&c.args.args?.patch?.settleAfterStopSeconds===0));
+    await page.evaluate(()=>{window.__app.live.settings.settleAfterStopSeconds=45;});
+    await frame.evaluate(()=>document.getElementById('lvSettle').dispatchEvent(new Event('change')));
+    await frame.waitForFunction(()=>document.getElementById('lvSettle').value==='45');
+    await page.evaluate(()=>{delete window.__app.live.settings.settleAfterStopSeconds;});
     await frame.evaluate(()=>{window.__fixtureEvent=null;const t=window.__UC_COOLER_BRIDGE__;return t.invoke('plugin:event|listen',{event:'cs:job',handler:t.transformCallback(e=>window.__fixtureEvent=e.payload)});});
     await page.evaluate(()=>window.__panel.event({event:'cs:job',payload:{id:'fixture-job',status:'done'}}));
     await frame.waitForFunction(()=>window.__fixtureEvent?.id==='fixture-job');
