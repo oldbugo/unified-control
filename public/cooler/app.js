@@ -2552,13 +2552,21 @@ function renderLiveSettings() {
   $('lvSleep').value = c.onSleep || 'loop';
   $('lvLock').value = c.onLock || 'loop';
   $('lvShut').checked = !!c.screenOffOnShutdown;
+  setSettleChoice(Number.isInteger(c.settleAfterStopSeconds) ? c.settleAfterStopSeconds : 30);
   $('lvAuto').checked = !!l.autostart;
   $('lvAuto').disabled = !c.inApp && !l.autostart;
   renderLiveSwitch();
-  for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
+  for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut', 'lvSettle']) $(id).disabled = !c.inApp;
   $('lvFpsOv').checked = !!c.fpsOverlay;
   $('lvFpsOv').disabled = !c.inApp;
   renderLiveMessage();
+}
+// The settle wait (engine 4.23.0): a value saved outside the list (0 to 120) is shown as its own choice.
+function setSettleChoice(seconds) {
+  const sel = $('lvSettle');
+  const value = String(seconds);
+  if (![...sel.options].some(o => o.value === value)) sel.add(new Option(`${value} seconds`, value));
+  sel.value = value;
 }
 async function liveSet(patch) {
   try { S.app = await call('live_set', { patch }); }
@@ -2577,6 +2585,7 @@ liveBind('lvFpsOv', 'fpsOverlay', e => e.checked);
 liveBind('lvSleep', 'onSleep', e => e.value);
 liveBind('lvLock', 'onLock', e => e.value);
 liveBind('lvShut', 'screenOffOnShutdown', e => e.checked);
+liveBind('lvSettle', 'settleAfterStopSeconds', e => Number(e.value));
 liveBind('lvAuto', 'autostart', e => e.checked);
 
 function fillSettings() {
