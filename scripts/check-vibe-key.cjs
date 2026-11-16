@@ -26,7 +26,7 @@ const server=http.createServer((req,res)=>{
     const hotkeys=()=>{for(const k of window.__au05.keys)k.hotkey={state:window.__au05.enabled&&window.__au05.actions[k.key].kind!=='none'?'ready':'off'};};
     const connected=()=>Object.assign(window.__au05,{state:'connected',message:'Connected',battery:{millivolts:3608,percent:30},standbyS:600,sleepS:3600,
       light:{mode:2,brightness:7},micNr:{level:0},
-      keys:[key('k1','K1','factory','Factory default (Win + H)','Win + H','F20'),key('k2','K2','factory','Factory default (Enter)','Enter','F21'),
+      keys:[key('k1','K1','unknown',null,'Win + H','F20'),key('k2','K2','factory','Factory default (Enter)','Enter','F21'),
             key('k3','K3','uc','F22','Esc','F22'),key('knobPress','knob press','unknown',null,'Backspace','F19',false)],
       events:[{at:Date.now(),control:'knob right',pressed:true,code:'F23',action:null}]});
     window.__writes=[];
@@ -49,6 +49,7 @@ const server=http.createServer((req,res)=>{
         if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;}
         return structuredClone(window.__au05);
       }
+      if(command==='au05_read_key'){window.__writes.push({command,...args});const k=window.__au05.keys.find(k=>k.key===args.key);k.mode='factory';k.label=`Factory default (${k.factory})`;return structuredClone(window.__au05);}
       if(command==='au05_reconnect'){window.__writes.push({command});return structuredClone(window.__au05);}
       if(command==='settings_update')return {appVersion:'fixture',page:args.patch.page||'home',fake:true};
       return {};
@@ -80,6 +81,12 @@ const server=http.createServer((req,res)=>{
   assert.equal(await page.locator('select[data-au05-mode="knobPress"]').isDisabled(),true,'knob press typing is not checked on the real key');
   assert.equal(await page.locator('select[data-au05-set="standbyTime"]').isDisabled(),false);
 
+  // K1 is not read yet: it offers "Read from key"; the knob press (unchecked on a real key) does not.
+  assert.equal(await page.locator('[data-au05-read="knobPress"]').count(),0);
+  await page.locator('[data-au05-read="k1"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_read_key'&&w.key==='k1'));
+  await page.waitForFunction(()=>document.querySelector('select[data-au05-mode="k1"]')?.value==='factory');
+  assert.equal(await page.locator('[data-au05-read="k1"]').count(),0);
   // K3: a UC action. Choosing it saves the action; the hotkey shows as ready.
   await page.locator('select[data-au05-action="k3"]').selectOption('claudeDictation');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.kind==='claudeDictation'));

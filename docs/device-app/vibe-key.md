@@ -32,15 +32,27 @@ stall in the key cannot stop the window, the dock or the cooler.
 - With `UC_FAKE_DEVICE` set, the real key is never opened. The fake key is encrypted in both directions.
 - Only commands in the allowlist (`Request`) can be encoded. Reboot, serial number, flash ID, UUID,
   receiver command 0x05, firmware and the keep-alive 0x23 have no encoder.
-- On a real key, UC sends only the sets that were checked on the real key: standby time and what a key
-  types. The other sets (power-off time, light mode, brightness, microphone noise reduction) work on the
-  fake key only. The page shows them, read-only, with a note.
-- Every write has a 2 s limit. One request is in flight at a time. Nothing is sent until the key has sent
-  a message in the last 15 s, because a write to a sleeping key blocks. A missing reply gets one retry.
-  A write that does not finish is not retried. After a stall, sending pauses for 30 s. After three stalls
-  in a row, sending stops until the user presses Reconnect.
+- The allowlist is enforced three times on a real key: the page parser, the session (`real_key` refuses
+  commands not checked on the real key), and the Windows transport itself, which decrypts every report
+  and sends only one exact, in-range, hardware-checked command (`protocol::check_outgoing`).
+- Checked on the real key: all reads except the knob-press typing, and the sets standby time and key
+  typing for K1..K3. Power-off time, light, microphone and knob-press typing work on the fake key only;
+  the page shows them read-only.
+- Every write has a 2 s limit. One request at a time, and never a second write while a reply is
+  outstanding. No retry: a reply that does not come in time (20 s for key typing, cmd 0x50; 2 s for the
+  rest) or a write that does not finish pauses sending for 30 s. After three stalls in a row, sending
+  stops until the user presses Reconnect. While paused, a change is refused at once.
+- Nothing is sent unless the key has sent a message in the last 11 s. A set waits until the key is quiet:
+  1.5 s after it woke and 1.5 s after the last key or knob event.
+- Key typing (cmd 0x50) is never read at connect. A key's list is read only when the user presses "Read
+  from key" on the page, one key at a time. A change to a key's typing learns the new list from the set's
+  echo, so no extra read is sent. The other reads at connect are capped at 10 s in all.
+- A key may be set to type only the keys the page offers: letters, digits, Enter, Esc, Backspace, Tab,
+  Space, Minus, Plus, F1..F24 and the navigation keys. No Power, Application or lock keys; at most one
+  modifier entry, first, and at least one key.
 - The noise-reduction set writes back the two unknown values exactly as read.
-- While sending is paused, a new change is refused at once with "Sending is paused".
+- Start, stop and hotkey claims are serialised (`au05_config_lock` in the app and a lock in the worker),
+  so overlapping commands cannot start two sessions.
 - A UC action runs on its own thread, never on the device or hotkey thread. A crash in an action does not
   stop the worker.
 
@@ -63,7 +75,7 @@ Actions:
 
 | Action | What UC does | Evidence |
 | --- | --- | --- |
-| Start dictation in Claude | Find the visible window of `claude.exe` whose title starts with "Claude", restore it, tap Alt, `SetForegroundWindow`, wait until it is in front (0.6 s), then Ctrl + D | Prototype `au05_k3_hotkey.py`, user-confirmed |
+| Start dictation in Claude | Find the visible window of `claude.exe` whose title starts with "Claude", restore it, `SetForegroundWindow` (allowed after WM_HOTKEY); only if that fails, tap Alt (skipped when Alt is down; `SendInput` result checked) and try again; then Ctrl + D | Prototype `au05_k3_hotkey.py`, user-confirmed |
 | Start dictation in ChatGPT | The same with `chatgpt.exe`, title "ChatGPT", then Ctrl + Shift + D | Not checked (exe name, title and shortcut) |
 | Send (Enter) | Enter in the focused app | Not checked |
 | Custom key combination | That combination in the focused app (the dock's reviewed hotkey sender) | Not checked |
@@ -88,8 +100,8 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 
 ## Tests
 
-- Driver: `cargo test -p ulanzi_au05` in uc-ulanzi (20 tests, fake key and pure functions).
-- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (11 tests, fake key and fake desktop).
+- Driver: `cargo test -p ulanzi_au05` in uc-ulanzi (25 tests, fake key and pure functions).
+- Worker and hotkey layer: `cargo test --lib au05` in `src-tauri` (13 tests, fake key and fake desktop).
 - Page: `node scripts/check-vibe-key.cjs` (headless fixture; set `UC_PLAYWRIGHT_MODULE`).
 - Native: `node scripts/check-native-vibe-key.cjs` (quiet debug app with the fake key; also set `UC_TEST_EXE`).
 
@@ -97,8 +109,9 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 
 1. Enable in General. Confirm that UC opens only the private channel and shows "Connected" after a key
    press, with the battery value.
-2. Confirm all reads in one session: standby 600 s, power-off 3600 s, light, mic, K1..K3 typing.
-   Watch for the 15 s key-typing read seen once on 2026-11-16.
+2. Confirm the connect reads: standby 600 s, power-off 3600 s, light, mic (no cmd 0x50). Then press
+   "Read from key" for K1, K2 and K3 one at a time. Watch for the 15 s key-typing read seen once on
+   2026-11-16 (UC now waits up to 20 s and sends nothing else meanwhile).
 3. Set K3 to Unified Control action, Start dictation in Claude, from the page. From another app press K3:
    Claude comes forward and dictation starts, once. Check that F22 is not also typed into the other app.
 4. Set K1 to Types keys, Ctrl + D, and back to Factory default. Read back. Confirm that no modifier stays

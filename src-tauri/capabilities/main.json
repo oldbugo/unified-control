@@ -38,6 +38,7 @@
     "allow-au05-configure",
     "allow-au05-change",
     "allow-au05-reconnect",
+    "allow-au05-read-key",
     "allow-au05-test-control",
     "allow-dock-test-button",
     "allow-dock-test-studio",

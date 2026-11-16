@@ -80,6 +80,8 @@ pub struct App {
     cooler_migration_job: Mutex<Option<String>>,
     pub(crate) closing: AtomicBool,
     dock_config_lock: Mutex<()>,
+    /// Held across the Vibe Key settings update and its configure, so overlapping commands cannot race.
+    au05_config_lock: Mutex<()>,
     pub sched: Scheduler,
     pub events: Arc<dyn Events>,
     pub app_version: String,
@@ -122,6 +124,7 @@ impl App {
             cooler_migration_job: Mutex::new(None),
             closing: AtomicBool::new(false),
             dock_config_lock: Mutex::new(()),
+            au05_config_lock: Mutex::new(()),
             sched,
             events: events.clone(),
             app_version: app_version.to_string(),
@@ -616,6 +619,7 @@ impl App {
     }
     /// `{ enabled?, action?: { control, kind, value } }`: saved at once, then applied.
     pub fn au05_configure(&self, patch: &Value) -> CoreResult<Value> {
+        let _guard = self.au05_config_lock.lock_or_recover();
         if self.closing.load(Ordering::SeqCst) {
             return Err(CoreError::new("The app is closing"));
         }
@@ -654,6 +658,17 @@ impl App {
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
         let change = super::au05::parse_change(request).map_err(CoreError::new)?;
         au05.change(change).map_err(CoreError::new)?;
+        Ok(self.au05_state())
+    }
+    /// Read one key's typing list (`k1`..`k3`, `knobPress`), only when the user asks.
+    pub fn au05_read_key(&self, key: &str) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        let id = super::au05::ACTION_KEYS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, id)| *id)
+            .ok_or_else(|| CoreError::new("Unknown Vibe Key key"))?;
+        au05.read_key(id).map_err(CoreError::new)?;
         Ok(self.au05_state())
     }
     pub fn au05_reconnect(&self) -> CoreResult<Value> {

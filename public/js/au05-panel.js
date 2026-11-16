@@ -111,7 +111,8 @@ export class Au05Panel{
       const hot=k.hotkey?.state==='ready'?`<span class="chip accent">Ready · ${esc(k.ownCode)}</span>`:k.hotkey?.state==='failed'?`<span class="chip attention">${esc(k.hotkey.message||'Not available')}</span>`:'';
       const uc=k.mode==='uc'?`<select data-au05-action="${k.key}" aria-label="Unified Control action for ${esc(k.name)}"${off?' disabled':''}>${Object.entries(ACTIONS).map(([v,l])=>opt(v,l,a.kind)).join('')}</select>
         ${a.kind==='hotkey'?`<input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}"${off?' disabled':''}>`:''}${hot}`:'';
-      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)}</strong><p>Types now: ${esc(k.label||'Not read yet')}</p>${k.canSet?'':'<p class="hint">Not yet checked on the real key, so Unified Control does not change it.</p>'}</div>
+      const read=k.mode==='unknown'&&k.canSet?`<button class="btn" type="button" data-au05-read="${k.key}"${off?' disabled':''}>Read from key</button>`:'';
+      return `<div class="setting-row au05-key"><div><strong>${esc(k.name)}</strong><p>Types now: ${esc(k.label||'Not read yet')}</p>${read}${k.canSet?'':'<p class="hint">Not yet checked on the real key, so Unified Control does not change it.</p>'}</div>
       <div class="au05-key-controls"><select data-au05-mode="${k.key}" aria-label="What ${esc(k.name)} does"${lock}>
       ${k.mode==='unknown'?opt('unknown','Not read yet','unknown'):''}${opt('uc','Unified Control action',k.mode)}${opt('keys','Types keys…',k.mode)}${opt('factory',`Factory default (${k.factory})`,k.mode)}</select>
       <input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}" ${k.mode==='keys'?'':'hidden'}${lock}>${uc}</div></div>`;
@@ -146,6 +147,13 @@ export class Au05Panel{
     const a=this.state?.actions?.[key];
     if(ok&&mode!=='uc'&&a&&a.kind!=='none')await this.action(key,'none','');
   }
+  // Key typing is read only on request, one key at a time (the key can take up to 20 s to answer).
+  async readKey(key){
+    this.sending++;this.setNote('Reading from the Vibe Key… This can take up to 20 seconds.');this.paint(true);
+    try{this.state=await this.invoke('au05_read_key',{key});this.setNote('');}
+    catch(error){this.setNote(errorText(error),true);}
+    finally{this.sending--;this.paint(true);}
+  }
   async action(control,kind,value){
     try{this.state=await this.invoke('au05_configure',{patch:{action:{control,kind,value}}});this.setNote('Saved.');}
     catch(error){this.setNote(errorText(error),true);}
@@ -158,6 +166,8 @@ export class Au05Panel{
       this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting. Press a key to wake the Vibe Key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
     }
+    const read=e.type==='click'&&t.closest?.('[data-au05-read]');
+    if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.au05Set){if(t.value!=='')this.change({setting:t.dataset.au05Set,value:Number(t.value)});return true;}
     if(t.dataset.au05Mode){

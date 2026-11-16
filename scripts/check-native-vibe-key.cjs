@@ -36,12 +36,18 @@ async function run(){
     await page.locator('[data-page="vibekey"]').waitFor({state:'visible'});
     const saved=JSON.parse(fs.readFileSync(path.join(home,'settings.json'),'utf8'));
     assert.equal(saved.au05.enabled,true,'the switch is saved at once');
-    st=await until(async()=>{const s=await invoke('au05_state');return s.keys?.[2]?.mode!=='unknown'&&s.micNr?s:null;},'first read of the fake key');
+    st=await until(async()=>{const s=await invoke('au05_state');return s.micNr?s:null;},'first read of the fake key');
     assert.equal(st.state,'connected');assert.equal(st.fake,true);
-    assert.equal(st.standbyS,600);assert.equal(st.keys[2].mode,'uc');assert.equal(st.battery.percent,30);
+    assert.equal(st.standbyS,600);assert.equal(st.battery.percent,30);
+    assert.equal(st.keys[2].mode,'unknown','key typing is not read at connect');
+    fake=(await invoke('au05_test_control',{patch:{op:'state'}})).fake;
+    assert.ok(fake.received.every(p=>!p.startsWith('01 06 50')),'no cmd 0x50 at connect');
 
     await page.locator('[data-page="vibekey"]').click();
     await page.waitForSelector('select[data-au05-mode="k1"]');
+    await page.locator('[data-au05-read="k3"]').click();
+    await until(async()=>(await invoke('au05_state')).keys[2].mode==='uc','K3 read on request');
+    await page.waitForSelector('select[data-au05-action="k3"]');
     await page.locator('select[data-au05-mode="k1"]').selectOption('keys');
     const keys=page.locator('input[data-au05-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
     await until(async()=>(await invoke('au05_state')).keys[0].label==='Ctrl + D','K1 typing read back');

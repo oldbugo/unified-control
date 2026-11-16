@@ -24,7 +24,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
 # AU05 Vibe Key driver, branch claude/au05-driver (not pushed yet). The orchestrator replaces the local
 # file URL with the GitHub URL and the same rev after review and push.
-ulanzi_au05 = { git = "file:///C:/Users/pc/Documents/uc-ulanzi", rev = "4c2b805e24375b154cedab885265324c25762f93" }
+ulanzi_au05 = { git = "file:///C:/Users/pc/Documents/uc-ulanzi", rev = "c5e2863b3ec57e9779b28dab18b1f977102b2af3" }
 
 [dev-dependencies]
 tempfile = "3"

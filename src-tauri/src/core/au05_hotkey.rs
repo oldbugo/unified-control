@@ -100,6 +100,8 @@ pub struct FakeDesktop {
     /// Keys another app "holds": claiming them fails.
     pub busy: Mutex<Vec<u16>>,
     pub ran: Mutex<Vec<String>>,
+    /// Tests: `run` panics, to check that a crash in an action is contained.
+    pub crash: std::sync::atomic::AtomicBool,
 }
 impl FakeDesktop {
     pub fn claimed(&self) -> Vec<u16> {
@@ -137,6 +139,9 @@ impl Desktop for FakeDesktop {
             .collect()
     }
     fn run(&self, action: &Action) -> Result<(), String> {
+        if self.crash.load(std::sync::atomic::Ordering::SeqCst) {
+            panic!("test action crash");
+        }
         let (app, keys) = action.plan().ok_or("Nothing to do")?;
         let text = match app {
             Some((exe, _)) => format!("focus {exe}, press {keys}"),
@@ -328,7 +333,12 @@ mod native {
         1
     }
 
-    fn tap_alt() {
+    /// Tap Alt, unless Alt is already down. Returns false when the input was not accepted.
+    fn tap_alt() -> bool {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        if unsafe { GetAsyncKeyState(0x12) } < 0 {
+            return true; // Alt is already held: a tap would release the user's Alt.
+        }
         let key = |up: bool| INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -342,11 +352,31 @@ mod native {
             },
         };
         let inputs = [key(false), key(true)];
-        unsafe { SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+        let sent = unsafe { SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+        if sent == 1 {
+            // Only the Alt press went in: send the release so Alt is never left down.
+            let up = [key(true)];
+            unsafe { SendInput(1, up.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+        }
+        sent == 2
     }
 
-    /// The prototype's method: find the app's visible window, restore it, tap Alt (Windows lets the sender
-    /// of the last input move focus), SetForegroundWindow, then wait until it is in front.
+    fn wait_front(hwnd: HWND, ms: u64) -> bool {
+        let end = Instant::now() + Duration::from_millis(ms);
+        loop {
+            if unsafe { GetForegroundWindow() } == hwnd {
+                return true;
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Find the app's visible window and bring it to the front. UC has just received WM_HOTKEY, so Windows
+    /// normally lets it set the foreground window: try that first. Only if that fails, tap Alt (the
+    /// prototype's method) and try once more.
     unsafe fn bring_forward(exe: &'static str, title: &'static str) -> Result<(), String> {
         let mut find = Find {
             exe,
@@ -364,14 +394,16 @@ mod native {
         if unsafe { IsIconic(hwnd) } != 0 {
             unsafe { ShowWindow(hwnd, SW_RESTORE) };
         }
-        tap_alt();
         unsafe { SetForegroundWindow(hwnd) };
-        let end = Instant::now() + Duration::from_millis(600);
-        while Instant::now() < end {
-            if unsafe { GetForegroundWindow() } == hwnd {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(20));
+        if wait_front(hwnd, 300) {
+            return Ok(());
+        }
+        if !tap_alt() {
+            return Err("Windows did not accept the key input".into());
+        }
+        unsafe { SetForegroundWindow(hwnd) };
+        if wait_front(hwnd, 600) {
+            return Ok(());
         }
         Err(format!("{title} could not be brought to the front"))
     }

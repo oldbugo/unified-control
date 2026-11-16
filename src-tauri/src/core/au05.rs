@@ -40,8 +40,11 @@ pub const CONTROLS: [(&str, Control); 6] = [
 pub const ACTION_KEYS: [(&str, KeyId); 4] =
     [("k1", KeyId::K1), ("k2", KeyId::K2), ("k3", KeyId::K3), ("knobPress", KeyId::KnobPress)];
 const EVENT_LOG: usize = 40;
-/// How long a settings change may wait for the key (it may be asleep).
-pub const SET_WAIT: Duration = Duration::from_secs(25);
+/// How long a settings change may wait for the key: asleep (20 s), quiet time, and a slow key-typing reply
+/// (up to 20 s).
+pub const SET_WAIT: Duration = Duration::from_secs(45);
+/// The read burst after the key wakes is capped by total time; reads still queued then are dropped.
+const READ_BURST_LIMIT: Duration = Duration::from_secs(10);
 
 /// The Windows virtual key of each key's own code.
 pub fn own_vk(key: KeyId) -> u16 {
@@ -187,6 +190,8 @@ fn push_event(status: &Mutex<Status>, control: Control, pressed: bool, code: u8,
 
 enum Cmd {
     Change(Change, Sender<Result<(), String>>),
+    /// Read one key's typing list (cmd 0x50), only on the user's request.
+    ReadKey(KeyId, Sender<Result<(), String>>),
     Reconnect,
     Stop,
 }
@@ -201,6 +206,8 @@ pub struct Au05 {
     desktop: Option<Arc<dyn Desktop>>,
     fake_desktop: Option<Arc<FakeDesktop>>,
     hotkeys: Mutex<BTreeMap<u16, Result<(), String>>>,
+    /// Serialises start, stop and hotkey claims, so two commands can never start two sessions.
+    config_lock: Mutex<()>,
     config: SessionConfig,
 }
 
@@ -214,7 +221,9 @@ impl Au05 {
     pub fn new(fake: bool, real_desktop: Option<Arc<dyn Desktop>>) -> Arc<Self> {
         Self::with_config(fake, real_desktop, uc_session_config())
     }
-    pub fn with_config(fake: bool, real_desktop: Option<Arc<dyn Desktop>>, config: SessionConfig) -> Arc<Self> {
+    pub fn with_config(fake: bool, real_desktop: Option<Arc<dyn Desktop>>, mut config: SessionConfig) -> Arc<Self> {
+        // A real key: the session itself refuses commands not checked on the real key.
+        config.real_key = !fake;
         let fake_desktop = fake.then(|| Arc::new(FakeDesktop::default()));
         let desktop: Option<Arc<dyn Desktop>> = match &fake_desktop {
             Some(f) => Some(f.clone()),
@@ -241,6 +250,7 @@ impl Au05 {
             desktop,
             fake_desktop,
             hotkeys: Mutex::new(BTreeMap::new()),
+            config_lock: Mutex::new(()),
             config,
         });
         if let Some(d) = &au.desktop {
@@ -294,6 +304,7 @@ impl Au05 {
 
     /// Apply the saved settings: start or stop the worker, take the UC actions and claim their hotkeys.
     pub fn configure(&self, settings: &Value) {
+        let _guard = self.config_lock.lock_or_recover();
         let settings = sanitize(settings);
         *self.actions.lock_or_recover() = settings["actions"].clone();
         let enabled = settings["enabled"].as_bool().unwrap_or(false);
@@ -358,6 +369,7 @@ impl Au05 {
 
     /// Stop the worker and release every hotkey (quit).
     pub fn shutdown(&self) {
+        let _guard = self.config_lock.lock_or_recover();
         self.stop_worker();
         self.apply_hotkeys(false);
     }
@@ -372,6 +384,15 @@ impl Au05 {
         let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
         let (rtx, rrx) = mpsc::channel();
         tx.send(Cmd::Change(change, rtx)).map_err(|_| "The Vibe Key worker is unavailable")?;
+        rrx.recv_timeout(SET_WAIT + Duration::from_secs(5))
+            .map_err(|_| "The Vibe Key did not answer in time".to_string())?
+    }
+
+    /// Read one key's typing list from the key (one at a time; the reply can take up to 20 s).
+    pub fn read_key(&self, key: KeyId) -> Result<(), String> {
+        let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
+        let (rtx, rrx) = mpsc::channel();
+        tx.send(Cmd::ReadKey(key, rtx)).map_err(|_| "The Vibe Key worker is unavailable")?;
         rrx.recv_timeout(SET_WAIT + Duration::from_secs(5))
             .map_err(|_| "The Vibe Key did not answer in time".to_string())?
     }
@@ -474,6 +495,10 @@ impl Au05 {
             "stallWrites" => fake.lock().stall_writes = v["value"].as_bool().unwrap_or(false),
             "dropReplies" => fake.lock().drop_replies = v["value"].as_u64().unwrap_or(0).min(10) as u32,
             "battery" => fake.lock().percent = v["value"].as_u64().unwrap_or(30).min(100) as u8,
+            "actionCrash" => {
+                let d = self.fake_desktop.as_ref().ok_or("No fake desktop")?;
+                d.crash.store(v["value"].as_bool().unwrap_or(false), Ordering::SeqCst);
+            }
             "hotkeyBusy" => {
                 // Another app holds this key's code: the next claim fails.
                 let d = self.fake_desktop.as_ref().ok_or("No fake desktop")?;
@@ -574,7 +599,7 @@ impl Worker {
             while Instant::now() < until && !self.stop.load(Ordering::SeqCst) {
                 match rx.lock_or_recover().recv_timeout(Duration::from_millis(100)) {
                     Ok(Cmd::Stop) => return,
-                    Ok(Cmd::Change(_, r)) => {
+                    Ok(Cmd::Change(_, r)) | Ok(Cmd::ReadKey(_, r)) => {
                         let _ = r.send(Err("The Vibe Key is not connected".into()));
                     }
                     Ok(Cmd::Reconnect) => break,
@@ -589,6 +614,7 @@ impl Worker {
         let mut session = Session::new(transport, self.config.clone());
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut read_done = false;
+        let mut read_burst: Option<(Instant, Vec<u64>)> = None;
         let mut last_state = None;
         self.set_state("waiting", "Connected. Press a key or turn the knob to wake the Vibe Key");
         loop {
@@ -609,6 +635,21 @@ impl Worker {
                         self.status.lock_or_recover().last_error = None;
                     }
                     Ok(Cmd::Change(c, reply)) => self.submit_change(&mut session, &mut tickets, c, reply),
+                    Ok(Cmd::ReadKey(k, reply)) => {
+                        if session.has_pending(Request::slow_reply) {
+                            let _ = reply.send(Err("Another key is being read. Try again in a moment".into()));
+                        } else {
+                            let t = TICKETS.fetch_add(1, Ordering::Relaxed);
+                            match session.submit(t, Request::GetKeyTyping(k)) {
+                                Ok(()) => {
+                                    tickets.insert(t, Purpose::Set(reply));
+                                }
+                                Err(f) => {
+                                    let _ = reply.send(Err(f.message()));
+                                }
+                            }
+                        }
+                    }
                     Err(_) => break,
                 }
             }
@@ -626,11 +667,23 @@ impl Worker {
             let state = session.state();
             if state == SessionState::Awake && !read_done {
                 read_done = true;
-                for r in read_all(self.fake.is_some()) {
+                let mut burst = Vec::new();
+                for r in read_all() {
                     let t = TICKETS.fetch_add(1, Ordering::Relaxed);
                     if session.submit(t, r).is_ok() {
                         tickets.insert(t, Purpose::Read);
+                        burst.push(t);
                     }
+                }
+                read_burst = Some((Instant::now(), burst));
+            }
+            // Cap the read burst by total time: reads still queued after the limit are dropped.
+            if let Some((started, burst)) = &read_burst {
+                if started.elapsed() >= READ_BURST_LIMIT {
+                    for o in session.cancel_queued(|t, _| burst.contains(&t)) {
+                        self.handle(o, &mut tickets);
+                    }
+                    read_burst = None;
                 }
             }
             if last_state != Some(state) {
@@ -700,12 +753,16 @@ impl Worker {
             let _ = reply.send(Err(Failure::Paused.message()));
             return;
         }
+        // Key typing (0x50) one at a time; its set reply echoes the new list, so no extra read is sent.
+        if request.slow_reply() && session.has_pending(Request::slow_reply) {
+            let _ = reply.send(Err("Another key is being changed. Try again in a moment".into()));
+            return;
+        }
         let read_back = match &request {
             Request::SetStandbyTime(_) => Some(Request::GetStandbyTime),
             Request::SetSleepTime(_) => Some(Request::GetSleepTime),
             Request::SetLightMode(_) | Request::SetLightBrightness(_) => Some(Request::GetLight),
             Request::SetMicNr(_) => Some(Request::GetMicNr),
-            Request::SetKeyTyping(k, _) => Some(Request::GetKeyTyping(*k)),
             _ => None,
         };
         let t = TICKETS.fetch_add(1, Ordering::Relaxed);
@@ -759,26 +816,26 @@ impl Worker {
             Request::GetLight => k.light = Some(protocol::light(r)),
             Request::GetHooksMode => k.hooks_mode = Some(protocol::hooks_mode(r)),
             Request::GetMicNr => k.mic = Some(protocol::mic_nr(r)),
-            Request::GetKeyTyping(id) => k.keys[id.index() as usize] = Some(protocol::key_typing(r)),
+            // The set reply echoes the list as stored: 81 06 50 10 <btn> 01 <n> <entries>.
+            Request::GetKeyTyping(id) | Request::SetKeyTyping(id, _) => {
+                k.keys[id.index() as usize] = Some(protocol::key_typing(r))
+            }
             _ => {}
         }
     }
 }
 
-/// Everything the page shows, read once each time the key wakes after connecting. On a real key only gets
-/// checked on the real key are sent (the knob-press typing read is fake-only for now).
-fn read_all(fake: bool) -> Vec<Request> {
-    let mut v = vec![
+/// Read once each time the key wakes after connecting. Never key typing (cmd 0x50, which can stall): a
+/// key's list is read only when the user asks for it on the page, one at a time.
+fn read_all() -> Vec<Request> {
+    vec![
         Request::GetBattery,
         Request::GetStandbyTime,
         Request::GetSleepTime,
         Request::GetLight,
         Request::GetHooksMode,
         Request::GetMicNr,
-    ];
-    v.extend(KeyId::ALL.into_iter().map(Request::GetKeyTyping));
-    v.retain(|r| fake || r.verified_on_hardware());
-    v
+    ]
 }
 
 /// Later (stub only, not active): the light follows Claude Code's state through Claude Code hooks.
@@ -811,6 +868,9 @@ mod tests {
             max_stalls: 3,
             queue_limit: 16,
             request_expiry: Duration::from_millis(500),
+            slow_reply_timeout: Duration::from_millis(800),
+            settle: Duration::from_millis(30),
+            real_key: false,
         }
     }
     fn wait_for(au: &Au05, f: impl Fn(&Value) -> bool) -> Value {
@@ -872,10 +932,9 @@ mod tests {
     }
 
     #[test]
-    fn a_real_key_reads_only_checked_gets() {
-        assert!(!read_all(false).contains(&Request::GetKeyTyping(KeyId::KnobPress)));
-        assert!(read_all(false).contains(&Request::GetKeyTyping(KeyId::K3)));
-        assert!(read_all(true).contains(&Request::GetKeyTyping(KeyId::KnobPress)));
+    fn the_connect_reads_never_include_key_typing() {
+        assert!(read_all().iter().all(|r| !r.slow_reply()));
+        assert!(read_all().iter().all(|r| r.verified_on_hardware()));
     }
 
     #[test]
@@ -884,19 +943,24 @@ mod tests {
         assert_eq!(au.status()["state"], "disabled");
         assert!(au.fake_handle().unwrap().received().is_empty(), "nothing before enable");
         au.configure(&json!({"enabled": true}));
-        let s = wait_for(&au, |s| s["keys"][3]["mode"] != "unknown" && s["micNr"].is_object());
+        let s = wait_for(&au, |s| s["micNr"].is_object());
         assert_eq!(s["state"], "connected");
         assert_eq!(s["standbyS"], 600);
         assert_eq!(s["battery"]["percent"], 30);
+        assert_eq!(s["keys"][2]["mode"], "unknown", "key typing is not read at connect");
+        assert!(au.fake_handle().unwrap().received().iter().all(|p| p[2] != 0x50));
+        au.read_key(KeyId::K3).unwrap();
+        let s = au.status();
         assert_eq!(s["keys"][2]["mode"], "uc", "K3 types its own F22");
-        assert_eq!(s["keys"][0]["mode"], "factory");
         assert_eq!(s["keys"][3]["factory"], "Backspace");
         au.change(Change::StandbyTime(900)).unwrap();
         au.change(Change::KeyTyping(KeyId::K1, KeyTyping::parse("Ctrl + D").unwrap())).unwrap();
         au.change(Change::SleepTime(0)).unwrap();
         au.change(Change::MicNrLevel(2)).unwrap();
         let s = wait_for(&au, |s| s["keys"][0]["mode"] == "keys" && s["standbyS"] == 900);
-        assert_eq!(s["keys"][0]["label"], "Ctrl + D");
+        assert_eq!(s["keys"][0]["label"], "Ctrl + D", "learned from the set's echo");
+        let sent50: Vec<_> = au.fake_handle().unwrap().received().into_iter().filter(|p| p[2] == 0x50).collect();
+        assert_eq!(sent50.len(), 2, "one read (K3) and one set (K1); no read-back");
         assert_eq!(s["sleepS"], 0);
         let fake = au.fake_handle().unwrap();
         assert_eq!(fake.lock().mic, MicNr { level: 2, a: 100, b: 100 }, "the unknown values are kept");
@@ -915,7 +979,10 @@ mod tests {
         let mut claimed = desk.claimed();
         claimed.sort();
         assert_eq!(claimed, vec![hotkey::VK_F21, hotkey::VK_F22]);
-        let s = wait_for(&au, |s| s["keys"][2]["mode"] == "uc");
+        wait_for(&au, |s| s["state"] == "connected" && s["micNr"].is_object());
+        au.read_key(KeyId::K3).unwrap();
+        let s = au.status();
+        assert_eq!(s["keys"][2]["mode"], "uc");
         assert_eq!(s["keys"][2]["hotkey"]["state"], "ready");
         assert_eq!(s["keys"][0]["hotkey"]["state"], "off");
         // K3 types F22 (its own code) on the fake key; the fake desktop delivers it.
@@ -951,7 +1018,7 @@ mod tests {
     fn a_stalling_key_pauses_and_reconnect_resumes() {
         let au = worker();
         au.configure(&json!({"enabled": true}));
-        wait_for(&au, |s| s["keys"][2]["mode"] != "unknown");
+        wait_for(&au, |s| s["micNr"].is_object());
         au.test_control(&json!({"op":"stallWrites","value":true})).unwrap();
         let err = au.change(Change::StandbyTime(700)).unwrap_err();
         assert!(err.contains("did not accept"), "{err}");
@@ -964,31 +1031,57 @@ mod tests {
         au.shutdown();
     }
 
-    /// A desktop whose actions crash: the worker and later changes must keep working.
-    struct CrashDesktop(FakeDesktop);
-    impl Desktop for CrashDesktop {
-        fn set_handler(&self, h: hotkey::PressHandler) {
-            self.0.set_handler(h)
-        }
-        fn set_hotkeys(&self, vks: &[u16]) -> BTreeMap<u16, Result<(), String>> {
-            self.0.set_hotkeys(vks)
-        }
-        fn run(&self, _: &Action) -> Result<(), String> {
-            panic!("test action crash")
-        }
+    #[test]
+    fn a_crash_in_an_action_does_not_stop_the_worker() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.test_control(&json!({"op":"actionCrash","value":true})).unwrap();
+        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"enter"}}}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        au.test_control(&json!({"op":"click","control":"k3"})).unwrap();
+        let s = wait_for(&au, |s| s["events"].as_array().unwrap().iter().any(|e| e["action"].is_string()));
+        let ev = s["events"].as_array().unwrap().iter().find(|e| e["action"].is_string()).unwrap().clone();
+        assert_eq!(ev["action"], "Enter: The action crashed");
+        au.change(Change::StandbyTime(650)).unwrap();
+        assert_eq!(au.status()["state"], "connected");
+        au.shutdown();
+        assert!(desk.claimed().is_empty(), "quit releases every hotkey");
     }
 
     #[test]
-    fn a_crash_in_an_action_does_not_stop_the_worker() {
-        let desk = Arc::new(CrashDesktop(FakeDesktop::default()));
-        let au = Au05::with_config(false, Some(desk.clone()), quick());
-        au.configure(&json!({"enabled": false, "actions": {"k1": {"kind":"enter"}}}));
-        // Enabled-without-device is not possible in a test (no real key), so claim directly.
-        au.apply_hotkeys(true);
-        assert!(desk.0.press(hotkey::VK_F20));
-        let s = wait_for(&au, |s| s["events"].as_array().is_some_and(|e| !e.is_empty()));
-        assert_eq!(s["events"][0]["action"], "Enter: The action crashed");
+    fn overlapping_configure_calls_never_start_two_workers() {
+        let au = worker();
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let au = au.clone();
+                std::thread::spawn(move || au.configure(&json!({"enabled": i % 2 == 0})))
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["state"] == "connected");
         au.shutdown();
-        assert!(desk.0.claimed().is_empty(), "quit releases every hotkey");
+        assert_eq!(au.status()["state"], "disabled");
+        assert!(au.thread.lock_or_recover().is_none());
+    }
+
+    #[test]
+    fn key_reads_and_changes_go_one_at_a_time() {
+        let au = worker();
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        au.fake_handle().unwrap().lock().key_typing_delay = Duration::from_millis(400);
+        let first = {
+            let au = au.clone();
+            std::thread::spawn(move || au.read_key(KeyId::K1))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        let second = au.read_key(KeyId::K2);
+        assert!(second.unwrap_err().contains("Another key"), "a second key read is refused while one runs");
+        first.join().unwrap().unwrap();
+        assert_eq!(au.fake_handle().unwrap().lock().overlapped, 0);
+        au.shutdown();
     }
 }

@@ -71,6 +71,7 @@ fn main() {
         "au05_configure",
         "au05_change",
         "au05_reconnect",
+        "au05_read_key",
         "au05_test_control",
         "dock_test_button",
         "dock_test_studio",
