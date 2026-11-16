@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.0 — 2026-11-17
+
+Open Claude sessions from the Vibe Key quick menu. On the Vibe Key page,
+"Connect Claude sessions" (off until you click it) adds four small hook
+entries to your Claude settings (~/.claude/settings.json, backed up first;
+the page shows exactly what is added). Each Claude desktop session then tells
+Unified Control its session, project folder and a short label from its first
+message; nothing else leaves Claude. The quick menu lists the sessions by
+project and opens the one you pick, optionally followed by an action such as
+dictation. Disconnect removes exactly Unified Control's entries; uninstalling
+Unified Control disconnects first. No administrator rights are needed; if your
+organisation's Claude policy blocks user hooks, the page says so.
+
 ## 0.17.0 — 2026-11-17
 
 Vibe Key quick menu. Any key (K1, K2, K3 or the knob press) can open a small
