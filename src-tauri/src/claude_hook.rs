@@ -1,4 +1,5 @@
-//! `UnifiedControl.exe --claude-hook <event>`: run by Claude Code hooks (see core/claude_sessions.rs).
+//! `UC-ClaudeHook-v1.exe --claude-hook <event> --uc-hook-v1`: run by Claude Code hooks (see
+//! core/claude_sessions.rs). A program named UC-ClaudeHook-v1.exe only ever runs this, whatever its arguments.
 //!
 //! Reads the hook's stdin JSON and exactly two environment variables (`CLAUDE_CODE_HOST_SESSION_ID`, the
 //! desktop session id, and `CLAUDE_CODE_SESSION_ID`), and sends only the fields built by
@@ -13,9 +14,12 @@ use uc_core::core::claude_sessions;
 const STDIN_LIMIT: u64 = 256 * 1024;
 
 pub fn run(args: &[String]) -> i32 {
+    // Silent: a panic must print nothing (stderr could reach the user through Claude) and write no log.
+    std::panic::set_hook(Box::new(|_| {}));
+    let marked = args.iter().any(|a| a == claude_sessions::HOOK_MARKER);
     let event = args.iter().position(|a| a == claude_sessions::HOOK_FLAG).and_then(|i| args.get(i + 1)).cloned();
     let _ = std::panic::catch_unwind(move || {
-        let Some(event) = event else { return };
+        let Some(event) = event.filter(|_| marked) else { return };
         // Read stdin on a helper thread so a stdin that never closes cannot hold the hook.
         let (tx, rx) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().spawn(move || {
@@ -33,6 +37,19 @@ pub fn run(args: &[String]) -> i32 {
                 serde_json::json!({"method": "claude_hook", "params": payload}),
                 Duration::from_millis(120),
             );
+        }
+    });
+    0
+}
+
+/// `UnifiedControl.exe --claude-disconnect` (run by the uninstaller): remove UC's hook entries from Claude's
+/// settings, the same way as Disconnect on the page. Prints nothing; always exits 0.
+pub fn disconnect() -> i32 {
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = std::panic::catch_unwind(|| {
+        if let Ok(home) = claude_sessions::claude_home(false) {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let _ = claude_sessions::disconnect_file(&home.join("settings.json"), now);
         }
     });
     0

@@ -14,12 +14,22 @@
   CopyFiles /SILENT "$INSTDIR\UnifiedControl.exe" "$INSTDIR\UC-AgentRequest-v1.exe"
   IfErrors 0 +2
     Abort "Unified Control request proxy could not be installed"
+  ; Claude Code hooks run this copy. By its name it only ever sends a hook event: it can never start or raise
+  ; the app, even if Claude runs it without arguments.
+  ClearErrors
+  CopyFiles /SILENT "$INSTDIR\UnifiedControl.exe" "$INSTDIR\UC-ClaudeHook-v1.exe"
+  IfErrors 0 +2
+    Abort "Unified Control Claude hook proxy could not be installed"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   ; The opt-in "Start Unified Control when Windows starts" entry must not outlive the app.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UnifiedControl"
   Delete "$INSTDIR\UC-AgentRequest-v1.exe"
+  ; Remove Unified Control's Claude Code hooks first (only its own entries), so Claude shows no hook errors
+  ; after the uninstall. Headless; does nothing when they are not there.
+  ExecWait '"$INSTDIR\UnifiedControl.exe" --claude-disconnect'
+  Delete "$INSTDIR\UC-ClaudeHook-v1.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

@@ -92,7 +92,7 @@ export class Au05Panel{
   }
   async claudeOp(op){
     try{const r=await this.invoke(op==='connect'?'claude_sessions_connect':'claude_sessions_disconnect');this.claudeFull=r.claude;
-      this.setNote(op==='connect'?`Connected. Your Claude settings were backed up${r.backup?` to ${r.backup}`:''} first.`:'Disconnected. Unified Control removed only its own hook entries.');}
+      if(r.warning)this.setNote(r.warning,true);else this.setNote(op==='connect'?(r.backup?`Connected. Your Claude settings were backed up to ${r.backup} first.`:'Connected.'):'Disconnected. Unified Control removed only its own hook entries.');}
     catch(error){this.setNote(errorText(error),true);}
     await this.refresh();this.paint(true);
   }
@@ -295,7 +295,7 @@ export class Au05Panel{
       ${full.blocked?`<p class="attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="attention">${esc(full.error)}</p>`:''}
       ${cs.connected&&full.hooks&&full.hooks!=='connected'&&!full.blocked?`<p class="attention">The hooks in your Claude settings are missing or point to another copy of Unified Control. <button class="btn" type="button" data-claude-op="connect"${native}>Connect again</button></p>`:''}
       <section class="settings-list"><ul class="au05-sessions">${sessionList}</ul>${cs.connected?`<div class="setting-row"><span class="hint">${cs.lastEvent?`Last event received at ${esc(when(cs.lastEvent))}.`:'No event received yet: send a prompt in a Claude session to check the connection.'}</span></div>`:''}</section>
-      ${cs.connected?'':`<details class="au05-claude-preview"><summary>What Connect adds to ${esc(full.settingsPath||'your Claude settings')}</summary><p class="hint">Merged into the file (nothing else changes); a backup copy is saved next to it first. Disconnect removes exactly these entries.</p><pre>${esc(full.preview||'')}</pre></details>`}`;
+      ${cs.connected?'':`<details class="au05-claude-preview"><summary>What Connect adds to ${esc(full.settingsPath||'your Claude settings')}</summary><p class="hint">Merged into the file: nothing else changes, though Claude's file is rewritten with standard formatting. A backup copy is saved next to it first (Unified Control keeps its last three). Disconnect removes exactly these entries; disconnect before uninstalling (the uninstaller also does it).</p><pre>${esc(full.preview||'')}</pre></details>`}`;
     return `${profileBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}<p class="hint">Choose a key or the knob. A control lights up when you press or turn it.</p></div>
     <aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside></div>
     ${menuSection}${claudeSection}

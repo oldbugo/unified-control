@@ -199,31 +199,45 @@ one key opens a menu.
 
 The user chose Claude Code hooks. Opt-in: "Connect Claude sessions" on the Vibe Key page.
 
+- **The hook program** is `UC-ClaudeHook-v1.exe`, a copy of UnifiedControl.exe that the installer makes next to
+  it (like `UC-AgentRequest-v1.exe`). A program with that name only ever runs the hook, whatever its
+  arguments, so a hook can never start or raise the app. Hooks never point at UnifiedControl.exe: an older or
+  virtualized copy without the hook code would raise the window on every prompt.
 - **Connect** adds four hook entries (SessionStart, UserPromptSubmit, Stop, SessionEnd) to
-  `%USERPROFILE%\.claude\settings.json`: merged (other settings and the user's own hooks stay), a backup copy
-  `settings.json.uc-backup-<time>` is written next to it first, and the page shows exactly what is added
-  before. Each entry runs the program directly (exec form, no shell): `{"type": "command", "command":
-  "<UnifiedControl.exe>", "args": ["--claude-hook", "<event>"], "timeout": 5}`. **Disconnect** removes exactly
-  UC's entries and forgets the session list. If the organisation's managed settings (`C:\Program
-  Files\ClaudeCode\managed-settings.json`, `managed-settings.d`, or the `ClaudeCode` policy in the registry)
-  block user hooks (`allowManagedHooksOnly`, `disableAllHooks`, `strictPluginOnlyCustomization`), or the
-  user's own `disableAllHooks` is on, the page says so and Connect is not offered.
-- **`UnifiedControl.exe --claude-hook <event>`** reads the hook's stdin and only `CLAUDE_CODE_HOST_SESSION_ID`
-  (the desktop session id, `local_<uuid>`) and `CLAUDE_CODE_SESSION_ID`; no other environment variable (the
-  environment holds tokens and the user's email). It sends {event, desktop id, Claude Code session id,
-  folder, time, and for UserPromptSubmit the first 80 characters of the prompt as a label} over UC's local
-  pipe, prints nothing, writes nothing and exits 0 (24-30 ms in the quiet test, debug build). If UC is not
-  running or Claude sessions are not connected, nothing happens. Sessions without a desktop id (terminal
-  sessions) are not sent.
-- **Session list** (`claude-sessions.json` in the app folder): desktop id, project (the folder's name),
-  label, state (working after a prompt, idle after Stop), last activity. A session leaves at SessionEnd or
-  after 24 h without activity.
+  `%USERPROFILE%\.claude\settings.json`. Each runs the proxy directly (exec form, no shell):
+  `{"type": "command", "command": "<install folder>\UC-ClaudeHook-v1.exe", "args": ["--claude-hook", "<event>",
+  "--uc-hook-v1"], "timeout": 5}`. UC's entries are exactly those with that program name and the
+  `--uc-hook-v1` marker. Connect needs the installed proxy; debug builds, fake and quiet instances only ever use
+  `UC_CLAUDE_HOME` (never the real folder).
+- **How the file is changed** (`claude_sessions::update_file`): read, change, and only if the content
+  changed: back up the old bytes (`settings.json.uc-backup-<ms>`, UC keeps its last three), write a temp
+  file, check the file was not changed meanwhile (else abort with a message), then replace it. Connect when
+  already connected writes nothing. A symlinked settings file is written at its target. Invalid JSON is
+  refused and the file left untouched. The file is rewritten with standard formatting (content kept); the
+  page says so.
+- **Disconnect** removes exactly UC's entries and forgets the session list. If Claude's file cannot be read
+  or changed, UC still stops listening and tells the user which entries to remove by hand. **Uninstall:** the
+  uninstaller runs `UnifiedControl.exe --claude-disconnect` (headless, same path) before it deletes the
+  proxy, so Claude shows no hook errors afterwards; the page also says to disconnect before uninstalling.
+- **Blocked hooks:** if the organisation's managed settings (`C:\Program Files\ClaudeCode\managed-settings.json`,
+  `managed-settings.d`, or the `ClaudeCode` policy in the registry) block user hooks (`allowManagedHooksOnly`,
+  `disableAllHooks`, `strictPluginOnlyCustomization`), or the user's own `disableAllHooks` is on, the page
+  says so and Connect is not offered.
+- **The hook run** reads the hook's stdin and only `CLAUDE_CODE_HOST_SESSION_ID` (the desktop session id,
+  `local_<uuid>`) and `CLAUDE_CODE_SESSION_ID`; no other environment variable (the environment holds tokens
+  and the user's email). It sends {event, desktop id, Claude Code session id, folder (control characters
+  removed), time, and for UserPromptSubmit the first 80 characters of the prompt as a label} over UC's local
+  pipe, prints nothing (its panic hook is silent), writes nothing and exits 0 (24-31 ms in the quiet test,
+  debug build). Without the marker, or if UC is not running or not connected, nothing happens. Sessions
+  without a desktop id (terminal sessions) are not sent.
+- **Session list** (`claude-sessions.json` in the app folder): desktop id, the Claude Code session it is
+  bound to (the first one that reported it; child sessions can share the desktop id, and their events change
+  nothing), project (the folder's name, at most 60 characters), label, state (working after a prompt, idle
+  after Stop), last activity. A session leaves at its own SessionEnd or after 24 h without activity.
 - **Quick menu:** "Claude sessions" lists them, grouped by project (one project: the sessions directly), most
   recent first. Choosing one opens `claude://claude.ai/epitaxy/<desktop id>` (ShellExecute), then, after
   about 1.2 s, runs the entry's follow-up action if one is set (for example Claude: Start dictation).
-- Tests never touch the real Claude settings: fake and quiet instances refuse unless `UC_CLAUDE_HOME`
-  points to a test folder. The log records connect and disconnect (entry counts) and "menu chose a Claude
-  session"; never prompt text or labels.
+- The log records connect and disconnect and "menu chose a Claude session"; never prompt text or labels.
 - ChatGPT: nothing similar yet.
 
 ## Log
@@ -278,4 +292,5 @@ changes, and menu edits (entry count only); knob turn changes; Claude sessions c
     project. Confirm Claude is not slowed and shows nothing from the hook. From the quick menu, open the
     session (with and without the follow-up dictation). Confirm Claude Code accepts the exec form
     (`command` plus `args`); if not, the hooks do nothing and "No event received yet" stays. Disconnect: the
-    file is back as before.
+    file is back as before. Uninstall with Claude sessions connected (on a test install): the hooks are
+    removed and Claude shows no hook error.

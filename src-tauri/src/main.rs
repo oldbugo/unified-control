@@ -23,8 +23,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // A Claude Code hook: first of all, before any log, window or single-instance path. Prints nothing,
     // always exits 0 quickly.
-    if args.iter().any(|a| a == uc_core::core::claude_sessions::HOOK_FLAG) {
+    // The hook proxy (UC-ClaudeHook-v1.exe) is request-only: it never starts or raises the app.
+    let proxy = std::env::current_exe().is_ok_and(|e| uc_core::core::claude_sessions::is_proxy(&e));
+    if proxy || args.iter().any(|a| a == uc_core::core::claude_sessions::HOOK_FLAG) {
         std::process::exit(claude_hook::run(&args));
+    }
+    // The uninstaller: remove UC's entries from Claude's settings, headless.
+    if args.iter().any(|a| a == uc_core::core::claude_sessions::DISCONNECT_FLAG) {
+        std::process::exit(claude_hook::disconnect());
     }
     // The supervised child has no window, tray, MCP server or durable profile
     // writer. Dispatch before every GUI/single-instance path.

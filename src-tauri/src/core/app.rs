@@ -657,35 +657,21 @@ impl App {
         au05.configure(&saved.0["au05"]);
         Ok(self.au05_state())
     }
-    /// Where Claude's settings are: `%USERPROFILE%\.claude`. Fake and quiet (test) instances use only
-    /// `UC_CLAUDE_HOME` and never the real folder.
+    /// Where Claude's settings are: `%USERPROFILE%\.claude`. Debug builds and fake or quiet (test) instances
+    /// use only `UC_CLAUDE_HOME` and never the real folder.
     fn claude_home(&self) -> CoreResult<PathBuf> {
         let test = super::buildinfo::fake_device().is_some()
             || std::env::var("UC_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0");
-        if test || cfg!(debug_assertions) {
-            if let Some(h) = std::env::var_os("UC_CLAUDE_HOME").filter(|h| !h.is_empty()) {
-                return Ok(PathBuf::from(h));
-            }
-        }
-        if test {
-            return Err(CoreError::new("Test instances never change your Claude settings (UC_CLAUDE_HOME is not set)"));
-        }
-        let profile = std::env::var_os("USERPROFILE").ok_or_else(|| CoreError::new("Your Windows user folder is unknown"))?;
-        Ok(PathBuf::from(profile).join(".claude"))
-    }
-    /// The program Claude's hooks run: this exe.
-    fn hook_exe() -> CoreResult<String> {
-        let p = std::env::current_exe().map_err(|_| CoreError::new("The Unified Control program path is unknown"))?;
-        let s = p.to_string_lossy().to_string();
-        Ok(s.strip_prefix(r"\\?\").map(String::from).unwrap_or(s))
+        super::claude_sessions::claude_home(test).map_err(CoreError::new)
     }
     fn claude_connected(&self) -> bool {
         self.settings.load().0["au05"]["claudeSessions"].as_bool().unwrap_or(false)
     }
     /// The page's Claude sessions section: connected or not, what Connect adds, whether Claude would run it.
     pub fn claude_state(&self) -> Value {
-        let exe = Self::hook_exe().unwrap_or_default();
-        let (hooks, blocked, path, error) = match self.claude_home() {
+        let proxy = super::claude_sessions::proxy_path();
+        let exe = proxy.clone().unwrap_or_else(|_| format!(r"<Unified Control folder>\{}", super::claude_sessions::PROXY_NAME));
+        let (hooks, blocked, path, mut error) = match self.claude_home() {
             Ok(home) => {
                 let p = home.join("settings.json");
                 match super::claude_sessions::read_settings(&p) {
@@ -700,6 +686,9 @@ impl App {
             }
             Err(e) => ("unavailable", None, String::new(), Some(e.message)),
         };
+        if error.is_none() {
+            error = proxy.err();
+        }
         json!({
             "connected": self.claude_connected(),
             "hooks": hooks,
@@ -711,40 +700,51 @@ impl App {
             "lastEvent": self.claude.last_event(),
         })
     }
-    /// Add UC's hook entries to Claude's settings (backed up first), then accept hook events.
+    /// Add UC's hook entries to Claude's settings (backed up first; nothing written if already there), then
+    /// accept hook events. Needs the installed hook proxy; debug builds need `UC_CLAUDE_HOME`.
     pub fn claude_connect(&self) -> CoreResult<Value> {
         let _g = self.claude_lock.lock_or_recover();
         let path = self.claude_home()?.join("settings.json");
-        let exe = Self::hook_exe()?;
-        let mut v = super::claude_sessions::read_settings(&path).map_err(CoreError::new)?;
-        if let Some(why) = super::claude_sessions::hooks_blocked(&v, &super::claude_sessions::managed_settings()) {
+        let exe = super::claude_sessions::proxy_path().map_err(CoreError::new)?;
+        let current = super::claude_sessions::read_settings(&path).map_err(CoreError::new)?;
+        if let Some(why) = super::claude_sessions::hooks_blocked(&current, &super::claude_sessions::managed_settings()) {
             return Err(CoreError::new(why));
         }
-        super::claude_sessions::connect(&mut v, &exe).map_err(CoreError::new)?;
-        let backup = super::claude_sessions::write_settings(&path, &v, now_ms()).map_err(CoreError::new)?;
+        let r = super::claude_sessions::update_file(&path, now_ms(), |v| super::claude_sessions::connect(v, &exe), &|| {})
+            .map_err(CoreError::new)?;
         self.settings.update(|s| s["au05"]["claudeSessions"] = json!(true)).map_err(CoreError::from)?;
         if let Some(a) = self.au05.get() {
-            a.log_line(&format!("claude sessions connected ({})", if backup.is_some() { "backup made" } else { "new settings file" }));
+            a.log_line(&format!(
+                "claude sessions connected ({})",
+                if !r.changed { "already in Claude's settings" } else if r.backup.is_some() { "backup made" } else { "new settings file" }
+            ));
         }
-        Ok(json!({"claude": self.claude_state(), "backup": backup.map(|b| b.to_string_lossy().to_string())}))
+        Ok(json!({"claude": self.claude_state(), "backup": r.backup.map(|b| b.to_string_lossy().to_string())}))
     }
-    /// Remove exactly UC's hook entries (backed up first) and forget the session list.
+    /// Remove exactly UC's hook entries (backed up first) and forget the session list. If Claude's file
+    /// cannot be read or changed, UC's side is still turned off and the user is told what to remove by hand.
     pub fn claude_disconnect(&self) -> CoreResult<Value> {
         let _g = self.claude_lock.lock_or_recover();
-        let path = self.claude_home()?.join("settings.json");
-        let mut v = super::claude_sessions::read_settings(&path).map_err(CoreError::new)?;
-        let removed = super::claude_sessions::disconnect(&mut v);
-        let backup = if removed > 0 {
-            super::claude_sessions::write_settings(&path, &v, now_ms()).map_err(CoreError::new)?
-        } else {
-            None
-        };
+        let result = self
+            .claude_home()
+            .map_err(|e| e.message)
+            .and_then(|h| super::claude_sessions::update_file(&h.join("settings.json"), now_ms(), |v| {
+                super::claude_sessions::disconnect(v);
+                Ok(())
+            }, &|| {}).map(|r| (h, r)));
         self.settings.update(|s| s["au05"]["claudeSessions"] = json!(false)).map_err(CoreError::from)?;
         self.claude.clear();
+        let (backup, warning) = match result {
+            Ok((_, r)) => (r.backup, None),
+            Err(e) => (None, Some(format!(
+                "{e}. Unified Control stopped listening, but its entries may still be in your Claude settings: remove the hooks that run {} by hand.",
+                super::claude_sessions::PROXY_NAME
+            ))),
+        };
         if let Some(a) = self.au05.get() {
-            a.log_line(&format!("claude sessions disconnected ({removed} hook entries removed)"));
+            a.log_line(if warning.is_some() { "claude sessions disconnected (Claude's file not changed)" } else { "claude sessions disconnected" });
         }
-        Ok(json!({"claude": self.claude_state(), "backup": backup.map(|b| b.to_string_lossy().to_string())}))
+        Ok(json!({"claude": self.claude_state(), "backup": backup.map(|b| b.to_string_lossy().to_string()), "warning": warning}))
     }
     /// One event from `--claude-hook` (local pipe). Ignored unless Claude sessions are connected.
     pub fn claude_hook_event(&self, params: &Value) -> Value {
