@@ -416,6 +416,30 @@ one key opens a menu.
 - The Claude sessions card says that sessions appear once they start (or restart) after Connect, because Claude
   reads its hook settings when a session starts.
 
+### Claude's own session list, real parents, knob press selects (user feedback 2026-11-17)
+
+- **Knob press selects** while the menu is open (same as K2: go into / open; "It is natural to keep the thumb
+  there"). Defaults: knob turn moves, knob press and K2 select, K3 back. Close is the top "Close" row (and K3
+  at the top level).
+- **No wrap-around on any path.** Every move reaches the one state machine (`au05_menu::MenuState`), which
+  stops at the first and last row: the menu window's keys and clicks (`au05_menu` ops), the knob's F23/F24
+  hotkeys and its private events. The menu's contents are frozen while it is open, so a session list that
+  changes meanwhile cannot move or reset the highlight (a likely cause of the "back to the top" jump). One test
+  per path.
+- **Real parents** (`core/claude_tree.rs`, read-only): the Claude desktop app keeps one file per session in
+  `%LOCALAPPDATA%\Claude-Data\claude_<suffix>\claude-code-sessions\<account>\<org>\local_<uuid>.json`. UC reads
+  only `sessionId`, `title`, `spawnedFrom.sessionId`, `startChain.firstSessionId`/`depth`, `cwd`, `originCwd`,
+  `worktreeName`, `isArchived`, `lastActivityAt`, `lastTurnEdgeAt`; everything else is ignored and never kept
+  or logged; nothing is written there. Files over 1 MB are skipped, at most 500 are parsed, the list is cached
+  5 s and read when the menu opens. Debug builds and test instances read only `UC_CLAUDE_DATA`.
+- **The tree**: projects (the `originCwd` folder) at the top, newest activity first; under each the sessions
+  without a visible parent; under every session its spawned sessions, any depth (`spawnedFrom.sessionId`). A
+  session with sub-sessions is a sub-menu whose first row opens the session itself. Archived sessions are
+  hidden (a child of a hidden session becomes a root). The working dot shows when the hooks report the session
+  working or Claude recorded activity in the last 2 minutes (and on every node above it).
+- **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
+  Claude sessions card says so. The list works without Connect; Connect adds the live working state.
+
 ## Claude sessions (2026-11-17)
 
 The user chose Claude Code hooks. Opt-in: "Connect Claude sessions" on the Vibe Key page.
