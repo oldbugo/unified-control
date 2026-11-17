@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.37.0 — 2026-11-17
+
+Changes on the Vibe Key page now reach an awake key. Before, Unified Control
+only sent a change if the key had said something in the last 11 seconds, but
+the key is silent when idle, so a change made a little later was refused even
+though the key's lights were on. Now a change is sent while the key's own
+timers say it is awake. If a send ever stalls that way, Unified Control goes
+back to the careful rule for five minutes. If the key really is asleep, the
+change waits with "Touch the Vibe Key to apply" next to the setting and is sent
+when you touch it; after a minute it says "Not applied: the key was asleep".
+
+After each change the key's value is read back: the setting shows "Applied",
+or what the key kept if it differs, and the value is written to the log.
+
+The light mode is now four small pictures of the key (Off, All, Dial, Keys)
+with the lit parts glowing, as checked on the real key. Brightness is a slider
+that sends when you let go. The mode records are folded under "Advanced", the
+Controls card appears once the codes are read, and Recent events shows only
+when there are some. The note under the title no longer repeats in the key
+card.
+
+The quick menu dial uses the whole circle now: the entries share the ring
+equally (four entries are a quarter each), the ring is about half as thick
+again and the dial is bigger, so names have room. Names are always level and
+readable, never turned or upside down, on up to three lines; a name that still
+doesn't fit shows its most telling words, and a very long single word is split
+with a hyphen instead of cut off. The stick that marked the end of the list is
+gone: Close or Back is now the largest segment, each next one is a little
+smaller and the last one a notch smaller, so the step back up to Close or Back
+shows where the list starts and ends. The segments also get slightly darker
+toward the end of the list.
+
 ## 0.36.0 — 2026-11-17
 
 The Vibe Key no longer shows "asleep" while you are using it, for example

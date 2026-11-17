@@ -84,17 +84,21 @@ async function run(){
 
     // A stalling key pauses sending; the app stays responsive.
     await invoke('au05_test_control',{patch:{op:'stallWrites',value:true}});
+    // 0.37.0: a change made while another is still being sent waits its turn, then stalls; either way the
+    // write has a time limit and sending pauses.
     const t0=Date.now();
-    await assert.rejects(invoke('au05_change',{change:{setting:'standbyTime',value:600}}),/did not accept/);
-    assert.ok(Date.now()-t0<6000,'the write had a time limit');
-    assert.equal((await invoke('au05_state')).state,'paused');
+    const waitState=async(f,ms=8000)=>{const end=Date.now()+ms;for(;;){const st=await invoke('au05_state');if(f(st)||Date.now()>end)return st;await new Promise(r=>setTimeout(r,100));}};
+    await invoke('au05_change',{change:{setting:'standbyTime',value:600}}).catch(e=>assert.match(String(e?.error||e),/did not accept/));
+    const stalled=await waitState(st=>st.state==='paused'&&st.changes?.standbyTime?.state==='failed');
+    assert.ok(Date.now()-t0<8000,'the write had a time limit');
+    assert.equal(stalled.state,'paused');
     await page.locator('select[data-au05-set="standbyTime"]').selectOption('300');
     await page.waitForFunction(()=>/paused|did not accept/i.test(document.getElementById('au05-note')?.textContent||''));
     assert.ok((await invoke('app_state')).appVersion,'the host still answers');
     await invoke('au05_test_control',{patch:{op:'stallWrites',value:false}});
     await page.getByRole('button',{name:'Reconnect'}).click();
     await invoke('au05_change',{change:{setting:'standbyTime',value:600}});
-    assert.equal((await invoke('au05_state')).standbyS,600);
+    assert.equal((await waitState(st=>st.standbyS===600)).standbyS,600);
 
     // A real-key-only refusal cannot be tested with the fake; check the fake accepts an unverified set.
     await invoke('au05_change',{change:{setting:'sleepTime',value:7200}});

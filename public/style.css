@@ -575,3 +575,25 @@ body.au05-dragging[data-au05-drop="no"], body.au05-dragging[data-au05-drop="no"]
 .au05-cs-when { font-variant-numeric:tabular-nums; }
 .au05-cs-source { font-size:var(--fs-tiny); color:var(--text-muted); }
 .au05-cs-source.attention { color:var(--warn); }
+
+/* 0.37.0: the Device section. Each setting: label (and raw value), control, and its last change. */
+.au05-set-ctl { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+.au05-chg { font-size:var(--fs-tiny); color:var(--text-muted); }
+.au05-chg.ok { color:var(--ok); }
+.au05-chg.warn { color:var(--warn); }
+.au05-chg.bad { color:var(--danger); }
+.au05-lpick { display:flex; gap:var(--s2); }
+.au05-ltile { display:flex; flex-direction:column; align-items:center; gap:2px; width:58px; padding:var(--s1) 0; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface-1); color:var(--text-muted); font:inherit; font-size:var(--fs-tiny); cursor:pointer; }
+.au05-ltile svg { width:24px; height:34px; }
+.au05-ltile .body { fill:var(--surface-2); stroke:var(--border-strong); }
+.au05-ltile .part { fill:var(--surface-3); stroke:var(--border-strong); stroke-width:.8; }
+.au05-ltile .part.lit { fill:var(--accent); stroke:var(--accent-hover); filter:drop-shadow(0 0 2.5px var(--accent)); }
+.au05-ltile[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-soft); color:var(--text); font-weight:600; }
+.au05-ltile:hover:not([disabled]) { border-color:var(--border-strong); }
+.au05-ltile[disabled] { cursor:default; opacity:.6; }
+.au05-slider { display:inline-flex; align-items:center; gap:var(--s2); }
+.au05-slider input { width:140px; accent-color:var(--accent); }
+.au05-slider .au05-value { min-width:1.5em; text-align:right; font-variant-numeric:tabular-nums; }
+.au05-advanced { margin-top:var(--s2); }
+.au05-advanced summary { cursor:pointer; color:var(--text-muted); font-size:var(--fs-small); }
+.au05-advanced .au05-table { margin-top:var(--s2); }

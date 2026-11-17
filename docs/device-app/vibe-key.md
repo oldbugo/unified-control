@@ -486,6 +486,42 @@ the middle ... a handlebar that we can drag it around."
   restore without animation, mouse, the 31-entry window, screenshots to `UC_QM_SHOTS`);
   `quick_menu::tests::the_dial_window_fits_its_rings_and_the_work_area`.
 
+### The dial, 0.37.0 (user feedback on the real screen 2026-11-17)
+
+- "Only taking up like 50% ... you can go all the way": the visible rows share the whole ring (360 / rows
+  each, Close/Back counted; at most 8, the moving window beyond). The active band is about 1.5 times as thick
+  (radii [60,225]; [60,118],[126,254]; [60,100],[106,156],[164,305]); windows 522 x 618, 580 x 676,
+  682 x 778 logical, clamped to the work area (the page scales the dial down if needed).
+- "I can't be reading text upside down": labels are upright text centred on the segment (no textPath, no
+  turning: they are drawn outside the ring group that turns), up to 3 lines of whole words, 15 down to 11 px,
+  fitted to the segment (`boxFits`: every corner inside the band and the wedge, 6 px margin), clipped to it.
+  Then the short form (shared prefix, filler, least distinctive words dropped); one long word is split with a
+  hyphen at a normal size, else smaller (8 px). Never an ellipsis; the caption keeps the full name.
+- The end cue is a taper instead of the stick ("something a bit more integrated"): Close/Back's outer edge
+  is 12 px past the band, the next ones step down to the band, the last one is 9 px inside it (`taper`); in
+  long lists the taper is on the visible window, with the "more" fades. Subtle shading: up to 28 % darker
+  toward the last segment. The 120 ms bump at both ends stays.
+
+### Sending to a quiet key, 0.37.0 (real key 2026-11-17: a brightness change ended "Asleep" while the key was awake)
+
+- The driver only sends while a message from the key arrived within its `awake_window` (11 s), but the key is
+  silent when idle. UC now opens the session with a wide window (`uc_session_config`: 1 hour) and decides
+  itself (`Worker::gate`), without changing the driver: a page change is sent when the key's timers say awake
+  (last input, a message or a hotkey from its own codes, within its standby time less 10 s) or a message came
+  within the strict window (11 s), and the settle time has passed. Reads and key typing (0x50) keep the strict
+  rule. One request at a time, the 2 s write limit, no resend, the pause after a stall and 0x50's own rules
+  are unchanged.
+- A change sent on the timers only that stalls (no reply, write timeout): only the strict rule for 5 minutes
+  (`strictSending` in the status; logged).
+- A change that cannot be sent (asleep, or another change still being sent) is held, one per setting, and
+  sent once the key is awake; the setting shows "Touch the Vibe Key to apply" with the waiting value. After
+  60 s: "Not applied: the key was asleep", and the shown value goes back.
+- Every set is read back: the log has "read back <setting>: <values>" (mic noise reduction: the level and both
+  16-bit values; no raw bytes) and the setting shows "Applied" or "Key kept ...". The commands are unchanged.
+- Light mode, checked by the user on the real key: 0 off, 1 dial and keys, 2 dial only, 3 keys only (maybe
+  just the active key). The page shows four tiles and no Untested chip for it (`checked.lightMode` is set in
+  UC; the driver's own `verified_on_hardware` still lists it as unverified: update it in the driver repository).
+
 ### The shown state and the page, 0.36.0 (user reports 2026-11-17)
 
 - "It tells me it's not connected, but it should be ... the lights are on": during dictation the key sends no

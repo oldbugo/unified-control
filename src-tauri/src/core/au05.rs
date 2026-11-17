@@ -89,6 +89,14 @@ const EVENT_LOG: usize = 40;
 /// How long a settings change may wait for the key: asleep (20 s), quiet time, and a slow key-typing reply
 /// (up to 20 s).
 pub const SET_WAIT: Duration = Duration::from_secs(45);
+/// 0.37.0: the strict send rule (a private message from the key within this long), used after a stall.
+pub const STRICT_WINDOW: Duration = Duration::from_secs(11);
+/// After a send stalled while the key's timers said awake, only the strict rule applies for this long.
+pub const STRICT_FOR: Duration = Duration::from_secs(300);
+/// A change made while the key is asleep waits this long for the key to be touched, then is not applied.
+pub const TOUCH_WAIT: Duration = Duration::from_secs(60);
+/// The send rule's margin before the key's standby time.
+pub const STANDBY_MARGIN: Duration = Duration::from_secs(10);
 /// The read burst after the key wakes is capped by total time; reads still queued then are dropped.
 const READ_BURST_LIMIT: Duration = Duration::from_secs(10);
 
@@ -638,6 +646,51 @@ pub enum Change {
     HooksMode(u8),
 }
 
+/// The page's name for the setting a change edits (one entry per setting in the status `changes`).
+pub fn change_key(c: &Change) -> String {
+    match c {
+        Change::StandbyTime(_) => "standbyTime".into(),
+        Change::SleepTime(_) => "sleepTime".into(),
+        Change::LightMode(_) => "lightMode".into(),
+        Change::LightBrightness(_) => "lightBrightness".into(),
+        Change::MicNrLevel(_) => "micNr".into(),
+        Change::HooksMode(_) => "hooksMode".into(),
+        Change::Retry(_) => "retry".into(),
+        Change::LightRecord { record, field, .. } => {
+            let name = LIGHT_FIELDS.iter().find(|(_, f)| f == field).map(|(n, _)| *n).unwrap_or("field");
+            format!("lightRecord:{record}:{name}")
+        }
+    }
+}
+fn change_value(c: &Change) -> Value {
+    match c {
+        Change::StandbyTime(v) | Change::SleepTime(v) => json!(v),
+        Change::LightMode(v) | Change::LightBrightness(v) | Change::MicNrLevel(v) | Change::HooksMode(v) => json!(v),
+        Change::LightRecord { value, .. } => json!(value),
+        Change::Retry(_) => Value::Null,
+    }
+}
+/// What the key holds for the setting a change edits (after its read-back), and whether it is what was sent.
+/// Values only (no raw bytes); for mic noise reduction the level and both 16-bit values.
+pub fn read_back(c: &Change, k: &Known) -> Option<(bool, String)> {
+    match c {
+        Change::StandbyTime(s) => k.standby_s.map(|v| (v == *s, format!("{v} s"))),
+        Change::SleepTime(s) => k.sleep_s.map(|v| (v == *s, format!("{v} s"))),
+        Change::LightMode(m) => k.light.map(|l| (l.mode == *m, format!("mode {}", l.mode))),
+        Change::LightBrightness(b) => k.light.map(|l| (l.brightness == *b, format!("brightness {}", l.brightness))),
+        Change::MicNrLevel(l) => k.mic.map(|m| (m.level == *l, format!("level {} ({}, {})", m.level, m.a, m.b))),
+        Change::HooksMode(m) => k.hooks_mode.map(|v| (v == *m, format!("hooks mode {v}"))),
+        Change::LightRecord { record, field, value } => {
+            let i = LIGHT_FIELDS.iter().position(|(_, f)| f == field)?;
+            k.light.map(|l| {
+                let v = l.records[usize::from(*record).min(3)][i];
+                (v == *value, format!("{v}"))
+            })
+        }
+        Change::Retry(_) => None,
+    }
+}
+
 /// Page names of the light record fields.
 pub const LIGHT_FIELDS: [(&str, LightField); 5] = [
     ("type", LightField::Type),
@@ -689,7 +742,7 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
 
 /// What the key reported. `None` = not read yet.
 #[derive(Clone, Debug, Default)]
-struct Known {
+pub struct Known {
     battery: Option<(u16, u8)>,
     /// The status message's flags byte (class 0x7B, byte 4). Bit 0x08 is probably "charging" (not confirmed);
     /// changes are logged so the bits can be mapped on the real key.
@@ -733,6 +786,11 @@ struct Status {
     sync: SyncState,
     /// The settings reads after a wake stalled twice: left "Not read" (the page offers Read again).
     reads_failed: bool,
+    /// 0.37.0: per setting, the last change's state: "touch" (waiting for the key to be touched), "sending",
+    /// "applied", "kept" (the key read back something else), "failed".
+    changes: BTreeMap<String, Value>,
+    /// Only the strict send rule applies until then (a send stalled while the timers said awake).
+    strict_until: Option<Instant>,
 }
 
 /// Guards on key-typing commands (cmd 0x50; the 2026-11-16 incident and the 2026-11-17 review).
@@ -809,6 +867,8 @@ pub struct Au05 {
     timing: Mutex<(Duration, Duration)>,
     /// The first `configure` builds the layers without marking anything changed.
     configured: AtomicBool,
+    /// The strict send window and how long a change waits for the key to be touched (tests shorten them).
+    gate: Mutex<(Duration, Duration)>,
     /// Fake key only (tests): change every key-typing echo, as a firmware that stores something else would.
     mangle_echo: Arc<AtomicBool>,
     /// The app is exiting (set at the start of `shutdown`): `configure` never starts the worker again and the
@@ -1304,6 +1364,8 @@ impl Au05 {
             jobs: Default::default(),
             sync: SyncState::default(),
             reads_failed: false,
+            changes: BTreeMap::new(),
+            strict_until: None,
         }));
         let log = Arc::new(Log::default());
         let menu = Arc::new(MenuCtl {
@@ -1345,6 +1407,7 @@ impl Au05 {
             layers: Arc::new(Mutex::new(Layers::from_settings(&default_settings()))),
             offline_result: Mutex::new(None),
             timing: Mutex::new((Duration::from_secs(8), Duration::from_secs(20))),
+            gate: Mutex::new((STRICT_WINDOW, TOUCH_WAIT)),
             configured: AtomicBool::new(false),
             mangle_echo: Arc::new(AtomicBool::new(false)),
             exiting: Arc::new(AtomicBool::new(false)),
@@ -1557,6 +1620,7 @@ impl Au05 {
             s.generation += 1;
         }
         self.log.line("worker start");
+        let (strict, touch_wait) = *self.gate.lock_or_recover();
         let ctx = Worker {
             fake: self.fake.clone(),
             status: self.status.clone(),
@@ -1568,6 +1632,8 @@ impl Au05 {
             mangle_echo: self.mangle_echo.clone(),
             exiting: self.exiting.clone(),
             quiet_from: Mutex::new(None),
+            strict: strict.min(self.config.awake_window),
+            touch_wait,
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -1779,6 +1845,11 @@ impl Au05 {
             .map_err(|_| "The Vibe Key did not answer in time".to_string())?
     }
 
+    /// Tests: the strict send window and the "touch to apply" wait (set before enabling).
+    pub fn set_gate_timing(&self, strict: Duration, touch_wait: Duration) {
+        *self.gate.lock_or_recover() = (strict, touch_wait);
+    }
+
     /// Clear a pause after slow replies and read everything again (the page's Reconnect button).
     pub fn reconnect(&self) -> Result<(), String> {
         let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
@@ -1922,7 +1993,8 @@ impl Au05 {
                 "standbyTime": Request::SetStandbyTime(600).verified_on_hardware(),
                 "keyTyping": Request::SetKeyTyping(KeyId::K1, KeyTyping::factory()).verified_on_hardware(),
                 "sleepTime": Request::SetSleepTime(SleepTime::new(0).unwrap()).verified_on_hardware(),
-                "lightMode": Request::SetLightMode(0).verified_on_hardware(),
+                // Checked by the user on the real key 2026-11-17 (0 off, 1 all, 2 dial, 3 keys).
+                "lightMode": true,
                 "lightBrightness": Request::SetLightBrightness(0).verified_on_hardware(),
                 "lightRecord": Request::SetLightRecord { record: 0, field: LightField::Type, value: 0 }.verified_on_hardware(),
                 "hooksMode": Request::SetHooksMode(0).verified_on_hardware(),
@@ -1930,6 +2002,8 @@ impl Au05 {
             },
             "diagnostics": {"sent": s.sent, "stalls": s.stalls, "generation": s.generation},
             "readsFailed": s.reads_failed.then_some(READS_FAILED_MESSAGE),
+            "changes": s.changes,
+            "strictSending": s.strict_until.is_some_and(|t| Instant::now() < t),
         })
     }
 
@@ -1995,6 +2069,10 @@ impl Au05 {
 pub fn uc_session_config() -> SessionConfig {
     SessionConfig {
         request_expiry: Duration::from_secs(20),
+        // 0.37.0: the key is silent when idle, so the driver's own gate (a message within this window) is
+        // wide; UC decides when to send (`Worker::gate`): within the key's standby time since its last input,
+        // or the strict 11 s rule after a stall. Reads and key typing keep the strict rule.
+        awake_window: Duration::from_secs(3600),
         ..SessionConfig::default()
     }
 }
@@ -2012,6 +2090,16 @@ struct Worker {
     config: SessionConfig,
     log: Arc<Log>,
     menu: Arc<MenuCtl>,
+    /// The strict rule's window: a private message from the key within this long.
+    strict: Duration,
+    /// How long a change waits for the key to be touched.
+    touch_wait: Duration,
+}
+
+/// A change made while the key could not be sent to (0.37.0): sent when the key is next awake.
+struct Held {
+    change: Change,
+    since: Instant,
 }
 
 enum Purpose {
@@ -2021,6 +2109,11 @@ enum Purpose {
     Key(KeyId),
     /// A key-typing read job (before writing a list that is not known).
     KeyRead(KeyId),
+    /// A settings change from the page (0.37.0): its reply, and whether it was sent on the key's timers only
+    /// (no fresh message): a stall then makes the strict rule apply.
+    Change(Change, Sender<Result<(), String>>, bool),
+    /// The read after a settings change: compared with what was sent.
+    ReadBack(Change),
 }
 
 static TICKETS: AtomicU64 = AtomicU64::new(1);
@@ -2221,8 +2314,8 @@ impl Worker {
         self.quiet_from.lock_or_recover().is_none_or(|t| t.elapsed() >= self.config.settle)
     }
 
-    fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
-        if session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) || !self.settled() {
+    fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>, awake: bool) {
+        if !awake || session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) || !self.settled() {
             return;
         }
         let next = {
@@ -2325,7 +2418,9 @@ impl Worker {
         let opened_at = Instant::now();
         let mut next_beat = opened_at + Duration::from_secs(30);
         let (mut ticks, mut outputs_seen) = (0u64, 0u64);
-        let (mut last_msg, mut seen_before): (Option<Instant>, u64) = (None, 0);
+        // The last message from the key itself (a status, a control event or an answer).
+        let mut last_msg: Option<Instant> = None;
+        let mut held: Vec<Held> = Vec::new();
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut reads = ConnectReads::default();
         reads.restart();
@@ -2362,7 +2457,27 @@ impl Worker {
                         s.sync.attempted = Default::default();
                         s.sync.read_tried = Default::default();
                     }
-                    Ok(Cmd::Change(c, reply)) => self.submit_change(&mut session, &mut tickets, c, reply),
+                    Ok(Cmd::Change(c, reply)) => {
+                        let (fresh, timer) = self.gate(&session, last_msg, opened_at);
+                        let busy = tickets.values().any(|p| matches!(p, Purpose::Change(..) | Purpose::ReadBack(_)));
+                        if (fresh || timer) && self.settled() && held.is_empty() && !busy {
+                            self.note_change(&c, "sending", None);
+                            self.submit_change(&mut session, &mut tickets, c, reply, !fresh);
+                        } else if matches!(session.state(), SessionState::Paused | SessionState::Suspended) {
+                            let _ = reply.send(Err(Failure::Paused.message()));
+                        } else {
+                            // Not sent now: kept until the key is touched (or the change before it is done).
+                            let key = change_key(&c);
+                            held.retain(|h| change_key(&h.change) != key);
+                            let asleep = !(fresh || timer);
+                            if asleep {
+                                self.log.line(&format!("held {key}: the key is asleep (touch it to apply)"));
+                            }
+                            self.note_change(&c, if asleep { "touch" } else { "sending" }, None);
+                            held.push(Held { change: c, since: Instant::now() });
+                            let _ = reply.send(Ok(()));
+                        }
+                    }
                     Ok(Cmd::ReadAll(reply)) => {
                         self.log.line("page read all");
                         let mut result = Ok(());
@@ -2411,6 +2526,10 @@ impl Worker {
             ticks += 1;
             outputs_seen += outputs.len() as u64;
             for o in outputs {
+                // Only what came from the key counts as a sign it is awake (not a failure made here).
+                if matches!(&o, Output::Status(_) | Output::Control(_) | Output::Done { result: Ok(_), .. }) {
+                    last_msg = Some(Instant::now());
+                }
                 self.track_read(&o, &mut reads);
                 self.handle(o, &mut tickets);
             }
@@ -2423,8 +2542,10 @@ impl Worker {
                     session.diagnostics().unwrap_or_else(|| "no transport diagnostics".into())
                 ));
             }
-            // The settle time starts when the key wakes (control events restart it in `handle`).
-            let awake = session.state() == SessionState::Awake;
+            // The settle time starts when the key wakes (control events restart it in `handle`). "Awake" here
+            // is the strict rule (a message within the strict window): reads and key typing use it.
+            let (fresh, timer) = self.gate(&session, last_msg, opened_at);
+            let awake = fresh;
             if awake && !was_awake {
                 *self.quiet_from.lock_or_recover() = Some(Instant::now());
                 awake_since = Some(Instant::now());
@@ -2462,11 +2583,28 @@ impl Worker {
                     }
                 }
             }
+            // Held changes: sent one at a time once the key is awake; not applied after the touch wait.
+            let busy = tickets.values().any(|p| matches!(p, Purpose::Change(..) | Purpose::ReadBack(_)));
+            if !held.is_empty() && !busy && (fresh || timer) && self.settled() {
+                let h = held.remove(0);
+                self.log.line(&format!("sending held {}", change_key(&h.change)));
+                self.note_change(&h.change, "sending", None);
+                let (rtx, _rrx) = mpsc::channel();
+                self.submit_change(&mut session, &mut tickets, h.change, rtx, !fresh);
+            }
+            held.retain(|h| {
+                if h.since.elapsed() < self.touch_wait {
+                    return true;
+                }
+                self.log.line(&format!("not applied {}: the key was asleep", change_key(&h.change)));
+                self.note_change(&h.change, "failed", Some("Not applied: the key was asleep"));
+                false
+            });
             self.sync_layers();
-            self.start_jobs(&mut session, &mut tickets);
+            self.start_jobs(&mut session, &mut tickets, awake);
             let state = session.state();
             // The settings reads: awake for twice the settle time and settled since the last control event.
-            let ready = state == SessionState::Awake
+            let ready = awake
                 && awake_since.is_some_and(|t| t.elapsed() >= self.config.settle * 2)
                 && self.settled();
             let cycle = reads.cycle;
@@ -2504,22 +2642,20 @@ impl Worker {
             if reads.done() {
                 read_burst = None;
             }
-            if outputs_seen > seen_before {
-                last_msg = Some(Instant::now());
-                seen_before = outputs_seen;
-            }
             // The shown state (display only). Switched off (2026-11-17, real key: after its power-off time the
             // key turns itself off and only its power button brings it back): no message since the connection
             // opened for longer than the standby time + 2 minutes, or none for longer than the power-off time.
             // A hotkey from the key's own codes counts as a sign of life (those controls report nothing privately).
             let shown = {
-                let k = &self.status.lock_or_recover().known;
-                let key_at = *self.menu.key_seen.lock_or_recover();
-                let signal = [last_msg, key_at.filter(|t| *t >= opened_at)].into_iter().flatten().max();
                 let saved = self.menu.settings()["knownTimes"].clone();
+                let key_at = *self.menu.key_seen.lock_or_recover();
+                let k = self.status.lock_or_recover().known.clone();
+                let signal = [last_msg, key_at.filter(|t| *t >= opened_at)].into_iter().flatten().max();
                 let standby = k.standby_s.map(u64::from).or(saved["standbyS"].as_u64()).unwrap_or(u64::from(DEFAULT_STANDBY_S));
                 let power_off = k.sleep_s.map(u64::from).or(saved["sleepS"].as_u64()).map(Duration::from_secs);
-                shown_state(state, signal.map(|t| t.elapsed()), opened_at.elapsed(), Duration::from_secs(standby), power_off)
+                // The driver's own "awake" is wide (see `uc_session_config`): a fresh message is what counts.
+                let st = if fresh { SessionState::Awake } else if state == SessionState::Awake { SessionState::Asleep } else { state };
+                shown_state(st, signal.map(|t| t.elapsed()), opened_at.elapsed(), Duration::from_secs(standby), power_off)
             };
             if last_state != Some(shown) {
                 last_state = Some(shown);
@@ -2534,6 +2670,37 @@ impl Worker {
             }
         }
         self.finish(&mut session, &mut tickets);
+    }
+
+    /// The send rule (0.37.0). `fresh`: a message from the key within the strict window (the rule reads and
+    /// key typing keep, and the only one for a while after a stall). `timer`: the key's own timers say it is
+    /// awake: its last input (a message, or a hotkey from its own codes) is within its standby time less a
+    /// 10 s margin, and not limited by the driver's window. Both need the driver ready (not paused, a message
+    /// since the connection opened); sending also waits for the settle time (`settled`).
+    fn gate(&self, session: &Session<Box<dyn Transport>>, last_msg: Option<Instant>, opened_at: Instant) -> (bool, bool) {
+        let state = session.state();
+        if matches!(state, SessionState::Paused | SessionState::Suspended | SessionState::WaitingForKey) || last_msg.is_none() {
+            return (false, false);
+        }
+        let fresh = last_msg.is_some_and(|t| t.elapsed() <= self.strict);
+        // One lock at a time (the settings, then the status): never both held.
+        let saved = self.menu.settings()["knownTimes"]["standbyS"].as_u64();
+        let (standby, strict) = {
+            let s = self.status.lock_or_recover();
+            let standby = s.known.standby_s.map(u64::from).or(saved).unwrap_or(u64::from(DEFAULT_STANDBY_S));
+            (Duration::from_secs(standby), s.strict_until.is_some_and(|t| Instant::now() < t))
+        };
+        let key_at = (*self.menu.key_seen.lock_or_recover()).filter(|t| *t >= opened_at);
+        let input = [last_msg, key_at].into_iter().flatten().max();
+        let window = standby.saturating_sub(STANDBY_MARGIN).min(self.config.awake_window);
+        let timer = !strict && input.is_some_and(|t| t.elapsed() <= window) && last_msg.is_some_and(|t| t.elapsed() <= self.config.awake_window);
+        (fresh, timer)
+    }
+
+    /// The page's per-setting line for a change (and its value while it waits).
+    fn note_change(&self, c: &Change, state: &str, message: Option<&str>) {
+        let mut s = self.status.lock_or_recover();
+        s.changes.insert(change_key(c), json!({"state": state, "value": change_value(c), "message": message, "at": now_ms()}));
     }
 
     /// Follow the settings reads' results (see `ConnectReads`).
@@ -2565,8 +2732,10 @@ impl Worker {
         tickets: &mut HashMap<u64, Purpose>,
         change: Change,
         reply: Sender<Result<(), String>>,
+        timer_only: bool,
     ) {
         let known = self.status.lock_or_recover().known.clone();
+        let original = change.clone();
         let request = match change {
             Change::StandbyTime(s) => Request::SetStandbyTime(s),
             Change::SleepTime(s) => match SleepTime::new(s) {
@@ -2616,17 +2785,18 @@ impl Worker {
         let name = describe(&request);
         match session.submit(t, request) {
             Ok(()) => {
-                self.log.line(&format!("queued {name}"));
-                tickets.insert(t, Purpose::Set(reply));
+                self.log.line(&format!("queued {name}{}", if timer_only { " (on the key's timers)" } else { "" }));
+                tickets.insert(t, Purpose::Change(original.clone(), reply, timer_only));
                 if let Some(r) = read_back {
                     let rt = TICKETS.fetch_add(1, Ordering::Relaxed);
                     if session.submit(rt, r).is_ok() {
-                        tickets.insert(rt, Purpose::Read);
+                        tickets.insert(rt, Purpose::ReadBack(original));
                     }
                 }
             }
             Err(f) => {
                 self.log.line(&format!("refused {name}: {}", f.message()));
+                self.note_change(&original, "failed", Some(&f.message()));
                 let _ = reply.send(Err(f.message()));
             }
         }
@@ -2691,6 +2861,39 @@ impl Worker {
                 match purpose {
                     Some(Purpose::Set(reply)) => {
                         let _ = reply.send(result.map(|_| ()).map_err(|f| f.message()));
+                    }
+                    Some(Purpose::Change(change, reply, timer_only)) => {
+                        if let Err(f) = &result {
+                            let message = if matches!(f, Failure::Asleep) { "Not applied: the key was asleep".to_string() } else { f.message() };
+                            self.note_change(&change, "failed", Some(&message));
+                            // Sent on the key's timers only and it stalled: the strict rule for a while.
+                            if timer_only && matches!(f, Failure::NoReply | Failure::WriteTimeout) {
+                                self.status.lock_or_recover().strict_until = Some(Instant::now() + STRICT_FOR);
+                                self.log.line("a change sent on the key's timers stalled: strict sending (a fresh message) for 5 minutes");
+                            }
+                        }
+                        let _ = reply.send(result.map(|_| ()).map_err(|f| f.message()));
+                    }
+                    Some(Purpose::ReadBack(change)) => {
+                        let key = change_key(&change);
+                        let got = read_back(&change, &self.status.lock_or_recover().known);
+                        match (&result, got) {
+                            (Ok(_), Some((same, value))) => {
+                                // The value read back after every set (no raw bytes).
+                                self.log.line(&format!("read back {key}: {value}{}", if same { "" } else { " (not what was sent)" }));
+                                if same {
+                                    self.note_change(&change, "applied", None);
+                                } else {
+                                    self.note_change(&change, "kept", Some(&format!("Key kept {value}")));
+                                }
+                            }
+                            _ => {
+                                self.log.line(&format!("read back {key}: no answer"));
+                                if self.status.lock_or_recover().changes.get(&key).is_some_and(|c| c["state"] == "sending") {
+                                    self.note_change(&change, "sent", Some("Sent; not read back"));
+                                }
+                            }
+                        }
                     }
                     Some(Purpose::KeyRead(key)) => {
                         let mut s = self.status.lock_or_recover();
@@ -3073,7 +3276,7 @@ mod tests {
         fake.lock().drop_replies = 1;
         au.configure(&json!({"enabled": true}));
         let s = wait_for(&au, |s| s["keys"][0]["job"]["state"] == "failed");
-        assert!(s["keys"][0]["job"]["message"].as_str().unwrap().contains("did not answer"));
+        assert!(s["keys"][0]["job"]["message"].as_str().unwrap().contains("did not answer"), "{}", s["keys"][0]["job"]);
         assert_eq!(s["busy"], false);
         au.shutdown();
     }
@@ -3191,7 +3394,8 @@ mod tests {
         au.configure(&json!({"enabled": true, "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}}}));
         au.change(Change::SleepTime(0)).unwrap();
         au.change(Change::MicNrLevel(2)).unwrap();
-        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "keys" && s["standbyS"] == 900);
+        // 0.37.0: changes made while one is being sent wait their turn (one at a time) and follow shortly.
+        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "keys" && s["standbyS"] == 900 && s["micNr"]["level"] == 2 && s["sleepS"] == 0);
         assert_eq!(s["keys"][0]["label"], "Ctrl + D", "learned from the set's echo");
         let sent50: Vec<_> = au.fake_handle().unwrap().received().into_iter().filter(|p| p[2] == 0x50).collect();
         // K3: read, set to factory (seeded; it held F22 without a UC action). K1: read first, then set.
@@ -3346,6 +3550,71 @@ mod tests {
         let s = wait_for(&au, |s| s["standbyS"] == 900);
         assert_eq!(s["standbyS"], 900, "read again after the wake");
         assert_eq!(s["state"], "connected");
+        au.shutdown();
+    }
+
+    /// A fake key that answers but sends nothing on its own once read (the real key is silent when idle).
+    fn quiet_worker(standby_s: u32, strict_ms: u64, touch_ms: u64) -> (Arc<Au05>, FakeHandle) {
+        let au = Au05::with_config(true, None, SessionConfig { awake_window: Duration::from_secs(60), ..quick() });
+        au.set_gate_timing(Duration::from_millis(strict_ms), Duration::from_millis(touch_ms));
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().status_period = Some(Duration::from_millis(100));
+        fake.lock().standby_s = standby_s;
+        au.configure(&json!({"enabled": true}));
+        assert!(wait_for(&au, |s| s["micNr"].is_object() && s["standbyS"].is_number())["micNr"].is_object());
+        fake.lock().status_period = None;
+        std::thread::sleep(Duration::from_millis(strict_ms + 400));
+        (au, fake)
+    }
+
+    /// 0.37.0 (real key 2026-11-17: a brightness change 22 s after a light change ended "Asleep" while the key
+    /// was awake): a change is sent while the key's timers say awake, though it sent nothing for a while.
+    #[test]
+    fn a_change_is_sent_on_the_keys_timers_while_it_is_quiet() {
+        let (au, _fake) = quiet_worker(600, 300, 60_000);
+        au.change(Change::StandbyTime(700)).unwrap();
+        let s = wait_for(&au, |s| s["changes"]["standbyTime"]["state"] == "applied");
+        assert_eq!(s["standbyS"], 700);
+        assert_eq!(s["changes"]["standbyTime"]["state"], "applied", "read back and the same: {}", s["changes"]);
+        assert_eq!(s["strictSending"], false);
+        au.shutdown();
+    }
+
+    /// 0.37.0: a send on the key's timers that stalls makes the strict rule apply; a change then waits for
+    /// the key to be touched ("Touch the Vibe Key to apply") and is sent on the touch.
+    #[test]
+    fn a_stall_on_the_timers_makes_sending_strict_and_a_touch_applies() {
+        let (au, fake) = quiet_worker(600, 300, 60_000);
+        fake.lock().stall_writes = true;
+        let _ = au.change(Change::StandbyTime(650));
+        let s = wait_for(&au, |s| s["strictSending"] == true);
+        assert_eq!(s["strictSending"], true, "{}", s["changes"]);
+        assert_eq!(s["changes"]["standbyTime"]["state"], "failed");
+        fake.lock().stall_writes = false;
+        std::thread::sleep(Duration::from_millis(500));
+        au.change(Change::LightBrightness(3)).unwrap();
+        let s = au.status();
+        assert_eq!(s["changes"]["lightBrightness"]["state"], "touch", "held: {}", s["changes"]);
+        assert_eq!(s["changes"]["lightBrightness"]["value"], 3);
+        // The key is touched: a control event (a fresh message) sends it.
+        au.test_control(&json!({"op": "click", "control": "k1"})).unwrap();
+        let s = wait_for(&au, |s| s["changes"]["lightBrightness"]["state"] == "applied");
+        assert_eq!(s["light"]["brightness"], 3);
+        au.shutdown();
+    }
+
+    /// 0.37.0: a change for a key that is really asleep (past its standby time) waits for a touch, then is
+    /// "Not applied: the key was asleep" and nothing was sent.
+    #[test]
+    fn a_change_for_a_sleeping_key_waits_then_is_not_applied() {
+        let (au, fake) = quiet_worker(1, 200, 600);
+        let sent = fake.received().len();
+        au.change(Change::LightBrightness(4)).unwrap();
+        assert_eq!(au.status()["changes"]["lightBrightness"]["state"], "touch");
+        let s = wait_for(&au, |s| s["changes"]["lightBrightness"]["state"] == "failed");
+        assert_eq!(s["changes"]["lightBrightness"]["message"], "Not applied: the key was asleep");
+        assert_ne!(s["light"]["brightness"], 4, "the shown value goes back");
+        assert_eq!(fake.received().len(), sent, "nothing was sent");
         au.shutdown();
     }
 
