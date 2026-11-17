@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.25.0 — 2026-11-17
+
+Claude and ChatGPT key actions now put the cursor in the app's message box
+first, using Windows' accessibility interface. If the message box cannot be
+found (for example Claude's terminal panel has focus), nothing is pressed and
+a short notice says so, so Ctrl+D or Enter never lands in a terminal. The
+Vibe Key battery shows a charging bolt (flag 0x08, "probably charging" until
+confirmed).
+
 ## 0.24.0 — 2026-11-17
 
 Two setups for the Vibe Key: "With Unified Control" (actions while the app
