@@ -158,7 +158,8 @@ impl Layers {
             };
             live.push(if is_uc { KeyTyping::own_code(id) } else { off.clone() });
             seeded.push(au["offlineSet"][name] == true || !off.is_factory());
-            verified.push(Request::SetKeyTyping(id, KeyTyping::own_code(id)).verified_on_hardware());
+            // Checked on the real key in the driver, or set up by the user on this key (the set's echo matched).
+            verified.push(Request::SetKeyTyping(id, KeyTyping::own_code(id)).verified_on_hardware() || au["setUp"][name] == true);
             offline.push(off);
             uc.push(is_uc);
         }
@@ -282,6 +283,8 @@ pub fn sanitize(v: &Value) -> Value {
         "offlineSet": LAYER_CONTROLS.iter().map(|(n, _)| (n.to_string(), json!(v["offlineSet"][n] == true))).collect::<serde_json::Map<_, _>>(),
         // When an earlier run gave up waiting for a key-typing command (ms since 1970): the next run waits.
         "slowAbandonedAt": v["slowAbandonedAt"].as_u64(),
+        // Controls not checked on the real key that the user set up on this key (the set's echo matched).
+        "setUp": LAYER_CONTROLS.iter().filter(|(n, _)| v["setUp"][n] == true).map(|(n, _)| (n.to_string(), json!(true))).collect::<serde_json::Map<_, _>>(),
         // The last list the key confirmed per control ("factory", keys, or absent).
         "keyEcho": LAYER_CONTROLS.iter().filter_map(|(n, _)| {
             v["keyEcho"][n].as_str().filter(|k| *k == "factory" || KeyTyping::parse(k).is_ok()).map(|k| (n.to_string(), json!(k)))
@@ -437,6 +440,15 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             au["offlineSet"][name] = json!(true);
             lines.push(format!("{} offline layer {name} = {}", if seeding { "seeded from the key:" } else { "page" }, o["mode"].as_str().unwrap_or("")));
         }
+    }
+    if let Some(c) = patch.get("setUp") {
+        // Saved by the worker after "Set up" worked on this key.
+        let name = c["control"].as_str().unwrap_or("");
+        if !LAYER_CONTROLS.iter().any(|(n, _)| *n == name) {
+            return Err("Unknown Vibe Key control".into());
+        }
+        au["setUp"][name] = json!(true);
+        lines.push(format!("{name} set up on this key"));
     }
     if let Some(e) = patch.get("keyEcho") {
         // Saved by the worker when the key confirms a list (no log line: it is not a user change).
@@ -671,6 +683,9 @@ pub struct Au05 {
     configured: AtomicBool,
     /// Fake key only (tests): change every key-typing echo, as a firmware that stores something else would.
     mangle_echo: Arc<AtomicBool>,
+    /// The app is exiting (set at the start of `shutdown`): `configure` never starts the worker again and the
+    /// worker saves nothing more (a late seed or echo save must not restart it).
+    exiting: Arc<AtomicBool>,
 }
 
 /// `devices/au05/device.log` (rotated at about 1 MB, like the other device logs). Command names and results
@@ -1074,6 +1089,7 @@ impl Au05 {
             timing: Mutex::new((Duration::from_secs(8), Duration::from_secs(20))),
             configured: AtomicBool::new(false),
             mangle_echo: Arc::new(AtomicBool::new(false)),
+            exiting: Arc::new(AtomicBool::new(false)),
         });
         if let Some(d) = &au.desktop {
             // Actions never run on the hotkey thread (MenuCtl::run spawns one per action).
@@ -1236,7 +1252,9 @@ impl Au05 {
             }
         }
         let running = self.tx.lock_or_recover().is_some();
-        if enabled && !running {
+        if enabled && !running && self.exiting.load(Ordering::SeqCst) {
+            self.log.line("not started: the app is exiting");
+        } else if enabled && !running {
             self.layers.lock_or_recover().target_offline = false;
             self.start();
         } else if !enabled && running {
@@ -1269,6 +1287,8 @@ impl Au05 {
             menu: self.menu.clone(),
             layers: self.layers.clone(),
             mangle_echo: self.mangle_echo.clone(),
+            exiting: self.exiting.clone(),
+            quiet_from: Mutex::new(None),
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -1320,6 +1340,16 @@ impl Au05 {
         s.sync = SyncState { abandoned_at: abandoned, ..Default::default() };
     }
 
+    /// The app kept running after a Windows session end: key-typing commands may start again.
+    pub fn resume_after_session_end(&self) {
+        let mut s = self.status.lock_or_recover();
+        if s.sync.no_new {
+            s.sync.no_new = false;
+            drop(s);
+            self.log.line("session end did not end Unified Control: key changes may start again");
+        }
+    }
+
     /// Is the worker running (the Vibe Key enabled)?
     pub fn running(&self) -> bool {
         self.tx.lock_or_recover().is_some()
@@ -1338,12 +1368,20 @@ impl Au05 {
     /// Write the offline layer back, then stop the worker and release every hotkey (quit). Returns whether
     /// the offline layer is on the key (`None` when the Vibe Key was not running).
     pub fn shutdown(&self) -> Option<bool> {
+        self.shutdown_within(None)
+    }
+
+    /// `shutdown` with the store capped at `budget` (`None`: the quit budget).
+    pub fn shutdown_within(&self, budget: Option<Duration>) -> Option<bool> {
+        // Before the lock: a settings save waiting for it must not start the worker again.
+        self.exiting.store(true, Ordering::SeqCst);
         let _guard = self.config_lock.lock_or_recover();
         if self.menu.is_open() {
             self.menu.input(Input::Close, "quit");
         }
         let running = self.tx.lock_or_recover().is_some();
-        let budget = self.timing.lock_or_recover().0;
+        let quit = self.timing.lock_or_recover().0;
+        let budget = budget.map_or(quit, |b| b.min(quit));
         let stored = running.then(|| self.store_offline(budget));
         self.stop_worker();
         self.apply_hotkeys(false);
@@ -1560,7 +1598,7 @@ impl Au05 {
             "lightFieldMax": LIGHT_FIELDS.iter().map(|(n, f)| (n.to_string(), json!(f.max()))).collect::<serde_json::Map<_, _>>(),
             "micNrMax": protocol::MIC_NR_LEVEL_MAX,
             "keys": keys,
-            // The knob turn directions: what each types (read or set; never read at connect) and its job.
+            // The knob turn directions: what each types (read or set; not part of the reads at connect) and its job.
             "turns": KeyId::TURNS.iter().map(|&id| {
                 let t = k.keys[id.index() as usize].as_ref();
                 json!({
@@ -1681,6 +1719,10 @@ pub fn uc_session_config() -> SessionConfig {
 struct Worker {
     layers: Arc<Mutex<Layers>>,
     mangle_echo: Arc<AtomicBool>,
+    exiting: Arc<AtomicBool>,
+    /// When the key last woke or sent a control event: key-typing commands (get and set) wait for the settle
+    /// time after it.
+    quiet_from: Mutex<Option<Instant>>,
     fake: Option<FakeHandle>,
     status: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
@@ -1730,6 +1772,9 @@ impl Worker {
                 }
             }
         }
+        if self.exiting.load(Ordering::SeqCst) {
+            return;
+        }
         for (name, factory, label) in seeds {
             self.log.line(&format!("layer: {name} offline typing taken from the key ({})", if factory { "factory" } else { "keys" }));
             let patch = if factory {
@@ -1747,6 +1792,29 @@ impl Worker {
         }
     }
 
+    /// A control not checked on the real key, allowed with "Set up", was written and its echo matched: it
+    /// counts as checked on this key from now on (saved).
+    fn save_set_up(&self, key: KeyId) {
+        let Some(i) = LAYER_CONTROLS.iter().position(|(_, id)| *id == key) else { return };
+        {
+            let mut l = self.layers.lock_or_recover();
+            if l.verified[i] || !self.status.lock_or_recover().sync.allowed[key.index() as usize] {
+                return;
+            }
+            l.verified[i] = true;
+        }
+        if self.exiting.load(Ordering::SeqCst) {
+            return;
+        }
+        let patch = json!({"setUp": {"control": LAYER_CONTROLS[i].0}});
+        let persist = self.menu.persist.lock_or_recover().clone();
+        if let Some(p) = persist {
+            let _ = std::thread::Builder::new().name("uc-au05-setup".into()).spawn(move || {
+                let _ = p(patch);
+            });
+        }
+    }
+
     /// Save the list the key just confirmed for a control (read, or a set whose echo matched).
     fn save_echo(&self, key: KeyId, typing: Option<KeyTyping>) {
         let Some(i) = LAYER_CONTROLS.iter().position(|(_, id)| *id == key) else { return };
@@ -1758,6 +1826,9 @@ impl Worker {
                 return;
             }
             l.echo[i] = typing;
+        }
+        if self.exiting.load(Ordering::SeqCst) {
+            return;
         }
         let patch = json!({"keyEcho": {"control": name, "keys": text}});
         let persist = self.menu.persist.lock_or_recover().clone();
@@ -1848,8 +1919,14 @@ impl Worker {
 
     /// Send the next waiting key job when the key is awake, no other key-typing command is pending, and no
     /// guard holds key typing back.
+    /// The settle time has passed since the key woke and since its last control event (the driver applies it to
+    /// sets only; UC applies it to key-typing reads too).
+    fn settled(&self) -> bool {
+        self.quiet_from.lock_or_recover().is_none_or(|t| t.elapsed() >= self.config.settle)
+    }
+
     fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
-        if session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) {
+        if session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) || !self.settled() {
             return;
         }
         let next = {
@@ -1957,6 +2034,9 @@ impl Worker {
         let mut read_done = false;
         let mut read_burst: Option<(Instant, Vec<u64>)> = None;
         let mut last_state = None;
+        // A "Read from key" waiting for the settle time (one at a time).
+        let mut deferred_read: Option<(KeyId, Sender<Result<(), String>>, Instant)> = None;
+        let mut was_awake = false;
         self.set_state("waiting", "Connected. Press a key or turn the knob to wake the Vibe Key");
         loop {
             if self.stop.load(Ordering::SeqCst) {
@@ -1978,6 +2058,7 @@ impl Worker {
                         s.last_error = None;
                         // Reconnect also lifts the guard after a failed key change (one more attempt each).
                         s.sync.blocked = false;
+                        s.sync.no_new = false;
                         s.sync.attempted = Default::default();
                         s.sync.read_tried = Default::default();
                     }
@@ -2000,18 +2081,11 @@ impl Worker {
                         let _ = reply.send(result);
                     }
                     Ok(Cmd::ReadKey(k, reply)) => {
-                        if session.has_pending(Request::slow_reply) {
+                        if session.has_pending(Request::slow_reply) || deferred_read.is_some() {
                             let _ = reply.send(Err("Another key is being read. Try again in a moment".into()));
                         } else {
-                            let t = TICKETS.fetch_add(1, Ordering::Relaxed);
-                            match session.submit(t, Request::GetKeyTyping(k)) {
-                                Ok(()) => {
-                                    tickets.insert(t, Purpose::Set(reply));
-                                }
-                                Err(f) => {
-                                    let _ = reply.send(Err(f.message()));
-                                }
-                            }
+                            // Sent once the key has settled (below).
+                            deferred_read = Some((k, reply, Instant::now()));
                         }
                     }
                     Err(_) => break,
@@ -2039,6 +2113,35 @@ impl Worker {
                     session.state(),
                     session.diagnostics().unwrap_or_else(|| "no transport diagnostics".into())
                 ));
+            }
+            // The settle time starts when the key wakes (control events restart it in `handle`).
+            let awake = session.state() == SessionState::Awake;
+            if awake && !was_awake {
+                *self.quiet_from.lock_or_recover() = Some(Instant::now());
+            }
+            was_awake = awake;
+            if deferred_read.is_some() && !session.has_pending(Request::slow_reply) {
+                let state = session.state();
+                let waited = deferred_read.as_ref().unwrap().2.elapsed();
+                if state == SessionState::Paused || state == SessionState::Suspended {
+                    let (_, reply, _) = deferred_read.take().unwrap();
+                    let _ = reply.send(Err(Failure::Paused.message()));
+                } else if !awake && waited >= self.config.request_expiry {
+                    // As a queued request would: the key did not wake in time.
+                    let (_, reply, _) = deferred_read.take().unwrap();
+                    let _ = reply.send(Err(Failure::Asleep.message()));
+                } else if awake && self.settled() {
+                    let (k, reply, _) = deferred_read.take().unwrap();
+                    let t = TICKETS.fetch_add(1, Ordering::Relaxed);
+                    match session.submit(t, Request::GetKeyTyping(k)) {
+                        Ok(()) => {
+                            tickets.insert(t, Purpose::Set(reply));
+                        }
+                        Err(f) => {
+                            let _ = reply.send(Err(f.message()));
+                        }
+                    }
+                }
             }
             self.sync_layers();
             self.start_jobs(&mut session, &mut tickets);
@@ -2150,7 +2253,7 @@ impl Worker {
                 }
             },
             Change::Retry(_) => {
-                let _ = reply.send(Err("The knob turn is set as a background job".into()));
+                let _ = reply.send(Err("Try again is handled by the key jobs".into()));
                 return;
             }
             Change::LightRecord { record, field, value } => Request::SetLightRecord { record, field, value },
@@ -2212,6 +2315,7 @@ impl Worker {
             // Private events are shown (K1 and the knob turns send them). Actions use hotkeys; knob turns
             // also move an open quick menu (unless the knob is set to type F23/F24 instead).
             Output::Control(e) => {
+                *self.quiet_from.lock_or_recover() = Some(Instant::now());
                 push_event(&self.status, e.control, e.pressed, e.code, None);
                 if e.pressed && self.menu.is_open() && !self.menu.turns_are_hotkeys() {
                     match e.control {
@@ -2321,6 +2425,7 @@ impl Worker {
                         let gone = !matches!(&result, Err(f) if not_sent(f));
                         drop(s);
                         if confirmed {
+                            self.save_set_up(key);
                             self.save_echo(key, held);
                         } else if gone {
                             self.save_echo(key, None);
@@ -2947,6 +3052,108 @@ mod tests {
         au.change(Change::Retry(KeyId::KnobPress)).unwrap();
         wait_for(&au, |_| fake.lock().typing[idx as usize] == KeyTyping::own_code(KeyId::KnobPress));
         assert_eq!(fake.lock().typing[idx as usize], KeyTyping::own_code(KeyId::KnobPress));
+        au.shutdown();
+    }
+    /// Verification N1: once exiting, a late settings save (a seed or confirmed list saved through the app,
+    /// which re-runs `configure`) never starts the worker again, and the worker saves nothing more.
+    #[test]
+    fn a_save_during_exit_never_restarts_the_worker() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        let saves = Arc::new(AtomicU64::new(0));
+        let (me, count) = (Arc::downgrade(&au), saves.clone());
+        // As the app does: a save re-runs configure with the (still enabled) settings, after a while.
+        au.set_persist(Arc::new(move |_p| {
+            count.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            if let Some(au) = me.upgrade() {
+                au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+            }
+            Ok(())
+        }));
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        // K1 is read (a seed save starts) and then set (an echo save starts): quit meanwhile.
+        wait_for(&au, |_| saves.load(Ordering::SeqCst) > 0);
+        au.shutdown();
+        let after = typing_cmds(&fake);
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(au.status()["state"], "disabled", "not started again");
+        assert!(au.thread.lock_or_recover().is_none());
+        assert_eq!(typing_cmds(&fake), after, "nothing sent after quit");
+        au.configure(&json!({"enabled": true}));
+        assert_eq!(au.status()["state"], "disabled");
+    }
+
+    /// Verification N2: every key-typing command (read or set) waits for the settle time after the key woke
+    /// and after its last control event; so does "Read from key".
+    #[test]
+    fn key_typing_waits_for_the_settle_time() {
+        let settle = Duration::from_millis(700);
+        let au = Au05::with_config(true, None, SessionConfig { settle, ..quick() });
+        let fake = au.fake_handle().unwrap().clone();
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["state"] == "connected");
+        let woke = Instant::now();
+        au.read_key(KeyId::K3).unwrap();
+        assert!(woke.elapsed() >= Duration::from_millis(600), "sent after the settle time, not at once");
+        // A control event restarts it: a UC action chosen right after a key press waits again.
+        au.test_control(&json!({"op": "click", "control": "k2"})).unwrap();
+        let clicked = Instant::now();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        let before = typing_cmds(&fake);
+        while clicked.elapsed() < Duration::from_millis(500) {
+            assert_eq!(typing_cmds(&fake), before, "no key-typing command right after a control event");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        wait_for(&au, |s| s["keys"][0]["mode"] == "uc");
+        au.shutdown();
+    }
+
+    /// Verification N5: Reconnect lifts the "no new key-typing command" stop that a quit or session end
+    /// out of time leaves behind (when the app keeps running).
+    #[test]
+    fn reconnect_lifts_the_stop_after_a_store_out_of_time() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        fake.lock().key_typing_delay = Duration::from_millis(500);
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        wait_for(&au, |s| job(s, "k1")["state"] == "sending");
+        assert!(!au.store_offline(Duration::from_millis(100)), "out of time");
+        au.set_layer_offline(false);
+        wait_for(&au, |s| !s["keySync"]["pending"].as_bool().unwrap_or(true));
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}, "k2": {"kind": "enter"}}}));
+        let before = typing_cmds(&fake);
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(typing_cmds(&fake), before, "nothing new after the store ran out of time");
+        au.reconnect().unwrap();
+        wait_for(&au, |s| s["keys"][1]["mode"] == "uc");
+        assert_eq!(au.status()["keys"][1]["mode"], "uc");
+        au.shutdown();
+    }
+
+    /// Verification: "Set up" on an unchecked control is remembered once the set's echo matched.
+    #[test]
+    fn set_up_is_remembered_after_a_matching_echo() {
+        let press = LAYER_CONTROLS.iter().position(|(_, id)| *id == KeyId::KnobPress).unwrap();
+        assert!(!Layers::from_settings(&json!({})).verified[press]);
+        assert!(Layers::from_settings(&json!({"setUp": {"knobPress": true}})).verified[press]);
+        let au = worker();
+        let saved: Arc<Mutex<Vec<Value>>> = Default::default();
+        let sink = saved.clone();
+        au.set_persist(Arc::new(move |p| {
+            sink.lock_or_recover().push(p);
+            Ok(())
+        }));
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        wait_for(&au, |s| job(s, "knobPress")["state"] == "check");
+        au.change(Change::Retry(KeyId::KnobPress)).unwrap();
+        wait_for(&au, |_| saved.lock_or_recover().iter().any(|p| p["setUp"]["control"] == "knobPress"));
+        assert!(saved.lock_or_recover().iter().any(|p| p["setUp"]["control"] == "knobPress"));
+        let mut au_settings = sanitize(&json!({}));
+        apply_patch(&mut au_settings, &json!({"setUp": {"control": "knobPress"}})).unwrap();
+        assert_eq!(au_settings["setUp"]["knobPress"], true);
         au.shutdown();
     }
 }

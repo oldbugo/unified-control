@@ -50,10 +50,12 @@ stall in the key cannot stop the window, the dock or the cooler.
   rest) or a write that does not finish pauses sending for 30 s. After three stalls in a row, sending
   stops until the user presses Reconnect. While paused, a change is refused at once.
 - Nothing is sent unless the key has sent a message in the last 11 s. A set waits until the key is quiet:
-  1.5 s after it woke and 1.5 s after the last key or knob event.
-- Key typing (cmd 0x50) is never read at connect. A key's list is read only when the user presses "Read
-  from key" on the page, one key at a time. A change to a key's typing learns the new list from the set's
-  echo, so no extra read is sent. The other reads at connect are capped at 10 s in all.
+  1.5 s after it woke and 1.5 s after the last key or knob event. UC applies the same wait to every
+  key-typing command (cmd 0x50), reads included, and to "Read from key".
+- Key typing (cmd 0x50) is not part of the reads at connect. A key's list is read once per control, after
+  the settle time, before a write UC needs (see the guards under "Two layers"), or when the user presses
+  "Read from key" on the page; one key at a time. A change to a key's typing learns the new list from the
+  set's echo, so no extra read is sent. The other reads at connect are capped at 10 s in all.
 - A key may be set to type only the keys the page offers: letters, digits, Enter, Esc, Backspace, Tab,
   Space, Minus, Plus, F1..F24 and the navigation keys. No Power, Application or lock keys; at most one
   modifier entry, first, and at least one key.
@@ -194,7 +196,8 @@ Guards on key-typing commands (cmd 0x50; independent review 2026-11-17):
   key-typing commands until Reconnect or Try again (the page shows "Key changes paused: use Reconnect"); a
   queued newer choice is dropped, and the set's result is treated as unknown.
 - **Unchecked controls.** Knob press and knob left are not checked on the real key: UC never writes them by
-  itself; they show "Needs a check" with "Set up", which allows them once.
+  itself; they show "Needs a check" with "Set up", which allows them. Once a set-up write's echo matched, the
+  control counts as checked on this key and is saved (`au05.setUp`).
 - **Keeping the user's keys (decision).** Until a control's offline typing is set by the user (or is not the
   factory default), nothing is written for it. When its list becomes known (read at start, or "Read from
   key"), that list becomes its offline typing (saved, `offlineSet`); one of UC's own codes F19–F24 counts as
@@ -211,8 +214,12 @@ when time runs out, settings keep `offlinePending` and the page shows "Offline l
 command already sent is always waited for within the budget; when the budget runs out no new one starts, and
 one still unanswered is saved as `slowAbandonedAt`: the next run waits 20 s after that time before its first
 key-typing command (the page shows "Waiting for the key to finish an earlier change"), so two never overlap
-on the key. Quit stores the Vibe Key first, before the cooler and before the 3 s exit watchdog is armed.
-Session end does nothing while the Vibe Key is disabled; stopping the worker forgets what the key holds. If the
+on the key. The tray Quit stops the cooler first (if it refuses, the app stays open with the Vibe Key still
+running), then the Vibe Key, and only then arms the 3 s exit watchdog. Any other exit stores the Vibe Key
+before the watchdog, at most 3 s (so Windows does not report UC as blocking shutdown). Once exiting, a late
+settings save never starts the worker again. Session end does nothing while the Vibe Key is disabled; if UC is
+still running a minute after a session end, key changes may start again, and Reconnect also lifts that stop.
+Stopping the worker forgets what the key holds. If the
 PC loses power while UC runs, the key keeps F19–F24 (harmless) until UC runs again; the page says so in one
 line.
 

@@ -699,6 +699,17 @@ impl App {
             }
             let ok = au05.store_offline(std::time::Duration::from_secs(4));
             self.save_offline_pending(au05, !ok);
+            // Normally the process ends now. If it is still running a minute later, key changes may start
+            // again (the budget may have stopped new ones).
+            let weak = self.me.lock_or_recover().clone();
+            let _ = std::thread::Builder::new().name("uc-au05-session-end".into()).spawn(move || {
+                std::thread::sleep(Duration::from_secs(60));
+                if let Some(app) = weak.upgrade() {
+                    if let Some(au05) = app.au05.get() {
+                        au05.resume_after_session_end();
+                    }
+                }
+            });
         }
     }
     /// Where Claude's settings are: `%USERPROFILE%\.claude`. Debug builds and fake or quiet (test) instances
@@ -1116,22 +1127,25 @@ impl App {
     /// Must run off the UI thread; active monitor recovery is allowed to finish.
     /// Stop the Vibe Key: its offline layer goes back on the key (waiting for a key command already sent, up
     /// to the quit budget). Runs before the exit watchdog is armed, so the watchdog does not cut it.
-    pub fn stop_au05(&self) {
+    /// `budget` caps the wait (the exit event uses 3 s so Windows does not report the app as blocking
+    /// shutdown); `None` is the normal quit budget. A second call does nothing.
+    pub fn stop_au05(&self, budget: Option<Duration>) {
         if let Some(au05) = self.au05.get() {
             let _guard = self.dock_config_lock.lock_or_recover();
-            if let Some(stored) = au05.shutdown() {
+            if let Some(stored) = au05.shutdown_within(budget) {
                 self.save_offline_pending(au05, !stored);
             }
         }
     }
     pub fn stop_runtime(&self) {
-        // The Vibe Key first (see `stop_au05`); a second call does nothing.
-        self.stop_au05();
+        // The cooler first: if it refuses, the app stays open with the Vibe Key still running.
         if let Some(cooler) = self.cooler.get() {
             if cooler.shutdown().is_err() {
                 return;
             }
         }
+        // Then the Vibe Key (see `stop_au05`); the tray Quit arms the exit watchdog only after this.
+        self.stop_au05(None);
         let _guard = self.dock_config_lock.lock_or_recover();
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
