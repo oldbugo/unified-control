@@ -486,6 +486,57 @@ the middle ... a handlebar that we can drag it around."
   restore without animation, mouse, the 31-entry window, screenshots to `UC_QM_SHOTS`);
   `quick_menu::tests::the_dial_window_fits_its_rings_and_the_work_area`.
 
+### The shown state and the page, 0.36.0 (user reports 2026-11-17)
+
+- "It tells me it's not connected, but it should be ... the lights are on": during dictation the key sends no
+  private message for 30 to 90 s, and status messages are not regular when idle (19 in 10 min). So the shown
+  state no longer guesses from silence (`shown_state`): the last input is the latest private message or hotkey
+  from the key's own codes (K1-K3, knob press, F23/F24); awake while it is newer than the key's standby time
+  (`standbyS`, else the last one read, kept in the settings as `knownTimes`, else 300 s); asleep after that;
+  probably off once it is older than the power-off time (`sleepS`; Never: never). A message or key hotkey
+  makes it awake at once. The 11 s send gate is unchanged (it only gates sending).
+- Not built (orchestrator's note for a real-key test with the user): the standby-status get `01 01 0d 01` sent
+  to a sleeping key might be answered by the receiver (Studio polls it before commands). Never sent on a
+  sleeping key by UC.
+- The page: one status block where the battery was (receiver · Vibe Key · battery, a dot each: green
+  connected/awake, grey asleep/waiting, amber probably off with "Hold the power button 2–3 s", red no receiver);
+  the heading chip, the status line and the explanatory paragraphs (power loss, offline layer, "Never", the
+  menu codes, Claude Connect) are gone or tooltips. "In the menu": one row with the K2, K3 and knob press
+  roles and the "Reopen where I left off" switch. The Claude sessions card is live: counts (open sessions,
+  projects as the menu groups them, working), the newest five with their project and a working dot
+  (`claude_tree::summary`, titles only), the source with "updated n s ago" (or the fallback in amber), and a
+  "Live working status" switch (Connect / Disconnect).
+
+### The dial, 0.35.0 (user feedback 2026-11-17: "I also don't want text to flow out or truncate")
+
+- Bigger: active ring outer radius 170, 210, 260 for 1, 2, 3 rings (window 388 x 484, 468 x 564, 568 x 664
+  logical); on a smaller work area the window is clamped and the page scales the whole dial down (`fitScale`).
+- 8 slots of 43° and a 16° stop gap (`STEP`, `STOP`): the gap stays even with 8 rows, anticlockwise of row
+  0, and holds the end stop (a wall across the ring). Long lists keep the moving window (row 0 + 7); the stop
+  shows only at the true end, otherwise the edge segments fade ("more", dashed).
+- Labels (`fitLabel`): along the segment's arc (SVG textPath; anticlockwise in the bottom half so never upside
+  down), one or two lines of whole words, 15 px down to 11 px, measured with the real font. A leading prefix
+  every other sibling shares is left out (e.g. "Unified Control:" in that group, "Session"). If it still does
+  not fit: a short form without filler words, dropping the least distinctive words first (in more siblings,
+  shorter); a single word longer than the segment is cut to its first letters. Never an ellipsis; each label
+  is clipped to its segment. The caption pill keeps the full name (it wraps). The highlight's text is
+  `--accent-ink` on `--accent`.
+- Bump: the core's view has `bump {dir, n}` (`MenuState`: a turn left at row 0 or right at the last row); the
+  page nudges the highlighted segment 6 px along the ring for 120 ms when `n` grows (not on opening).
+- Dragging closed the menu (user: "I can actually never reliably finish the drag"). Cause, by reasoning (not
+  reproducible quietly: the window is never created in test instances): the handle starts Windows' own move
+  loop (`data-tauri-drag-region`), which takes focus from the web page; the page closed the menu on `blur`.
+  Clicks did not pass through (the handle was 78 % opaque, and WebView2 takes clicks on transparent pixels
+  too), and the 8 s idle close needs 8 s. Fix for all three: pointer down on the handle starts a drag; the
+  window's moves (`uc:au05-menu-moved`, from `quick_menu.rs`) keep it going; it ends 300 ms after the last move
+  or the pointer going up (2 s safety); blur is ignored during it and 300 ms after; the page sends `hold`
+  (`Input::Hold`, holds the idle close) when it starts, about once a second while moving and when it ends; then
+  it gives the window focus back (`core:window:allow-set-focus`, the menu window only) so a click elsewhere
+  closes it again. The handle has a solid fill. A plain click on it does nothing.
+- Checks: `scripts/check-quick-menu.cjs` (headless: geometry, the label fit of every case with no ellipsis and
+  nothing past its arc, the short forms, stop and fades, bump, drag blur suppression and hold, mouse,
+  animation end states, restore). The native drag itself is not tested: it needs a visible window.
+
 ### Awake, asleep, probably off: the shown state (0.32.0, user report 2026-11-17)
 
 - The page said "asleep" while the key was in use (log: K1 hotkey 06:13:13, "state asleep" 06:13:26, K1

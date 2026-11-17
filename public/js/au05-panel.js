@@ -20,6 +20,8 @@ const errorText=e=>typeof e==='string'?e:e?.error||e?.message||'The Vibe Key req
 const ZONES={knobTurn:'Knob turn',knobPress:'Knob press',k1:'K1 · voice',k2:'K2 · confirm',k3:'K3 · cancel'};
 const EVENT_ZONE={'K1':'k1','K2':'k2','K3':'k3','knob press':'knobPress','knob right':'knobTurn','knob left':'knobTurn'};
 
+// "updated 3 s ago" (the Claude sessions card).
+const ago=ms=>{const s=Math.max(0,Math.round((Date.now()-ms)/1000));return s<60?`updated ${s} s ago`:`updated ${Math.round(s/60)} min ago`;};
 const clip=(t,n=24)=>t.length>n?t.slice(0,n-1)+'…':t;
 const minutes=s=>s%60===0?`${s/60} minute${s===60?'':'s'}`:`${s} seconds`;
 
@@ -192,12 +194,13 @@ export class Au05Panel{
     const root=this.container?.querySelector('#au05-page');if(!root)return;
     const s=this.state||{};
     if(!root.firstChild)root.innerHTML=this.skeleton();
-    const chip=root.querySelector('#au05-page-state'),msg=root.querySelector('#au05-page-message');
-    const sum=this.summary();chip.textContent=sum.status;msg.textContent=s.message||sum.description;
+    // How long ago Claude's session list was read (updated on every paint, without re-rendering the page).
+    const age=root.querySelector('#au05-cs-age'),readAt=s.menu?.sessions?.readAt;
+    if(age&&readAt)age.textContent=ago(readAt);
     
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
-    const menuSig=s.menu?{...s.menu,view:undefined}:null;
+    const menuSig=s.menu?{...s.menu,view:undefined,sessions:s.menu.sessions?{...s.menu.sessions,readAt:undefined}:null}:null;
     const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,s.keySync,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
@@ -210,8 +213,7 @@ export class Au05Panel{
     this.flash();
   }
   skeleton(){
-    return `<div class="page-heading au05-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1></div><div class="au05-head-pills"><span id="au05-page-state" class="chip"></span></div></div>
-    <p class="au05-status"><span id="au05-page-message"></span></p>
+    return `<div class="page-heading au05-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1></div></div>
     <p id="au05-note" class="au05-note${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
     <div id="au05-controls"></div>
     <div id="au05-toast" class="au05-toast" role="status" hidden><span class="au05-toast-text"></span><button type="button" class="au05-link" data-au05-undo>Undo</button></div>
@@ -384,14 +386,13 @@ export class Au05Panel{
     const editor=offlineView?offlineEditor():this.selected==='knobTurn'?knobEditor():keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
     // The layer switch, where the key's layer stands, and the one risk line.
     const layerBar=`<div class="au05-layerbar"><div class="au05-seg au05-layer-seg" role="group" aria-label="Which layer you edit">
-        <button type="button" data-au05-layer-view="live" aria-pressed="${!offlineView}">With Unified Control</button><button type="button" data-au05-layer-view="offline" aria-pressed="${offlineView}">On its own</button></div>
+        <button type="button" data-au05-layer-view="live" aria-pressed="${!offlineView}">With Unified Control</button><button type="button" data-au05-layer-view="offline" aria-pressed="${offlineView}" title="What each control types when Unified Control is not running (another PC, or after Quit). Stored on the key when Unified Control quits.">On its own</button></div>
       ${L.target==='offline'?`<span class="au05-pill ${L.offlineOnKey?'ok':'warn'}">${L.offlineOnKey?'Offline layer on the key':'Storing the offline layer…'}</span><button class="btn" type="button" data-au05-layer="live"${native}>Back to Unified Control</button>`
         :`<button class="btn" type="button" data-au05-layer="offline"${live}>Store offline layer on the key now</button>`}
       ${s.keySync?.blocked?'<span class="au05-pill bad" title="A key change got no answer. Nothing more is sent to the key until you press Reconnect or Try again">Key changes paused: use Reconnect</span>':''}
       ${s.keySync?.waiting?'<span class="au05-pill warn" title="The last run left a key change unanswered; the key gets 20 seconds to finish it">Waiting for the key to finish an earlier change</span>':''}
       ${s.offlinePending&&!(L.target==='offline'&&L.offlineOnKey)?'<span class="au05-pill warn" title="At the last quit the key was asleep or there was no time">Offline layer not stored yet</span>':''}</div>
-      ${offlineView?'<p class="au05-line">What each control types when Unified Control is not running (another PC, or after Quit). It is stored on the key when Unified Control quits.</p>':''}
-      <p class="au05-line au05-risk">If the PC loses power while Unified Control runs, the key keeps its codes F19–F24 (harmless) until Unified Control runs again.</p>`;
+`;
 
     // ---- the action palette: always on the page; drag a card onto the drawing, or click to set the selected part ----
     const sel0=this.selected;const selKey=keyOf(sel0);
@@ -416,17 +417,28 @@ export class Au05Panel{
         <span class="au05-muted au05-palette-hint">Drag onto a key, or click to set ${esc(ZONES[sel0]||'the selected part')}</span></header>
       ${paletteOpen?`<div class="au05-sections">${paletteSections}</div>`:''}</section>`;
 
-    // ---- battery: icon with fill level, percent, low warning, asleep (last known), details on hover ----
+    // ---- status (0.36.0: one block): receiver, Vibe Key and battery, each with a dot; the action, if any, in
+    // one short line. Battery: icon with fill level, percent, low warning, last known while asleep, details on hover.
     const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting'||s.state==='off';
     const low=pct!=null&&pct<=15;
     const fill=pct==null?0:Math.max(3,Math.min(100,pct));
     const bTime=b?.at?new Date(b.at).toLocaleTimeString('en-AU',{hour12:false}):'';
     const bTitle=b?`Battery ${pct} % · ${(b.millivolts/1000).toFixed(2)} V${bTime?` · updated ${bTime}`:''}${b.charging===true?' · probably charging':''}${b.flags!=null?` · status flags 0x${b.flags.toString(16).padStart(2,'0')}${b.chargingConfirmed?'':' (charging bit not confirmed yet)'}`:''}`:'Battery: not read yet. Press a key to wake the Vibe Key.';
-    const bText=pct==null?'Battery —':asleep?`Asleep — last known ${pct} %`:b.full?'Full':`${pct} %`;
-    const batteryMarkup=`<div class="au05-battery${low?' low':''}${asleep?' asleep':''}${pct==null?' unknown':''}" title="${esc(bTitle)}">
+    const bText=pct==null?'—':b.full?'Full':`${pct} %`;
+    const st=s.enabled?s.state:'disabled';
+    const RX={not_found:['bad','No receiver','Plug in the Vibe Key receiver'],error:['bad','Receiver error','Use Reconnect'],disabled:['off','Disabled','Turn the Vibe Key on in General']};
+    const KEY={waiting:['off','Vibe Key waiting','Press a key or turn the knob to wake it'],connected:['ok','Vibe Key awake',''],asleep:['off','Vibe Key asleep','Press a key or turn the knob to wake it'],
+      off:['warn','Vibe Key probably off','Hold the power button 2–3 s'],paused:['warn','Sending paused','A reply was slow; it resumes in 30 s'],suspended:['bad','Sending stopped','Use Reconnect'],starting:['off','Starting','']};
+    const rx=RX[st]||['ok','Receiver connected',''],key=RX[st]?null:KEY[st]||['off','Vibe Key',''];
+    const action=key&&key[0]!=='ok'&&['off','suspended','paused'].includes(st)?key[2]:RX[st]?rx[2]:'';
+    const dot=(c,text,title)=>`<span class="au05-st" title="${esc(title||text)}"><span class="au05-status-dot ${c}" aria-hidden="true"></span>${esc(text)}</span>`;
+    const batteryMarkup=`<div class="au05-statusbar" id="au05-status" data-state="${esc(st)}" role="status">
+      <div class="au05-st-row">${dot(rx[0],rx[1],rx[2])}${key?dot(key[0],key[1],key[2]):''}
+      <span class="au05-battery${low?' low':''}${asleep?' asleep':''}${pct==null?' unknown':''}" title="${esc(bTitle)}">
       <svg class="au05-batt-icon" viewBox="0 0 44 22" aria-hidden="true"><rect x="1.5" y="2.5" width="36" height="17" rx="4" class="shell"/><rect x="39" y="8" width="3.5" height="6" rx="1.2" class="tip"/>
         <rect x="4.5" y="5.5" width="${(30*fill/100).toFixed(1)}" height="11" rx="2" class="level"/>${b?.charging===true?'<path d="M21 4.5 15.5 12h4.5l-1.5 5.5 6-8h-4.5l1.5-5z" class="bolt"/>':''}</svg>
-      <span id="au05-battery" class="au05-batt-text" aria-label="${esc(bTitle)}">${esc(bText)}</span></div>`;
+      <span id="au05-battery" class="au05-batt-text" aria-label="${esc(bTitle)}">${esc(bText)}</span></span></div>
+      ${action?`<div class="au05-st-action${st==='off'||st==='not_found'||st==='suspended'?' attention':''}">${esc(action)}</div>`:''}</div>`;
 
     // ---- profiles and target app ----
     const profiles=m.profiles||[];
@@ -473,10 +485,10 @@ export class Au05Panel{
     const ctl=m.controls||{};
     const roleSel=(k,label)=>`<label class="au05-role"><span>${esc(label)}</span><select data-qm-role="${k}" aria-label="${esc(label)} while the menu is open"${native}>${Object.entries(ROLE).map(([v,t])=>opt(v,t,ctl[k]||'none')).join('')}</select></label>`;
     const usesCodes=anyMenu?['k2','k3'].filter(k=>(ctl[k]||'none')!=='none'&&(s.actions?.[k]?.kind||'offline')==='offline').map(k=>k.toUpperCase()):[];
-    const controlsBox=`<div class="au05-menu-controls"><div class="au05-set-label">Menu controls (while the menu is open)</div>
-      <div class="au05-roles"><span class="au05-role"><span>Knob turn</span><span class="au05-muted">Move</span></span>${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</div>
-      <label class="au05-reopen"><input type="checkbox" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off <span class="au05-muted">(the menu opens at the sub-menu and entry it was closed on, for each profile)</span></label>
-      <p class="au05-line">${usesCodes.length?`<strong>${usesCodes.join(' and ')} type ${usesCodes.length>1?'their':'its'} own code${usesCodes.length>1?'s':''} (${usesCodes.map(k=>k==='K2'?'F21':'F22').join(', ')}) while Unified Control runs</strong>, so the menu can use ${usesCodes.length>1?'them':'it'}; when the menu is closed, Unified Control types ${usesCodes.length>1?'their':'its'} usual keys. `:''}Their normal actions wait while the menu is open.</p></div>`;
+    const codesTip=`${usesCodes.length?`${usesCodes.join(' and ')} type ${usesCodes.length>1?'their':'its'} own code${usesCodes.length>1?'s':''} (${usesCodes.map(k=>k==='K2'?'F21':'F22').join(', ')}) while Unified Control runs, so the menu can use ${usesCodes.length>1?'them':'it'}; when the menu is closed, Unified Control types ${usesCodes.length>1?'their':'its'} usual keys. `:''}Their normal actions wait while the menu is open. The knob turn moves the highlight.`;
+    const controlsBox=`<div class="au05-inmenu"><span class="au05-inmenu-title" title="${esc(codesTip)}">In the menu</span>
+      <span class="au05-inmenu-roles">${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</span>
+      <label class="au05-reopen" title="The menu opens at the sub-menu and entry it was closed on, for each profile"><input type="checkbox" role="switch" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off</label></div>`;
     const profileName=(profiles.find(p=>p.id===m.profile)||{}).name||'';
     const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2>${profileName?`<span class="au05-muted">for the profile ${esc(profileName)}</span>`:''}</div>
       <div class="au05-box-actions"><button class="btn" type="button" data-qm-op="open"${live}>Open</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset</button></div></header>
@@ -488,16 +500,19 @@ export class Au05Panel{
     const when=ms=>ms?new Date(ms).toLocaleTimeString('en-AU',{hour12:false,hour:'2-digit',minute:'2-digit'}):'';
     const csState=full.blocked?'bad':cs.connected?(full.hooks&&full.hooks!=='connected'?'warn':'ok'):'off';
     const csText=full.blocked?'Blocked by Claude settings':cs.connected?(full.hooks&&full.hooks!=='connected'?'Hooks missing: connect again':cs.lastEvent?`Connected · last event ${when(cs.lastEvent)}`:'Connected · no event yet'):'Not connected';
-    const projects=[...new Set((cs.sessions||[]).map(x=>x.project||'Other'))];
-    const sessionChips=(cs.sessions||[]).length?`<div class="au05-session-groups">${projects.map(g=>`<div class="au05-session-group"><span class="au05-muted">${esc(g)}</span>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<span class="au05-session${x.state==='working'?' working':''}" title="${esc(x.state==='working'?'Working':'Idle')} · ${esc(when(x.last))}">${x.state==='working'?'● ':''}${esc(x.title||x.label||x.worktree||x.project||'Untitled session')}${x.worktree?` <span class="au05-muted">· ${esc(x.worktree)}</span>`:''}</span>`).join('')}</div>`).join('')}</div>`:'';
-    const claudeBox=`<section class="au05-box au05-claude"><div class="au05-claude-main"><span class="au05-status-dot ${csState}" aria-hidden="true"></span>
-      <div class="au05-claude-text"><h2>Claude sessions</h2><span class="au05-muted">${esc(csText)}</span></div>
-      ${cs.connected?`<button class="btn au05-big" type="button" data-claude-op="${full.hooks&&full.hooks!=='connected'&&!full.blocked?'connect':'disconnect'}"${native}>${full.hooks&&full.hooks!=='connected'&&!full.blocked?'Connect again':'Disconnect'}</button>`:`<button class="btn primary au05-big" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect</button>`}</div>
+    const src=m.sessions||{};
+    const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
+    const counts=src.open!=null?`${plural(src.open|0,'open session')} · ${plural(src.projects|0,'project')} · ${src.working|0} working`:'No session list yet';
+    const recent=(src.recent||[]).map(x=>`<li class="au05-cs-row${x.working?' working':''}"><span class="au05-cs-dot" aria-label="${x.working?'working':'idle'}"></span><span class="au05-cs-title">${esc(x.title)}</span><span class="au05-muted">${esc(x.project||'')}</span><span class="au05-muted au05-cs-when">${esc(when(x.at))}</span></li>`).join('');
+    const fallback=src.source==='hooks'?(src.note||'Claude\'s session list was not found'):src.groupsNote||'';
+    const liveTip=full.blocked||`Adds the live working dot through Claude Code hooks${full.settingsPath?` in ${full.settingsPath}`:''}; merged and backed up first. Turning it off removes only those entries. Sessions report once they start (or restart) after it is on.`;
+    const claudeBox=`<section class="au05-box au05-claude" aria-label="Claude sessions"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.sessions}</span><h2>Claude sessions</h2></div>
+      <label class="au05-live" title="${esc(liveTip)}"><input type="checkbox" role="switch" data-claude-live=""${cs.connected&&!(full.hooks&&full.hooks!=='connected')?' checked':''}${native||(!cs.connected&&(full.blocked||full.error))?' disabled':''}> Live working status: ${cs.connected?(full.hooks&&full.hooks!=='connected'?'needs reconnecting':'On'):'Off'}</label></header>
+      <div class="au05-cs-counts" id="au05-cs-counts">${esc(counts)}</div>
+      ${recent?`<ul class="au05-cs-list" aria-label="Latest sessions">${recent}</ul>`:''}
+      <div class="au05-cs-source${fallback?' attention':''}">${fallback?esc(`${fallback}: ${src.source==='hooks'?'showing the sessions reported by live status':'grouped by folder'}`):"From Claude's session list"}${src.readAt?` · <span id="au05-cs-age">${esc(ago(src.readAt))}</span>`:''}</div>
       ${full.blocked?`<p class="au05-line attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="au05-line attention">${esc(full.error)}</p>`:''}
-      ${m.sessions?.source==='desktop'?`<p class="au05-line">The quick menu lists your ${esc(m.sessions.open)} open Claude sessions with their sub-sessions, from Claude's own session list (no Connect needed)${m.sessions.groupsNote==null?', grouped by your Claude sidebar projects':''}. Connect adds the live working dot; sessions report it once they start (or restart) after Connect.</p>${m.sessions.groupsNote!=null?`<p class="au05-line attention">${esc(m.sessions.groupsNote)}: the quick menu groups the sessions by folder.</p>`:''}`
-        :`<p class="au05-line${m.sessions?.source==='hooks'?' attention':''}">${m.sessions?.note?`${esc(m.sessions.note)}: the quick menu lists the sessions reported by Connect. `:''}Sessions appear once they start (or restart) after Connect: Claude reads its hook settings when a session starts.</p>`}
-      ${sessionChips}
-      <details class="au05-claude-preview"><summary>What Connect adds</summary><p class="au05-muted">${esc(full.settingsPath||'')} · merged and backed up first; the file is reformatted. Disconnect (or uninstall) removes only these entries.</p><pre>${esc(full.preview||'')}</pre></details></section>`;
+      <details class="au05-claude-preview"><summary>What live status adds</summary><pre>${esc(full.preview||'')}</pre></details></section>`;
 
     // ---- device settings ----
     const standby=s.standbyS;const standbyOpts=STANDBY.some(([v])=>v===standby)||standby==null?STANDBY:[...STANDBY,[standby,minutes(standby)]];
@@ -516,8 +531,7 @@ export class Au05Panel{
       <div class="au05-settings-grid">
       ${deviceCard(IC.power,'Power',
         row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select>`,standby==null?null:`${standby} s`)+
-        row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`)+
-        '<p class="au05-set-note">"Never" stops the key switching itself off, at some battery cost.</p>'+
+        row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time" title="&quot;Never&quot; stops the key switching itself off, at some battery cost"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`)+
         row('Standby status','',`<span class="au05-value">${s.standbyStatus==null?'—':esc(s.standbyStatus)}</span>`,null))}
       ${deviceCard(IC.light,'Light',
         row('Mode',this.untested('lightMode'),`<select data-au05-set="lightMode" aria-label="Light mode"${dis}>${notRead(light.mode)}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select>`,null)+
@@ -644,6 +658,8 @@ export class Au05Panel{
   // Delegated events from the page.
   handle(e){
     const t=e.target;
+    // Live working status (Connect / Disconnect of the Claude Code hooks).
+    if(e.type==='change'&&t.matches?.('[data-claude-live]')){this.claudeOp(t.checked?'connect':'disconnect');return true;}
     const cop=e.type==='click'&&t.closest?.('[data-claude-op]');
     if(cop){this.claudeOp(cop.dataset.claudeOp);return true;}
     const click=sel=>e.type==='click'&&t.closest?.(sel);
@@ -691,7 +707,7 @@ export class Au05Panel{
       return true;
     }
     if(e.type==='click'&&t.closest?.('[data-au05="reconnect"]')){
-      this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting. Press a key to wake the Vibe Key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
+      this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
     }
     if(e.type==='click'&&t.closest?.('[data-au05="read-all"]')){

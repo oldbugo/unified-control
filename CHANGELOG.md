@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.36.0 — 2026-11-17
+
+The Vibe Key no longer shows "asleep" while you are using it, for example
+during a long dictation. The page now follows the key's own timers: it counts
+as awake until its standby time has passed since your last press, turn or
+message from it, then asleep, and "probably off" once its power-off time has
+passed. Any press wakes it on the page at once. The key's standby and power-off
+times are remembered, so this is right straight after a restart too.
+
+The Vibe Key page is tidier. The receiver, the key and the battery now show
+together in one small status line above the drawing, with a coloured dot each,
+instead of in three places. The long explanations are gone (a few are tooltips
+now). The quick menu's controls sit in one row, "In the menu", next to
+"Reopen where I left off". The Claude sessions card now shows what Unified
+Control reads, live: how many sessions are open, in how many projects, how many
+are working, and the latest few with their project. Connect is now a "Live
+working status" switch.
+
+## 0.35.0 — 2026-11-17
+
+The quick menu dial is bigger and its names are easier to read. Names now curve
+along their segment, on up to two lines, broken between whole words, and the
+text shrinks a little before anything is left out. A name that still doesn't
+fit shows its most telling words rather than being cut off, and words that
+every entry shares (such as the project name) are left out of the ring. The
+full name is always under the dial. A ring shows at most 8 segments, and the
+highlighted one now has dark text on the blue.
+
+The dial now shows where the list ends: there is a gap with a small wall just
+to the left of Close or Back, and turning past either end gives a little bump
+against it. In a long list the wall appears only at the real end; elsewhere
+the edge segments fade to show there is more.
+
+Dragging the menu by its middle no longer closes it. Windows takes focus away
+from the menu while it is being dragged, and the menu took that as a click on
+another window. The menu also no longer closes itself while you drag it.
+
 ## 0.34.0 — 2026-11-17
 
 The quick menu is now a dial: a thick ring of pie segments instead of a list.
