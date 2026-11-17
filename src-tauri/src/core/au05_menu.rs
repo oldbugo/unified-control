@@ -92,6 +92,9 @@ fn then_action(v: &Value) -> &str {
     v.as_str().filter(|k| hotkey::entry(k).is_some()).unwrap_or("none")
 }
 
+pub fn age_text(ms: u64) -> String {
+    age(ms)
+}
 fn age(ms: u64) -> String {
     match ms / 60_000 {
         0 => "now".into(),
@@ -102,11 +105,25 @@ fn age(ms: u64) -> String {
 
 /// The menu with each "Claude sessions" entry replaced by a sub-menu: the sessions grouped by project (one
 /// project: the sessions directly), most recent first, at most 30. `sessions` from `claude_sessions`.
-pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) -> Value {
+/// `desktop`: the Claude desktop app's own session list (`claude_tree`), used when it could be read; else the
+/// hook list.
+pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, desktop: Option<&[super::claude_tree::DesktopSession]>) -> Value {
     let Some(list) = menu.as_array() else { return json!([]) };
     Value::Array(
         list.iter()
             .map(|e| match e["type"].as_str() {
+                Some("claudeSessions") if desktop.is_some() => {
+                    let working: Vec<String> = sessions
+                        .iter()
+                        .filter(|s| s["state"] == "working")
+                        .filter_map(|s| s["desktopId"].as_str().map(str::to_string))
+                        .collect();
+                    let mut entries = super::claude_tree::tree(desktop.unwrap_or_default(), &working, &e["then"], now_ms);
+                    if entries.is_empty() {
+                        entries.push(json!({"type": "note", "label": "No open Claude sessions"}));
+                    }
+                    json!({"type": "submenu", "label": e["label"], "entries": entries})
+                }
                 Some("claudeSessions") => {
                     let entries = if sessions.is_empty() {
                         let note = if connected { "No Claude sessions yet" } else { "Connect Claude sessions on the Vibe Key page" };
@@ -118,7 +135,7 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) ->
                 }
                 Some("submenu") => {
                     let mut x = e.clone();
-                    x["entries"] = expand(&e["entries"], sessions, connected, now_ms);
+                    x["entries"] = expand(&e["entries"], sessions, connected, now_ms, desktop);
                     x
                 }
                 _ => e.clone(),
@@ -238,7 +255,8 @@ fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) 
 }
 
 /// Controls that can have a role while the menu is open, and the roles (user request 2026-11-17).
-pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "select"), ("k3", "back"), ("knobPress", "close")];
+/// Knob press selects (user feedback 2026-11-17: "It is natural to keep the thumb there").
+pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "select"), ("k3", "back"), ("knobPress", "select")];
 pub const ROLES: [&str; 4] = ["select", "back", "close", "none"];
 
 /// The menu roles, defaults filled in: K2 select, K3 back, knob press close.
@@ -573,7 +591,7 @@ mod tests {
             json!({"desktopId": "local_0123abcd-0000-4000-8000-00000000abce", "label": "", "project": "vault", "last": 1}),
         ];
         let lst = json!([{"type": "claudeSessions", "label": "Claude sessions", "then": "claudeDictation"}]);
-        let shown = expand(&lst, &sessions, true, 1);
+        let shown = expand(&lst, &sessions, true, 1, None);
         assert_eq!(shown[0]["entries"][0]["label"], "UnifiedControl", "grouped by project");
         let mut s = MenuState::default();
         s.step(&shown, Input::Toggle, t0);
@@ -581,7 +599,7 @@ mod tests {
         s.step(&shown, Input::Choose, t0); // into UnifiedControl
         assert_eq!(s.step(&shown, Input::Choose, t0), Outcome::Session(id.into(), "claudeDictation".into()));
         // Not connected: a note that stays open; Back at the top closes.
-        let none = expand(&lst, &[], false, 1);
+        let none = expand(&lst, &[], false, 1, None);
         let mut s = MenuState::default();
         s.step(&none, Input::Toggle, t0);
         s.step(&none, Input::Choose, t0);
@@ -598,9 +616,9 @@ mod tests {
         assert!(clean[0]["entries"][0]["entries"].as_array().unwrap().is_empty(), "at most three levels");
         // Menu controls: defaults K2 select, K3 back, knob press close; invalid values fall back.
         let c = sanitize_controls(&json!({"k2": "close", "k3": "explode"}));
-        assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "close"}));
+        assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "select"}));
         assert_eq!(role(&json!({}), "k1"), "none");
-        assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 select · K3 back · Knob press close");
+        assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 select · K3 back · Knob press select");
     }
 
     /// Session tree: projects by recent activity; in a project the main checkout's session first, then the

@@ -10,6 +10,7 @@ pub mod au05_composer;
 pub mod au05_hotkey;
 pub mod au05_menu;
 pub mod claude_sessions;
+pub mod claude_tree;
 pub mod autostart;
 pub mod buildinfo;
 pub mod commands;

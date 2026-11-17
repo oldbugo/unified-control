@@ -768,6 +768,12 @@ pub struct MenuCtl {
     dictate_busy: Arc<AtomicBool>,
     dictate_last: Mutex<Option<Instant>>,
     sessions: Mutex<Option<SessionsFn>>,
+    /// The Claude desktop app's data folder (`claude_tree`), if it can be read.
+    claude_data: Mutex<Option<std::path::PathBuf>>,
+    /// The menu as shown, frozen while it is open (a changing session list never moves the highlight).
+    frozen: Mutex<Option<Value>>,
+    /// Where the last session list came from (for the page).
+    session_source: Mutex<Value>,
 }
 
 impl MenuCtl {
@@ -791,13 +797,40 @@ impl MenuCtl {
     /// One input for the menu (`source` is for the log).
     /// The menu as shown: "Claude sessions" entries expanded to the current session list.
     fn shown_menu(&self, settings: &Value) -> Value {
+        if self.is_open() {
+            if let Some(m) = self.frozen.lock_or_recover().clone() {
+                return m;
+            }
+        }
+        self.fresh_menu(settings)
+    }
+    /// The menu with the current session list: Claude's own session files when readable, else the hook list.
+    fn fresh_menu(&self, settings: &Value) -> Value {
         let (list, connected) = self.sessions.lock_or_recover().clone().map(|f| f()).unwrap_or_default();
-        menu::expand(&settings["menu"], &list, connected, now_ms())
+        let base = self.claude_data.lock_or_recover().clone();
+        let desktop = match &base {
+            Some(b) => super::claude_tree::cached(b),
+            None => Err("Claude's session files were not found".to_string()),
+        };
+        *self.session_source.lock_or_recover() = match &desktop {
+            Ok(all) => json!({"source": "desktop", "open": all.iter().filter(|s| !s.archived).count()}),
+            Err(e) => json!({"source": "hooks", "note": e}),
+        };
+        menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_deref().ok())
     }
 
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
         let settings = self.settings();
-        let shown = self.shown_menu(&settings);
+        // Read once when the menu opens; kept while it is open.
+        let frozen = self.frozen.lock_or_recover().clone();
+        let shown = match frozen {
+            Some(m) if self.is_open() => m,
+            _ => {
+                let m = self.fresh_menu(&settings);
+                *self.frozen.lock_or_recover() = Some(m.clone());
+                m
+            }
+        };
         let (outcome, was_open, view) = {
             let mut st = self.state.lock_or_recover();
             let was = st.open;
@@ -805,6 +838,9 @@ impl MenuCtl {
             (o, was, st.view(&settings, &shown))
         };
         let open = view["open"] == true;
+        if !open {
+            *self.frozen.lock_or_recover() = None;
+        }
         if let Some(v) = self.view.lock_or_recover().clone() {
             if open {
                 v.show(&view, !was_open);
@@ -1076,6 +1112,7 @@ impl MenuCtl {
             "knobTurn": settings["knobTurn"],
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
+            "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
             "last": self.last.lock_or_recover().clone(),
@@ -1164,6 +1201,12 @@ impl Au05 {
             opened: AtomicU64::new(0),
             last: Arc::new(Mutex::new(None)),
             sessions: Mutex::new(None),
+            // Fake and quiet (test) instances read only UC_CLAUDE_DATA.
+            claude_data: Mutex::new(super::claude_tree::base_dir(
+                fake || std::env::var("UC_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0"),
+            )),
+            frozen: Mutex::new(None),
+            session_source: Mutex::new(Value::Null),
             dictate_busy: Arc::new(AtomicBool::new(false)),
             dictate_last: Mutex::new(None),
         });
@@ -1205,6 +1248,10 @@ impl Au05 {
     /// The app shell's menu window. Never set in tests, fake or quiet instances.
     pub fn set_menu_view(&self, view: Arc<dyn MenuView>) {
         *self.menu.view.lock_or_recover() = Some(view);
+    }
+    /// Tests: the Claude desktop app's data folder (`claude_tree`).
+    pub fn set_claude_data(&self, dir: Option<std::path::PathBuf>) {
+        *self.menu.claude_data.lock_or_recover() = dir;
     }
     /// Where the quick menu gets the Claude session list.
     pub fn set_sessions(&self, f: SessionsFn) {
@@ -3384,6 +3431,108 @@ mod tests {
         au.shutdown();
     }
 
+    /// No wrap-around on any input path (real key report 2026-11-17): the window's own input (keyboard,
+    /// `au05_menu` ops), the knob's F23/F24 hotkeys and its private events all stop at the first and last row.
+    /// The knob press selects. A session list that changes while the menu is open does not move it.
+    #[test]
+    fn the_menu_never_wraps_on_any_input_path() {
+        let rows = |au: &Au05| au.status()["menu"]["view"]["rows"].as_array().unwrap().len();
+        let hl = |au: &Au05| au.status()["menu"]["view"]["highlight"].as_u64().unwrap() as usize;
+        // 1) The window (keyboard and clicks go through the same ops).
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        desk.press(hotkey::VK_F20);
+        let n = rows(&au);
+        for _ in 0..n + 3 {
+            au.menu_input("next", None).unwrap();
+        }
+        assert_eq!(hl(&au), n - 1, "window: stays on the last row");
+        for _ in 0..n + 3 {
+            au.menu_input("prev", None).unwrap();
+        }
+        assert_eq!(hl(&au), 0, "window: stays on the first row");
+        // The knob press selects (Close row: closes).
+        desk.press(hotkey::VK_F19);
+        assert_eq!(au.status()["menu"]["view"]["open"], false);
+        au.shutdown();
+        // 2) The knob's own codes F23 / F24 (knob turn set to Unified Control).
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "knobTurn": "uc", "actions": {"k1": {"kind": "quickMenu"}}}));
+        desk.press(hotkey::VK_F20);
+        let n = rows(&au);
+        for _ in 0..n + 3 {
+            assert!(desk.press(hotkey::VK_F23));
+        }
+        assert_eq!(hl(&au), n - 1, "F23: stays on the last row");
+        for _ in 0..n + 3 {
+            desk.press(hotkey::VK_F24);
+        }
+        assert_eq!(hl(&au), 0, "F24: stays on the first row");
+        au.shutdown();
+        // 3) The knob's private events (factory scroll).
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        desk.press(hotkey::VK_F20);
+        let n = rows(&au);
+        for _ in 0..n + 3 {
+            au.test_control(&json!({"op": "click", "control": "knobRight"})).unwrap();
+        }
+        let s = wait_for(&au, |s| s["menu"]["view"]["highlight"].as_u64() == Some(n as u64 - 1));
+        assert_eq!(s["menu"]["view"]["highlight"], n - 1, "knob events: stay on the last row");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(hl(&au), n - 1);
+        for _ in 0..n + 3 {
+            au.test_control(&json!({"op": "click", "control": "knobLeft"})).unwrap();
+        }
+        wait_for(&au, |s| s["menu"]["view"]["highlight"].as_u64() == Some(0));
+        assert_eq!(hl(&au), 0, "knob events: stay on the first row");
+        au.shutdown();
+        // 4) A session list that changes while the menu is open does not move it.
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        let list: Arc<Mutex<Vec<Value>>> = Default::default();
+        let src = list.clone();
+        au.set_sessions(Arc::new(move || (src.lock_or_recover().clone(), true)));
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        desk.press(hotkey::VK_F20);
+        au.menu_input("next", None).unwrap();
+        let before = au.status()["menu"]["view"].clone();
+        list.lock_or_recover().push(json!({"desktopId": "local_0123abcd-0000-4000-8000-000000000001", "project": "P", "last": now_ms()}));
+        au.menu_input("next", None).unwrap();
+        au.menu_input("prev", None).unwrap();
+        assert_eq!(au.status()["menu"]["view"], before, "frozen while open");
+        au.shutdown();
+    }
+
+    /// The menu lists Claude's own sessions (with real parents) when its session files are readable; else the
+    /// hook list, and the page says so.
+    #[test]
+    fn the_menu_uses_claudes_session_files_when_readable() {
+        let base = std::env::temp_dir().join(format!("uc-au05-claude-data-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("claude_x").join("claude-code-sessions").join("a").join("o");
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = "local_0123abcd-0000-4000-8000-000000000007";
+        std::fs::write(dir.join(format!("{id}.json")), json!({"sessionId": id, "title": "Orchestrator", "originCwd": "C:/x/UC", "cwd": "C:/x/UC", "isArchived": false, "lastActivityAt": 1}).to_string()).unwrap();
+        let au = worker();
+        au.set_claude_data(Some(base.clone()));
+        au.configure(&json!({"enabled": true}));
+        let s = au.status();
+        assert_eq!(s["menu"]["sessions"]["source"], "desktop", "{}", s["menu"]["sessions"]);
+        assert_eq!(s["menu"]["sessions"]["open"], 1);
+        au.set_claude_data(Some(base.join("missing")));
+        std::thread::sleep(super::super::claude_tree::CACHE);
+        let s = au.status();
+        assert_eq!(s["menu"]["sessions"]["source"], "hooks");
+        assert!(s["menu"]["sessions"]["note"].as_str().unwrap().contains("not found"));
+        au.shutdown();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// While the menu is open: K2 selects, K3 goes back (closes at the top), the knob press closes without
     /// doing anything. While it is closed they do their normal thing again; K2 / K3 with "Same as on its own"
     /// type their own codes for UC, which types their offline keys for them (K3: Esc).
@@ -3416,8 +3565,9 @@ mod tests {
         assert!(open(&au));
         desk.press(hotkey::VK_F22);
         assert!(!open(&au), "K3 at the top closes");
-        // Open; the knob press closes without doing anything.
+        // Open; on the Close row the knob press (select) closes without doing anything.
         desk.press(hotkey::VK_F20);
+        au.menu_input("prev", None).unwrap();
         desk.press(hotkey::VK_F19);
         assert!(!open(&au));
         std::thread::sleep(Duration::from_millis(300));

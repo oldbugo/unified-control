@@ -492,7 +492,8 @@ export class Au05Panel{
       <div class="au05-claude-text"><h2>Claude sessions</h2><span class="au05-muted">${esc(csText)}</span></div>
       ${cs.connected?`<button class="btn au05-big" type="button" data-claude-op="${full.hooks&&full.hooks!=='connected'&&!full.blocked?'connect':'disconnect'}"${native}>${full.hooks&&full.hooks!=='connected'&&!full.blocked?'Connect again':'Disconnect'}</button>`:`<button class="btn primary au05-big" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect</button>`}</div>
       ${full.blocked?`<p class="au05-line attention">${esc(full.blocked)}</p>`:''}${full.error?`<p class="au05-line attention">${esc(full.error)}</p>`:''}
-      <p class="au05-line">Sessions appear once they start (or restart) after Connect: Claude reads its hook settings when a session starts.</p>
+      ${m.sessions?.source==='desktop'?`<p class="au05-line">The quick menu lists your ${esc(m.sessions.open)} open Claude sessions with their sub-sessions, from Claude's own session list (no Connect needed). Connect adds the live working dot; sessions report it once they start (or restart) after Connect.</p>`
+        :`<p class="au05-line${m.sessions?.source==='hooks'?' attention':''}">${m.sessions?.note?`${esc(m.sessions.note)}: the quick menu lists the sessions reported by Connect. `:''}Sessions appear once they start (or restart) after Connect: Claude reads its hook settings when a session starts.</p>`}
       ${sessionChips}
       <details class="au05-claude-preview"><summary>What Connect adds</summary><p class="au05-muted">${esc(full.settingsPath||'')} · merged and backed up first; the file is reformatted. Disconnect (or uninstall) removes only these entries.</p><pre>${esc(full.preview||'')}</pre></details></section>`;
 
