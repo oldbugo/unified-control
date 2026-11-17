@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.33.0 — 2026-11-17
+
+The Vibe Key's settings no longer stay "Not read" after you wake the key. Unified
+Control used to ask for them the moment the key woke, while it was still busy
+waking; the first question went unanswered, sending paused for 30 seconds, and
+the questions were never asked again. Now it waits until the key has been awake
+for 3 seconds and quiet for 1.5 seconds. If a question still goes unanswered, it
+asks once more after the pause, one question at a time. If that fails too, the
+page says "Couldn't read the settings" with a Read again button, and nothing
+more is sent by itself. When the key wakes after being switched off, the
+settings are read again, because they may have changed while it was off.
+
 ## 0.32.0 — 2026-11-17
 
 The quick menu now reopens where you left it: the same sub-menu and the same

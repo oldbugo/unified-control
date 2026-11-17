@@ -512,6 +512,7 @@ export class Au05Panel{
     const notRead=v=>v==null?opt('','Not read','') :'';
     const deviceCard=(icon,title,body,wide=false)=>`<section class="au05-box au05-set-card${wide?' au05-wide':''}"><h3 class="au05-box-title"><span class="au05-box-icon">${icon}</span>${esc(title)}</h3>${body}</section>`;
     const device=`<div class="au05-section-head"><h2>Device</h2><div class="au05-box-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
+      ${s.readsFailed?`<div class="au05-reads-failed" role="status"><span>${esc(s.readsFailed)}</span><button class="btn" data-au05="read-all" type="button">Read again</button></div>`:''}
       <div class="au05-settings-grid">
       ${deviceCard(IC.power,'Power',
         row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select>`,standby==null?null:`${standby} s`)+
