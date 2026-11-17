@@ -110,7 +110,11 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) ->
                 Some("claudeSessions") => {
                     let then = e["then"].clone();
                     let row = |s: &Value| {
-                        let label = s["label"].as_str().filter(|l| !l.is_empty()).unwrap_or("Untitled session");
+                        // Its title (named in Claude), else its first prompt, else its folder.
+                        let label = s["title"].as_str().filter(|l| !l.is_empty())
+                            .or(s["label"].as_str().filter(|l| !l.is_empty()))
+                            .or(s["project"].as_str().filter(|l| !l.is_empty()))
+                            .unwrap_or("Untitled session");
                         let state = if s["state"] == "working" { "working" } else { "idle" };
                         let since = now_ms.saturating_sub(s["last"].as_u64().unwrap_or(now_ms));
                         json!({"type": "claudeSession", "label": label, "session": s["desktopId"], "then": then,
@@ -221,6 +225,25 @@ fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) 
     out
 }
 
+/// Controls that can have a role while the menu is open, and the roles (user request 2026-11-17).
+pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "select"), ("k3", "back"), ("knobPress", "close")];
+pub const ROLES: [&str; 4] = ["select", "back", "close", "none"];
+
+/// The menu roles, defaults filled in: K2 select, K3 back, knob press close.
+pub fn sanitize_controls(v: &Value) -> Value {
+    Value::Object(
+        CONTROL_KEYS
+            .iter()
+            .map(|(k, def)| (k.to_string(), json!(v[k].as_str().filter(|r| ROLES.contains(r)).unwrap_or(def))))
+            .collect(),
+    )
+}
+/// The role of a control while the menu is open ("none" for K1 and unknown controls).
+pub fn role<'a>(controls: &'a Value, key: &str) -> &'a str {
+    let def = CONTROL_KEYS.iter().find(|(k, _)| *k == key).map(|(_, r)| *r).unwrap_or("none");
+    controls[key].as_str().filter(|r| ROLES.contains(r)).unwrap_or(def)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     /// The menu key: open, or close when open.
@@ -251,7 +274,8 @@ pub enum Outcome {
     Unavailable(String),
 }
 
-/// The menu's state machine. Rows: in a sub-menu, row 0 is "Back" and row i is entry i-1.
+/// The menu's state machine. Rows: row 0 is "Close" at the top level and "Back" in a sub-menu (fixed, user
+/// request 2026-11-17); row i is entry i-1.
 #[derive(Clone, Debug, Default)]
 pub struct MenuState {
     pub open: bool,
@@ -279,7 +303,7 @@ impl MenuState {
         cur
     }
     fn offset(&self) -> usize {
-        usize::from(!self.path.is_empty())
+        1
     }
     fn rows(&mut self, menu: &Value) -> usize {
         self.level(menu).len() + self.offset()
@@ -303,7 +327,8 @@ impl MenuState {
             }
             self.open = true;
             self.path.clear();
-            self.highlight = 0;
+            // The first entry (after Close) is highlighted.
+            self.highlight = usize::from(menu.as_array().is_some_and(|a| !a.is_empty()));
             self.note = None;
             self.last_input = Some(now);
             return Outcome::Opened;
@@ -339,7 +364,8 @@ impl MenuState {
                 self.step(menu, Input::Choose, now)
             }
             Input::Choose => {
-                if self.offset() == 1 && self.highlight == 0 {
+                // Row 0: Close (top level) or Back (sub-menu).
+                if self.highlight == 0 {
                     return self.step(menu, Input::Back, now);
                 }
                 let level = self.level(menu);
@@ -393,7 +419,9 @@ impl MenuState {
             .unwrap_or("")
             .to_string();
         let mut rows = Vec::new();
-        if !self.path.is_empty() {
+        if self.path.is_empty() {
+            rows.push(json!({"label": "Close", "type": "close"}));
+        } else {
             rows.push(json!({"label": "Back", "type": "back"}));
         }
         for e in &level {
@@ -429,8 +457,23 @@ impl MenuState {
             "target": target_name(target),
             "note": self.note,
             "closeAfterS": CLOSE_AFTER.as_secs(),
+            // The hints at the bottom: what each control does while the menu is open.
+            "hints": hints(&settings["menuControls"]),
         })
     }
+}
+
+/// "K2 select · K3 back · knob press close" (from the roles), with the knob turn first.
+pub fn hints(controls: &Value) -> String {
+    let mut parts = vec!["Turn: move".to_string()];
+    for (k, _) in CONTROL_KEYS {
+        let r = role(controls, k);
+        if r != "none" {
+            let name = if k == "knobPress" { "Knob press" } else if k == "k2" { "K2" } else { "K3" };
+            parts.push(format!("{name} {r}"));
+        }
+    }
+    parts.join(" · ")
 }
 
 #[cfg(test)]
@@ -448,12 +491,20 @@ mod tests {
         let mut m = MenuState::default();
         assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Nothing, "closed: knob turns do nothing");
         assert_eq!(m.step(&menu, Input::Toggle, t0), Outcome::Opened);
+        assert_eq!(m.highlight, 1, "the first entry, after Close");
+        let v = m.view(&json!({}), &menu);
+        assert_eq!((v["rows"][0]["type"].as_str(), v["rows"][0]["label"].as_str()), (Some("close"), Some("Close")), "Close is always first");
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
-        assert_eq!(m.highlight, 7, "wraps to the last row");
+        assert_eq!(m.highlight, 0);
+        assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
+        assert_eq!(m.highlight, 8, "wraps to the last row");
         assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Moved);
         assert_eq!(m.highlight, 0);
+        // Choosing Close closes.
+        assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Closed);
+        m.step(&menu, Input::Toggle, t0);
         // Into "Switch profile": row 0 is Back, the first profile is highlighted.
-        m.highlight = 4;
+        m.highlight = 5;
         assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Moved);
         assert_eq!(m.highlight, 1);
         let settings = json!({"menu": menu, "profile": "claude", "target": "claude",
@@ -465,7 +516,7 @@ mod tests {
         assert_eq!(v["profile"], "Claude");
         // Back returns to the sub-menu's row; choosing again and picking ChatGPT switches the profile.
         assert_eq!(m.step(&menu, Input::Pick(0), t0), Outcome::Moved);
-        assert_eq!(m.highlight, 4);
+        assert_eq!(m.highlight, 5);
         m.step(&menu, Input::Choose, t0);
         assert_eq!(m.step(&menu, Input::Pick(2), t0), Outcome::Profile("chatgpt".into(), "ChatGPT".into()));
         assert!(!m.open, "a choice closes the menu");
@@ -515,5 +566,10 @@ mod tests {
         let clean = sanitize_menu(&bad, &profiles);
         assert_eq!(clean.as_array().unwrap().len(), 1, "only the sub-menu is kept");
         assert!(clean[0]["entries"][0]["entries"].as_array().unwrap().is_empty(), "at most three levels");
+        // Menu controls: defaults K2 select, K3 back, knob press close; invalid values fall back.
+        let c = sanitize_controls(&json!({"k2": "close", "k3": "explode"}));
+        assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "close"}));
+        assert_eq!(role(&json!({}), "k1"), "none");
+        assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 select · K3 back · Knob press close");
     }
 }

@@ -340,7 +340,8 @@ one key opens a menu.
 
 - **Open and close.** Give any key (K1-K3 or the knob press) the action "Open quick menu". Pressing it opens
   the menu; pressing it again, Esc, clicking another window, or about 8 seconds without input closes it.
-- **Move and choose.** Knob turns move the highlight (right = down). The knob press chooses. The knob press
+- **Move and choose.** Knob turns move the highlight (right = down). Since 2026-11-17 K2 selects and the knob
+  press closes (see "Menu controls" below); before, the knob press chose. The knob press
   sends no private event, so it chooses through its own code F19: the knob press must be set to a Unified
   Control action (Nothing is fine). UC claims F19 while any key opens the menu. Arrow keys, Enter, Backspace
   and mouse clicks work in the window too. Another key with an action closes the menu and runs its action.
@@ -376,9 +377,37 @@ one key opens a menu.
   tests drive it through the fake key and `au05_menu`.
 - Later, not built: an always-on small assistant that shows the current profile and target.
 
+### Menus per profile, Close/Back and menu controls (user requests 2026-11-17)
+
+- **A menu per profile.** Each profile has its own menu (`au05.profiles[].menu`; `au05.menu` is the current
+  profile's). Settings from before had one menu: it was copied to every profile. The page edits the current
+  profile's menu ("Quick menu for the profile …"); switching profile switches the menu; a new profile starts
+  with a copy of the current menu.
+- **Close and Back.** "Close" is always the first row at the top level and "Back" the first row inside a
+  sub-menu (fixed, not stored, not removable). The menu opens on the first entry after Close.
+- **Menu controls** (`au05.menuControls`, the page's "Menu controls"): while the menu is open the knob turn
+  moves; K2 selects, K3 goes back (at the top: closes), the knob press closes without doing anything
+  (defaults; each can be Select, Back, Close or "Its own action"). Their normal actions wait while the menu is
+  open and work again once it closes. This replaces the earlier "knob press chooses".
+- **Own codes for K2 and K3.** While any key opens the menu, K2 and K3 with a menu role type their own codes
+  (F21, F22) in the live layer and UC claims them, even when their action is "Same as on its own" (otherwise
+  K3's factory Esc would reach the focused app). While the menu is closed UC then types their usual keys for
+  them (their offline keys, or the factory key: K2 Enter, K3 Esc). The page says this in bold under Menu
+  controls.
+- **The menu window.** The header shows the profile and the target app; rows are larger, the highlighted row
+  is bold with a stronger outline, and the footer shows the hints ("Turn: move · K2 select · K3 back · Knob
+  press close").
+
 ## Claude sessions (2026-11-17)
 
 The user chose Claude Code hooks. Opt-in: "Connect Claude sessions" on the Vibe Key page.
+
+Session titles (2026-11-17): a session named in Claude has `{"type":"custom-title","customTitle":"…"}` lines
+in its transcript. On each event the hook proxy reads only the end of `transcript_path` (only a file named
+`…\.claude\projects\<project>\<id>.jsonl`, not a link, its last 256 KB, at most 50 ms) and sends only the last
+custom title (control characters removed, at most 120 characters). Nothing else in the transcript is read or
+sent. UC keeps the latest title and shows it (else the first prompt, else the folder name), grouped by project,
+in the menu and on the page. Titles and prompts are never logged.
 
 - **The hook program** is `UC-ClaudeHook-v1.exe`, a copy of UnifiedControl.exe that the installer makes next to
   it (like `UC-AgentRequest-v1.exe`). A program with that name only ever runs the hook, whatever its

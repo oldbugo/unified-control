@@ -9,17 +9,17 @@ const $=id=>document.getElementById(id);
 export function render(v){
   if(!v||v.open===false)return;
   const title=Array.isArray(v.title)?v.title:['Quick menu'];
-  $('qm-title').textContent=title.join(' › ');
-  $('qm-context').textContent=`Profile: ${v.profile||'none'} · Target app: ${v.target||'Claude'}`;
+  $('qm-title').textContent=title.length>1?title.slice(1).join(' › '):(v.profile||'Quick menu');
+  $('qm-context').innerHTML=`<span class="qm-chip">Profile <b>${esc(v.profile||'none')}</b></span><span class="qm-chip">Target <b>${esc(v.target||'Claude')}</b></span>`;
   const rows=Array.isArray(v.rows)?v.rows:[];
   $('qm-rows').innerHTML=rows.length?rows.map((r,i)=>{
     const detail=r.type==='submenu'?'›':r.current?'current':r.detail||'';
     return `<li class="qm-row" role="option" data-index="${i}" data-type="${esc(r.type)}" data-current="${r.current?'true':'false'}" aria-selected="${i===v.highlight}">
-      <span class="qm-label">${r.type==='back'?'‹ ':''}${esc(r.label)}</span><span class="qm-detail">${esc(detail)}</span></li>`;
+      <span class="qm-label">${r.type==='back'?'‹ ':r.type==='close'?'× ':''}${esc(r.label)}</span><span class="qm-detail">${esc(detail)}</span></li>`;
   }).join(''):'<li class="qm-empty">This menu is empty. Add entries on the Vibe Key page.</li>';
   $('qm-rows').querySelector('[aria-selected="true"]')?.scrollIntoView({block:'nearest'});
   const foot=$('qm-foot');
-  foot.textContent=v.note||`Knob: move · press: choose · Esc: close · ${v.closeAfterS||8} s`;
+  foot.textContent=v.note||`${v.hints||'Turn: move'} · ${v.closeAfterS||8} s`;
   foot.classList.toggle('note',!!v.note);
 }
 
