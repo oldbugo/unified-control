@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.20.0"
+version = "0.21.0"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"
@@ -22,13 +22,15 @@ ab_glyph = "0.2"
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
-# AU05 Vibe Key driver (uc-ulanzi PRs 3, 4 and 5, merged).
-ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "5ecc40c0fbff99f9fde85cb28f8a3f00c03e110e" }
+# AU05 Vibe Key driver (uc-ulanzi PRs 3 to 6, merged).
+ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "63aa167cf0cf2879fa7341bcef14996309bdafdc" }
 
 [dev-dependencies]
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
+# Core Audio (is Claude using the microphone? Vibe Key Dictate & send). Same version Tauri already uses.
+windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 raw-window-handle = "0.6"
 windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_System_Registry", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp"] }
 

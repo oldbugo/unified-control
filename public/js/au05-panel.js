@@ -27,7 +27,8 @@ export function au05Summary(state,{native=true,readError=false}={}){
   if(readError)return {status:'Status unavailable',description:'Vibe Key status could not be refreshed.'};
   if(!state||state.enabled!==true)return {status:'Disabled',description:'Vibe Key is disabled.'};
   const battery=state.battery?` · battery ${state.battery.percent} %`:'';
-  return {status:STATES[state.state]||'Status unknown',description:`${state.message||''}${battery}`};
+  const label=STATES[state.state]||'Status unknown';
+  return {status:state.battery?`${label} · ${state.battery.percent} %`:label,description:`${state.message||''}${battery}`};
 }
 
 export class Au05Panel{
@@ -169,10 +170,14 @@ export class Au05Panel{
       if(e.at<=this.lastFlashAt)break;
       if(!e.pressed&&!e.action)continue;
       const zone=EVENT_ZONE[e.control];
+      // An action that did not run (for example "Dictation didn't start") flashes red and says why.
+      const bad=typeof e.action==='string'&&!e.action.startsWith('ran ');
+      const cls=bad?'au05-flash-bad':'au05-flash';
       for(const el of this.container?.querySelectorAll(`.au05-diagram [data-au05-zone="${zone}"]`)||[]){
-        el.classList.remove('au05-flash');void el.getBoundingClientRect();el.classList.add('au05-flash');
-        setTimeout(()=>el.classList.remove('au05-flash'),700);
+        el.classList.remove(cls);void el.getBoundingClientRect();el.classList.add(cls);
+        setTimeout(()=>el.classList.remove(cls),bad?1600:700);
       }
+      if(bad)this.toast(`${ZONES[zone]||e.control}: ${e.action.replace(/^[^:]+: [^:]+: /,'').replace(/\s*\(.*\)$/,'')}`,null);
     }
     this.lastFlashAt=Math.max(this.lastFlashAt,newest);
   }
@@ -186,11 +191,11 @@ export class Au05Panel{
     if(!root.firstChild)root.innerHTML=this.skeleton();
     const chip=root.querySelector('#au05-page-state'),msg=root.querySelector('#au05-page-message');
     const sum=this.summary();chip.textContent=sum.status;msg.textContent=s.message||sum.description;
-    root.querySelector('#au05-battery').textContent=s.battery?`${s.battery.percent} %`:'—';root.querySelector('#au05-battery').parentElement.title=s.battery?`Battery ${s.battery.percent} % (${(s.battery.millivolts/1000).toFixed(2)} V)`:'Battery: not read yet';
+    
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
+    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(this.dragAction!=null&&!force)return this.flash();
@@ -202,7 +207,7 @@ export class Au05Panel{
     this.flash();
   }
   skeleton(){
-    return `<div class="page-heading au05-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1></div><div class="au05-head-pills"><span class="au05-pill" title="Battery">${IC.power}<span id="au05-battery"></span></span><span id="au05-page-state" class="chip"></span></div></div>
+    return `<div class="page-heading au05-heading"><div><span class="eyebrow">ULANZI AU05</span><h1>Vibe Key</h1></div><div class="au05-head-pills"><span id="au05-page-state" class="chip"></span></div></div>
     <p class="au05-status"><span id="au05-page-message"></span></p>
     <p id="au05-note" class="au05-note${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
     <div id="au05-controls"></div>
@@ -343,16 +348,16 @@ export class Au05Panel{
     const sel0=this.selected;const selKey=keyOf(sel0);
     const selValue=sel0==='knobTurn'?(m.knobTurn==='uc'?`knob:${turnAct}`:''):selKey?keyValue(selKey):'';
     const forKnob=sel0==='knobTurn';
-    const pcard=(value,icon,name,{keys='',unverified=false,title=''}={})=>{
+    const pcard=(value,icon,name,{keys='',unverified=false,title='',fresh=false}={})=>{
       const knob=value.startsWith('knob:');const dim=knob!==forKnob;
       return `<button type="button" class="au05-card au05-pcard${selValue===value?' is-selected':''}${dim?' is-dim':''}" data-au05-palette="" data-value="${esc(value)}" aria-pressed="${selValue===value}"${dim?' aria-disabled="true"':''} title="${esc(title||name)}"${native}>
-        <span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span>${keys?`<span class="au05-kbd">${esc(keys)}</span>`:''}${unverified?'<span class="au05-unv" aria-label="unverified">?</span>':''}</button>`;
+        <span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span>${keys?`<span class="au05-kbd">${esc(keys)}</span>`:''}${fresh?'<span class="au05-new">New</span>':unverified?'<span class="au05-unv" aria-label="unverified">?</span>':''}</button>`;
     };
     const paletteOpen=this.paletteOpen;
     const paletteSections=`${SECTIONS.filter(sec=>cat.some(e=>e.group===sec.group)).map(sec=>
       `<section class="au05-section"><h3 class="au05-sec">${mark(sec)}<span class="au05-sec-title">${esc(sec.title)}</span></h3><div class="au05-grid">${cat.filter(e=>e.group===sec.group).map(e=>
         pcard(`uc:${e.id}`,actionIcon(e.id),shortName(e),{keys:e.keys&&e.keys!==e.label&&e.keys!==shortName(e)&&e.keys!=='Follows the target app'&&!/^(Play|Next|Previous|Volume|Mute)/.test(e.keys)?e.keys:'',
-          unverified:e.status!=='verified',title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}
+          unverified:e.status!=='verified',fresh:/^New\b/.test(e.note||''),title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}
       <section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" aria-hidden="true" style="--hue:var(--accent)">${IC.dot}</span><span class="au05-sec-title">Unified Control</span></h3><div class="au05-grid">
         ${pcard('uc:quickMenu',actionIcon('quickMenu'),'Quick menu',{title:'Open the quick menu'})}${pcard('uc:hotkey',actionIcon('hotkey'),'Custom',{title:'Any key combination'})}${pcard('uc:none',actionIcon('none'),'Nothing',{title:'The key does nothing'})}</div></section>
       <section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" aria-hidden="true" style="--hue:var(--hue-5)">${IC.scroll}</span><span class="au05-sec-title">Knob turn</span></h3><div class="au05-grid">
@@ -361,6 +366,18 @@ export class Au05Panel{
       <header class="au05-palette-head"><button type="button" class="au05-palette-toggle" data-au05-palette-toggle aria-expanded="${paletteOpen}">${paletteOpen?IC.down:IC.next}<span>Actions</span></button>
         <span class="au05-muted au05-palette-hint">Drag onto a key, or click to set ${esc(ZONES[sel0]||'the selected part')}</span></header>
       ${paletteOpen?`<div class="au05-sections">${paletteSections}</div>`:''}</section>`;
+
+    // ---- battery: icon with fill level, percent, low warning, asleep (last known), details on hover ----
+    const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting';
+    const low=pct!=null&&pct<=15;
+    const fill=pct==null?0:Math.max(3,Math.min(100,pct));
+    const bTime=b?.at?new Date(b.at).toLocaleTimeString('en-AU',{hour12:false}):'';
+    const bTitle=b?`Battery ${pct} % · ${(b.millivolts/1000).toFixed(2)} V${bTime?` · updated ${bTime}`:''}${b.flags!=null?` · status flags 0x${b.flags.toString(16).padStart(2,'0')} (charging not known yet)`:''}`:'Battery: not read yet. Press a key to wake the Vibe Key.';
+    const bText=pct==null?'Battery —':asleep?`Asleep — last known ${pct} %`:b.full?'Full':`${pct} %`;
+    const batteryMarkup=`<div class="au05-battery${low?' low':''}${asleep?' asleep':''}${pct==null?' unknown':''}" title="${esc(bTitle)}">
+      <svg class="au05-batt-icon" viewBox="0 0 44 22" aria-hidden="true"><rect x="1.5" y="2.5" width="36" height="17" rx="4" class="shell"/><rect x="39" y="8" width="3.5" height="6" rx="1.2" class="tip"/>
+        <rect x="4.5" y="5.5" width="${(30*fill/100).toFixed(1)}" height="11" rx="2" class="level"/>${b?.charging===true?'<path d="M21 4.5 15.5 12h4.5l-1.5 5.5 6-8h-4.5l1.5-5z" class="bolt"/>':''}</svg>
+      <span id="au05-battery" class="au05-batt-text" aria-label="${esc(bTitle)}">${esc(bText)}</span></div>`;
 
     // ---- profiles and target app ----
     const profiles=m.profiles||[];
@@ -449,7 +466,7 @@ export class Au05Panel{
       ${deviceCard(IC.sliders,'Controls',`<div class="au05-codes">${codes||'<span class="au05-muted">Read all settings to see each control\'s code.</span>'}</div>`)}
       </div>`;
 
-    return `${topBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}</div>
+    return `${topBar}<div class="au05-workspace"><div class="au05-drawing">${batteryMarkup}${diagram}</div>
     <div class="au05-side"><aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside>${palette}</div></div>
     <div class="au05-boxes">${menuBox}${claudeBox}</div>
     ${device}`;
@@ -519,6 +536,7 @@ export class Au05Panel{
   toast(text,undo){
     const t=this.container?.querySelector('#au05-toast');if(!t)return;
     this.undo=undo;t.querySelector('.au05-toast-text').textContent=text;t.hidden=false;
+    t.querySelector('[data-au05-undo]').hidden=!undo;t.classList.toggle('bad',!undo);
     clearTimeout(this.toastTimer);this.toastTimer=setTimeout(()=>{t.hidden=true;this.undo=null;},6000);
   }
   // Key typing is read only on request, one key at a time (the key can take up to 20 s to answer).

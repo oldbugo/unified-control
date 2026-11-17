@@ -2,6 +2,7 @@
 const svg=d=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const I={
   mic:svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+  micSend:svg('<rect x="5" y="3" width="6" height="10" rx="3"/><path d="M2.5 10a5.5 5.5 0 0 0 11 0M8 15.5V19M14 18l7-4-7-4v3l4 1-4 1z"/>'),
   micOff:svg('<path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 10V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.5 5.4M19 11a7 7 0 0 1-.6 2.8M12 18v3M4 4l16 16"/>'),
   send:svg('<path d="M4 12 20 4l-6 16-3-7z"/><path d="m11 13 9-9"/>'),
   plus:svg('<path d="M12 5v14M5 12h14"/>'),
@@ -51,7 +52,7 @@ const I={
 export const ICON=I;
 // The icon for a catalogue action (or a UC action kind).
 const BY_ID={
-  claudeDictation:'mic',chatgptDictation:'mic',targetDictation:'mic',claudeSend:'send',chatgptSend:'send',targetSend:'send',
+  claudeDictation:'mic',claudeDictateSend:'micSend',chatgptDictation:'mic',targetDictation:'mic',claudeSend:'send',chatgptSend:'send',targetSend:'send',
   claudeNewSession:'plus',chatgptNewChat:'plus',targetNew:'plus',claudeNextSession:'next',claudePrevSession:'prev',
   claudeModelMenu:'chip',claudePermissionMenu:'shield',claudeSideChat:'chat',claudeTerminal:'terminal',claudeDiff:'diff',
   claudeShortcuts:'keyboard',chatgptShortcuts:'keyboard',claudeQuickOpen:'launch',claudeStop:'stop',chatgptSidebar:'sidebar',
@@ -67,7 +68,7 @@ export const SHORT={
   claudePrevSession:'Previous session',claudeModelMenu:'Model menu',claudeSideChat:'Side chat',chatgptFocusInput:'Focus input',
   chatgptCompanion:'Companion',chatgptSidebar:'Sidebar',enter:'Enter',screenshot:'Screenshot',micMute:'Mute mic',
   showDesktop:'Show desktop',taskView:'Task view',targetNew:'New chat',claudeSend:'Send',chatgptSend:'Send',targetSend:'Send',
-  claudeDictation:'Dictation',chatgptDictation:'Dictation',targetDictation:'Dictation',claudeNewSession:'New session',
+  claudeDictation:'Dictation',claudeDictateSend:'Dictate & send',chatgptDictation:'Dictation',targetDictation:'Dictation',claudeNewSession:'New session',
   chatgptNewChat:'New chat',mute:'Mute sound',
 };
 // App sections: a simple initial or glyph and a colour token (no logos).
