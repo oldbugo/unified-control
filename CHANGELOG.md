@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.0 — 2026-11-17
+
+The quick menu's Claude sessions now list every session you have not archived,
+as a real tree: sub-sessions sit under the session that started them, at any
+depth, grouped by project and newest first. Unified Control reads only a few
+fields (title, parent, folder, archived, last activity) from the Claude app's
+own session files and never writes there; it works without Connect (Connect
+adds the live "working" dot). If those files change in a Claude update, it
+falls back to the hook list. In the menu, pressing the knob now selects (like
+K2), and the highlight stops at the first and last entries on every input.
+
 ## 0.29.0 — 2026-11-17
 
 Claude sessions in the quick menu are now a tree: each project first, then its
