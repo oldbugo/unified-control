@@ -48,12 +48,14 @@ async function run(){
     await page.waitForSelector('.au05-diagram');
     await pick('k3');
     await page.locator('[data-au05-read="k3"]').click();
-    await until(async()=>(await invoke('au05_state')).keys[2].mode==='uc','K3 read on request');
-    await page.waitForFunction(()=>document.querySelector('[data-au05-mode="k3"]')?.dataset.value==='uc:none');
+    await until(async()=>(await invoke('au05_state')).keys[2].mode!=='unknown','K3 read on request');
+    // The offline layer: K1 types Ctrl + D on its own. K1 has no UC action, so the layer sync writes it now.
+    await page.locator('[data-au05-layer-view="offline"]').click();
     await pick('k1');
-    await page.locator('[data-au05-mode="k1"] [data-au05-segment="keys"]').click();
-    const keys=page.locator('input[data-au05-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
+    await page.locator('[data-au05-offline-mode="keys"][data-control="k1"]').click();
+    const keys=page.locator('input[data-au05-offline-keys="k1"]');await keys.fill('Ctrl + D');await keys.press('Tab');
     await until(async()=>(await invoke('au05_state')).keys[0].label==='Ctrl + D','K1 typing read back');
+    await page.locator('[data-au05-layer-view="live"]').click();
     await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
     await until(async()=>(await invoke('au05_state')).standbyS===900,'standby read back');
     assert.deepEqual((await invoke('au05_test_control',{patch:{op:'state'}})).fake.hotkeysClaimed,[],'no hotkey without an action');
@@ -62,6 +64,8 @@ async function run(){
     const value=page.locator('input[data-au05-action-value="k3"]');await value.fill('Ctrl + Enter');await value.press('Tab');
     await until(async()=>(await invoke('au05_state')).actions.k3.value==='Ctrl + Enter','K3 UC action saved');
     assert.equal((await invoke('au05_state')).keys[2].hotkey.state,'ready');
+    // The live layer: K3 has a UC action, so the key is set to type its own code F22.
+    await until(async()=>{const k=(await invoke('au05_state')).keys[2];return k.mode==='uc'&&(!k.job||k.job.state==='done');},'K3 types F22');
 
     await invoke('au05_test_control',{patch:{op:'click',control:'k3'}});
     st=await until(async()=>{const s=await invoke('au05_state');return s.events.find(e=>e.control==='K3'&&e.action)?s:null;},'K3 hotkey action');

@@ -229,6 +229,13 @@ impl App {
             let connected = store.load().0["au05"]["claudeSessions"].as_bool().unwrap_or(false);
             (if connected { sessions.list(now_ms()) } else { Vec::new() }, connected)
         }));
+        // Windows session end (shutdown, sign-out): the key gets its offline layer back first.
+        let weak_end = self.me.lock_or_recover().clone();
+        au05.on_session_end(Arc::new(move || {
+            if let Some(app) = weak_end.upgrade() {
+                app.au05_session_end();
+            }
+        }));
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
@@ -633,6 +640,7 @@ impl App {
         let saved = self.settings.load().0["au05"].clone();
         v["enabled"] = saved["enabled"].clone();
         v["actions"] = saved["actions"].clone();
+        v["offlinePending"] = saved["offlinePending"].clone();
         // The Claude session list (memory only; the full Claude settings check is `claude_state`).
         let connected = saved["claudeSessions"].as_bool().unwrap_or(false);
         v["claude"] = json!({"connected": connected, "sessions": if connected { self.claude.list(now_ms()) } else { Vec::new() },
@@ -647,6 +655,16 @@ impl App {
             return Err(CoreError::new("The app is closing"));
         }
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        // "Store offline layer on the key now" / "Back to Unified Control": which layer the key should hold
+        // (not a setting; the next start goes back to the live layer).
+        if let Some(layer) = patch.get("layer") {
+            match layer.as_str() {
+                Some("offline") => au05.set_layer_offline(true),
+                Some("live") => au05.set_layer_offline(false),
+                _ => return Err(CoreError::new("Choose a layer")),
+            }
+            return Ok(self.au05_state());
+        }
         // Checked on a copy first; the lock above keeps the copy current until it is saved.
         let mut next = self.settings.load().0["au05"].clone();
         let lines = super::au05::apply_patch(&mut next, patch).map_err(CoreError::new)?;
@@ -655,7 +673,22 @@ impl App {
             au05.log_line(&line);
         }
         au05.configure(&saved.0["au05"]);
+        // Disabling wrote the offline layer back (or could not): remember it for the page.
+        if let Some(ok) = au05.take_offline_result() {
+            self.save_offline_pending(!ok);
+        }
         Ok(self.au05_state())
+    }
+    /// The offline layer is not on the key yet (key asleep, or no time at quit / disable / session end).
+    fn save_offline_pending(&self, pending: bool) {
+        let _ = self.settings.update(|s| s["au05"]["offlinePending"] = serde_json::json!(pending));
+    }
+    /// Windows is ending the session: store the offline layer within the time Windows allows.
+    pub fn au05_session_end(&self) {
+        if let Some(au05) = self.au05.get() {
+            let ok = au05.store_offline(std::time::Duration::from_secs(4));
+            self.save_offline_pending(!ok);
+        }
     }
     /// Where Claude's settings are: `%USERPROFILE%\.claude`. Debug builds and fake or quiet (test) instances
     /// use only `UC_CLAUDE_HOME` and never the real folder.
@@ -1078,7 +1111,9 @@ impl App {
         }
         let _guard = self.dock_config_lock.lock_or_recover();
         if let Some(au05) = self.au05.get() {
-            au05.shutdown();
+            if let Some(stored) = au05.shutdown() {
+                self.save_offline_pending(!stored);
+            }
         }
         if let Some(dock) = self.dock.get() {
             dock.shutdown();

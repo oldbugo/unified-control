@@ -79,12 +79,83 @@ pub fn default_settings() -> Value {
     sanitize(&json!({}))
 }
 
-/// The four keys' actions, each `{kind, value, app}` with a known kind.
+/// The six controls whose typing the key stores, with their settings names.
+pub const LAYER_CONTROLS: [(&str, KeyId); 6] = [
+    ("k1", KeyId::K1),
+    ("k2", KeyId::K2),
+    ("k3", KeyId::K3),
+    ("knobPress", KeyId::KnobPress),
+    ("knobRight", KeyId::KnobRight),
+    ("knobLeft", KeyId::KnobLeft),
+];
+
+/// The offline layer (what the key types on its own, without UC): `{mode: "factory"}` or `{mode: "keys",
+/// keys: "Ctrl + D"}` per control.
+fn sanitize_offline(v: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    for (name, _) in LAYER_CONTROLS {
+        let c = &v[name];
+        let keys = c["keys"].as_str().unwrap_or("");
+        let entry = if c["mode"] == "keys" && KeyTyping::parse(keys).is_ok() {
+            json!({"mode": "keys", "keys": keys})
+        } else {
+            json!({"mode": "factory"})
+        };
+        out.insert(name.to_string(), entry);
+    }
+    Value::Object(out)
+}
+fn offline_typing(offline: &Value, name: &str) -> KeyTyping {
+    let c = &offline[name];
+    if c["mode"] == "keys" {
+        KeyTyping::parse(c["keys"].as_str().unwrap_or("")).unwrap_or_else(|_| KeyTyping::factory())
+    } else {
+        KeyTyping::factory()
+    }
+}
+
+/// What the key should hold: the live layer (UC running: a control with a UC action types its own code,
+/// the others their offline typing) or the offline layer, per control in `LAYER_CONTROLS` order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layers {
+    pub live: Vec<KeyTyping>,
+    pub offline: Vec<KeyTyping>,
+    pub uc: Vec<bool>,
+    /// Write the offline layer (quit, disable, session end, or "Store offline layer on the key now").
+    pub target_offline: bool,
+    /// Controls whose layer changed in this run: written even if what the key holds is not known.
+    pub dirty: Vec<bool>,
+}
+impl Layers {
+    pub fn from_settings(au: &Value) -> Self {
+        let offline_cfg = &au["offline"];
+        let mut live = Vec::new();
+        let mut offline = Vec::new();
+        let mut uc = Vec::new();
+        for (name, id) in LAYER_CONTROLS {
+            let off = offline_typing(offline_cfg, name);
+            let is_uc = match id {
+                KeyId::KnobRight | KeyId::KnobLeft => au["knobTurn"] == "uc",
+                _ => au["actions"][name]["kind"].as_str().unwrap_or(hotkey::OFFLINE) != hotkey::OFFLINE,
+            };
+            live.push(if is_uc { KeyTyping::own_code(id) } else { off.clone() });
+            offline.push(off);
+            uc.push(is_uc);
+        }
+        Self { live, offline, uc, target_offline: false, dirty: vec![false; 6] }
+    }
+    pub fn want(&self, i: usize) -> &KeyTyping {
+        if self.target_offline { &self.offline[i] } else { &self.live[i] }
+    }
+}
+
+/// The four keys' actions, each `{kind, value, app}` with a known kind. Without a kind: "offline" (the key
+/// types its offline layer).
 fn sanitize_actions(v: &Value) -> Value {
     let mut out = serde_json::Map::new();
     for (key, _) in ACTION_KEYS {
         let a = &v[key];
-        let kind = a["kind"].as_str().filter(|k| hotkey::kind_known(k)).unwrap_or("none");
+        let kind = a["kind"].as_str().filter(|k| hotkey::kind_known(k)).unwrap_or(hotkey::OFFLINE);
         let value = a["value"].as_str().filter(|s| s.len() <= 4096 && !s.contains('\0')).unwrap_or("");
         let app = a["app"].as_str().filter(|id| hotkey::app(id).is_some()).unwrap_or("");
         let custom = kind == "hotkey";
@@ -98,6 +169,31 @@ fn sanitize_actions(v: &Value) -> Value {
 
 /// Keep only known keys with valid values. The live `actions` always belong to the current profile.
 pub fn sanitize(v: &Value) -> Value {
+    // Two layers (2026-11-17): settings from before had "none" for a key without a UC action; that is now
+    // "offline" (the key types its offline layer). Done once, marked by `layers: 1`.
+    let migrate = |a: &Value| -> Value {
+        let mut a = a.clone();
+        if v["layers"] != 1 {
+            for (key, _) in ACTION_KEYS {
+                if a[key]["kind"] == "none" || a[key]["kind"].is_null() {
+                    a[key] = json!({"kind": hotkey::OFFLINE, "value": "", "app": ""});
+                }
+            }
+        }
+        a
+    };
+    let v = &{
+        let mut v = v.clone();
+        if v["layers"] != 1 {
+            v["actions"] = migrate(&v["actions"]);
+            if let Some(ps) = v["profiles"].as_array_mut() {
+                for p in ps.iter_mut() {
+                    p["actions"] = migrate(&p["actions"]);
+                }
+            }
+        }
+        v
+    };
     let actions = sanitize_actions(&v["actions"]);
     let source = v["profiles"]
         .as_array()
@@ -141,6 +237,10 @@ pub fn sanitize(v: &Value) -> Value {
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
         "claudeSessions": v["claudeSessions"].as_bool().unwrap_or(false),
         "knobTurn": if v["knobTurn"] == "uc" { "uc" } else { "factory" },
+        "layers": 1,
+        "offline": sanitize_offline(&v["offline"]),
+        // The offline layer could not be stored at the last quit or disable (key asleep or no time).
+        "offlinePending": v["offlinePending"].as_bool().unwrap_or(false),
         "knobTurnAction": v["knobTurnAction"].as_str().filter(|a| TURN_ACTIONS.contains(a)).unwrap_or("scroll"),
     })
 }
@@ -268,6 +368,23 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
         au["target"] = json!(t);
         lines.push(format!("target = {t}"));
     }
+    if let Some(o) = patch.get("offline") {
+        let name = o["control"].as_str().unwrap_or("");
+        if !LAYER_CONTROLS.iter().any(|(n, _)| *n == name) {
+            return Err("Unknown Vibe Key control".into());
+        }
+        let entry = match o["mode"].as_str().unwrap_or("") {
+            "factory" => json!({"mode": "factory"}),
+            "keys" => {
+                let keys = o["keys"].as_str().unwrap_or("");
+                KeyTyping::parse(keys)?;
+                json!({"mode": "keys", "keys": keys})
+            }
+            _ => return Err("Choose what the key types on its own".into()),
+        };
+        au["offline"][name] = entry;
+        lines.push(format!("page offline layer {name} = {}", o["mode"].as_str().unwrap_or("")));
+    }
     if let Some(m) = patch.get("menu") {
         let m = if m == "default" { menu::default_menu() } else { m.clone() };
         if !m.is_array() {
@@ -316,6 +433,8 @@ pub enum Change {
     KeyTyping(KeyId, KeyTyping),
     /// Both knob turn directions: their own codes F23/F24 (true) or the factory scroll (false).
     KnobTurn(bool),
+    /// Clear a failed key job so the layer sync tries once more (the page's "Try again").
+    Retry(KeyId),
     LightRecord { record: u8, field: LightField, value: u8 },
     HooksMode(u8),
 }
@@ -361,6 +480,14 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
             "uc" => Ok(Change::KnobTurn(true)),
             _ => Err("Choose what the knob turn does".into()),
         },
+        "retryJob" => {
+            let key = LAYER_CONTROLS
+                .iter()
+                .find(|(k, _)| Some(*k) == v["key"].as_str())
+                .map(|(_, id)| *id)
+                .ok_or("Choose a control")?;
+            Ok(Change::Retry(key))
+        }
         "keyTyping" => {
             let key = ACTION_KEYS
                 .iter()
@@ -464,6 +591,9 @@ pub struct Au05 {
     config: SessionConfig,
     log: Arc<Log>,
     menu: Arc<MenuCtl>,
+    layers: Arc<Mutex<Layers>>,
+    /// The result of the last offline store at disable (taken by the app to save `offlinePending`).
+    offline_result: Mutex<Option<bool>>,
 }
 
 /// `devices/au05/device.log` (rotated at about 1 MB, like the other device logs). Command names and results
@@ -859,6 +989,8 @@ impl Au05 {
             config,
             log,
             menu: menu.clone(),
+            layers: Arc::new(Mutex::new(Layers::from_settings(&default_settings()))),
+            offline_result: Mutex::new(None),
         });
         if let Some(d) = &au.desktop {
             // Actions never run on the hotkey thread (MenuCtl::run spawns one per action).
@@ -867,6 +999,12 @@ impl Au05 {
         au
     }
 
+    /// Called when Windows ends the session (only the real desktop reports it).
+    pub fn on_session_end(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+        if let Some(d) = &self.desktop {
+            d.set_session_end(handler);
+        }
+    }
     /// The app shell's menu window. Never set in tests, fake or quiet instances.
     pub fn set_menu_view(&self, view: Arc<dyn MenuView>) {
         *self.menu.view.lock_or_recover() = Some(view);
@@ -982,10 +1120,24 @@ impl Au05 {
         if !enabled && self.menu.is_open() {
             self.menu.input(Input::Close, "disabled");
         }
+        {
+            // New layers; a control whose layer changed is written even if its stored list is not known.
+            let mut l = self.layers.lock_or_recover();
+            let mut next = Layers::from_settings(&settings);
+            next.target_offline = l.target_offline;
+            for i in 0..6 {
+                next.dirty[i] = l.dirty[i] || next.live[i] != l.live[i] || next.offline[i] != l.offline[i];
+            }
+            *l = next;
+        }
         let running = self.tx.lock_or_recover().is_some();
         if enabled && !running {
+            self.layers.lock_or_recover().target_offline = false;
             self.start();
         } else if !enabled && running {
+            // Disabling: the key gets its offline layer back first (if it is awake), then the worker stops.
+            let ok = self.store_offline(Duration::from_secs(8));
+            *self.offline_result.lock_or_recover() = Some(ok);
             self.stop_worker();
         }
         self.apply_hotkeys(enabled);
@@ -1009,6 +1161,7 @@ impl Au05 {
             config: self.config.clone(),
             log: self.log.clone(),
             menu: self.menu.clone(),
+            layers: self.layers.clone(),
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -1048,14 +1201,59 @@ impl Au05 {
         s.jobs = Default::default();
     }
 
-    /// Stop the worker and release every hotkey (quit).
-    pub fn shutdown(&self) {
+    /// Write the offline layer back, then stop the worker and release every hotkey (quit). Returns whether
+    /// the offline layer is on the key (`None` when the Vibe Key was not running).
+    pub fn shutdown(&self) -> Option<bool> {
         let _guard = self.config_lock.lock_or_recover();
         if self.menu.is_open() {
             self.menu.input(Input::Close, "quit");
         }
+        let running = self.tx.lock_or_recover().is_some();
+        let stored = running.then(|| self.store_offline(Duration::from_secs(8)));
         self.stop_worker();
         self.apply_hotkeys(false);
+        stored
+    }
+
+    /// The result of the offline store at the last disable, once (the app saves `offlinePending`).
+    pub fn take_offline_result(&self) -> Option<bool> {
+        self.offline_result.lock_or_recover().take()
+    }
+
+    /// The key should hold its offline layer (`true`) or the live layer. "Store offline layer on the key
+    /// now" on the page; the live layer comes back with "Back to Unified Control" or the next start.
+    pub fn set_layer_offline(&self, offline: bool) {
+        self.layers.lock_or_recover().target_offline = offline;
+        self.log.line(if offline { "layer: storing the offline layer on the key" } else { "layer: back to the live layer" });
+    }
+
+    /// Does the key hold the offline layer for every control whose stored list is known? Unknown controls
+    /// count as stored (UC never changed them in this run).
+    fn offline_on_key(&self) -> bool {
+        let s = self.status.lock_or_recover();
+        let l = self.layers.lock_or_recover();
+        LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| {
+            s.known.keys[id.index() as usize].as_ref().is_none_or(|k| *k == l.offline[i])
+        })
+    }
+
+    /// Switch the key to its offline layer and wait (at most `budget`) until it is stored. Only an awake key
+    /// is written (a write to a sleeping key blocks); returns `false` when it could not be stored.
+    pub fn store_offline(&self, budget: Duration) -> bool {
+        self.layers.lock_or_recover().target_offline = true;
+        let end = Instant::now() + budget;
+        loop {
+            if self.offline_on_key() {
+                self.log.line("layer: offline layer is on the key");
+                return true;
+            }
+            let state = self.status.lock_or_recover().state;
+            if state != "connected" || Instant::now() >= end {
+                self.log.line(&format!("layer: offline layer not stored ({})", if state != "connected" { "key not awake" } else { "no time left" }));
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// A settings change is busy until the key answers or the request fails.
@@ -1065,6 +1263,14 @@ impl Au05 {
 
     /// Send one change to the key and wait for its answer (at most `SET_WAIT`).
     pub fn change(&self, change: Change) -> Result<(), String> {
+        if let Change::Retry(key) = change {
+            let mut s = self.status.lock_or_recover();
+            if s.jobs[key.index() as usize].as_ref().is_some_and(|j| j.state == "failed") {
+                s.jobs[key.index() as usize] = None;
+            }
+            self.layers.lock_or_recover().dirty[key.index() as usize] = true;
+            return Ok(());
+        }
         if let Change::KnobTurn(own) = change {
             self.log.line(&format!("page change knob turn {}", if own { "F23/F24" } else { "factory scroll" }));
             for k in KeyId::TURNS {
@@ -1142,6 +1348,7 @@ impl Au05 {
         let s = self.status.lock_or_recover().clone();
         let k = &s.known;
         let hotkeys = self.hotkeys.lock_or_recover().clone();
+        let layers = self.layers.lock_or_recover().clone();
         let hotkey_state = |vk: u16| match hotkeys.get(&vk) {
             None => json!({"state": "off"}),
             Some(Ok(())) => json!({"state": "ready"}),
@@ -1187,6 +1394,8 @@ impl Au05 {
                     }),
                     // Every key can be set; the knob press typing is not checked on the real key yet.
                     "canSet": true,
+                    "uc": layers.uc[id.index() as usize],
+                    "offline": layers.offline[id.index() as usize].label(id),
                     "checked": Request::GetKeyTyping(id).verified_on_hardware(),
                 })
             })
@@ -1240,6 +1449,11 @@ impl Au05 {
                 })
             }).collect::<Vec<_>>(),
             "events": events,
+            // Two layers: what the key should hold now, and whether the offline layer is on it.
+            "layer": {"target": if layers.target_offline { "offline" } else { "live" },
+                      "offlineOnKey": LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| k.keys[id.index() as usize].as_ref().is_none_or(|t| *t == layers.offline[i])),
+                      "offline": LAYER_CONTROLS.iter().enumerate().map(|(i, (n, id))| (n.to_string(), json!({"label": layers.offline[i].label(*id), "factory": layers.offline[i].is_factory(),
+                          "keys": (!layers.offline[i].is_factory()).then(|| layers.offline[i].label(*id))}))).collect::<serde_json::Map<_, _>>()},
             "actions": self.actions.lock_or_recover().clone(),
             "hotkeysAvailable": self.desktop.is_some(),
             "catalogue": hotkey::catalogue_json(),
@@ -1332,6 +1546,7 @@ pub fn uc_session_config() -> SessionConfig {
 }
 
 struct Worker {
+    layers: Arc<Mutex<Layers>>,
     fake: Option<FakeHandle>,
     status: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
@@ -1358,6 +1573,46 @@ impl Worker {
             }
             s.state = state;
             s.message = message.into();
+        }
+    }
+
+    /// Keep the key holding the wanted layer: for each control whose stored list differs from what it should
+    /// type, queue (or update) a key job. Unknown lists are written only for controls with a UC action in the
+    /// live layer, or whose layer changed in this run. A failed job is not repeated (no retry) until the
+    /// page's "Try again".
+    fn sync_layers(&self) {
+        let l = self.layers.lock_or_recover().clone();
+        let mut s = self.status.lock_or_recover();
+        for (i, (name, id)) in LAYER_CONTROLS.iter().enumerate() {
+            let idx = id.index() as usize;
+            let want = l.want(i).clone();
+            let known = s.known.keys[idx].clone();
+            if let Some(j) = s.jobs[idx].as_mut() {
+                match j.state {
+                    "waiting" => {
+                        if j.typing != want {
+                            j.typing = want;
+                        }
+                        continue;
+                    }
+                    "sending" => {
+                        if j.typing != want {
+                            j.next = Some(want);
+                        }
+                        continue;
+                    }
+                    "failed" if j.typing == want => continue,
+                    _ => {}
+                }
+            }
+            let needs = match &known {
+                Some(k) => *k != want,
+                None => l.dirty[i] || (!l.target_offline && l.uc[i]),
+            };
+            if needs {
+                self.log.line(&format!("layer sync: {name} -> {} ({})", want.label(*id), if l.target_offline { "offline" } else { "live" }));
+                s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None });
+            }
         }
     }
 
@@ -1546,6 +1801,7 @@ impl Worker {
                     session.diagnostics().unwrap_or_else(|| "no transport diagnostics".into())
                 ));
             }
+            self.sync_layers();
             self.start_jobs(&mut session, &mut tickets);
             let state = session.state();
             if state == SessionState::Awake && !read_done {
@@ -1654,7 +1910,7 @@ impl Worker {
                 }
             },
             Change::KeyTyping(k, t) => Request::SetKeyTyping(k, t),
-            Change::KnobTurn(_) => {
+            Change::KnobTurn(_) | Change::Retry(_) => {
                 let _ = reply.send(Err("The knob turn is set as a background job".into()));
                 return;
             }
@@ -1915,6 +2171,44 @@ mod tests {
         au.shutdown();
     }
 
+    /// Two layers (2026-11-17): while UC runs the key holds the live layer (own codes for controls with a UC
+    /// action, offline typing for the others); quit writes the offline layer back; only differences are
+    /// written; a key asleep at quit is reported as "offline layer not stored".
+    #[test]
+    fn the_key_holds_the_live_layer_while_uc_runs_and_the_offline_layer_after_quit() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        let sets = |f: &FakeHandle| f.received().into_iter().filter(|p| p[2] == 0x50 && p[3] == 0x00).count();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}},
+                             "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}, "k2": {"mode": "keys", "keys": "Ctrl + Enter"}}}));
+        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "uc" && s["keys"][1]["mode"] == "keys");
+        assert_eq!(s["layer"]["target"], "live");
+        assert_eq!(s["keys"][0]["offline"], "Ctrl + D");
+        assert_eq!(sets(&fake), 2, "K1 (its own code) and K2 (its changed offline typing) only");
+        assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
+        // Quit: K1 gets its offline typing back; K2 already holds its offline typing and is not written again.
+        assert_eq!(au.shutdown(), Some(true));
+        assert_eq!(sets(&fake), 3);
+        assert_eq!(fake.lock().typing[0], KeyTyping::parse("Ctrl + D").unwrap());
+        assert_eq!(fake.lock().typing[1], KeyTyping::parse("Ctrl + Enter").unwrap());
+        assert_eq!(fake.lock().typing[2], KeyTyping::own_code(KeyId::K3), "K3 (unknown, unchanged) is left alone");
+
+        // The key asleep at quit: nothing written, the offline layer is reported as not stored.
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        wait_for(&au, |s| s["keys"][0]["mode"] == "uc");
+        fake.sleep();
+        let end = Instant::now() + Duration::from_secs(20);
+        while au.status()["state"] != "asleep" && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let before = sets(&fake);
+        assert_eq!(au.shutdown(), Some(false));
+        assert_eq!(sets(&fake), before, "nothing is written to a sleeping key");
+        assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
+    }
+
     #[test]
     fn the_agent_light_stub_sends_nothing() {
         for s in [AgentLight::Idle, AgentLight::Working, AgentLight::NeedsApproval] {
@@ -1926,13 +2220,19 @@ mod tests {
     fn settings_sanitize_to_off_and_no_actions() {
         let d = sanitize(&json!({}));
         assert_eq!(d["enabled"], false);
-        assert_eq!(d["actions"]["k3"], json!({"kind":"none","value":"","app":""}));
+        assert_eq!(d["actions"]["k3"], json!({"kind":"offline","value":"","app":""}), "no UC action: the key types its offline layer");
+        assert_eq!(d["offline"]["knobRight"], json!({"mode":"factory"}));
+        // Settings from before the two layers: "none" becomes "offline" once.
+        let old = sanitize(&json!({"actions":{"k1":{"kind":"none"}},"profiles":[{"id":"media","name":"Media","actions":{"k2":{"kind":"none"}}}]}));
+        assert_eq!(old["actions"]["k1"]["kind"], "offline");
+        assert_eq!(old["profiles"][0]["actions"]["k2"]["kind"], "offline");
+        assert_eq!(sanitize(&json!({"layers":1,"actions":{"k1":{"kind":"none"}}}))["actions"]["k1"]["kind"], "none", "UC Nothing stays after migration");
         assert!(d["actions"].get("knobRight").is_none(), "knob turns keep the factory scroll");
         let s = sanitize(&json!({"enabled":true,"actions":{"k1":{"kind":"claudeDictation"},"k3":{"kind":"hotkey","value":"Ctrl + Enter"},"k2":{"kind":"shell","value":"x"}}}));
         assert_eq!(s["enabled"], true);
         assert_eq!(s["actions"]["k1"]["kind"], "claudeDictation");
         assert_eq!(s["actions"]["k3"]["value"], "Ctrl + Enter");
-        assert_eq!(s["actions"]["k2"]["kind"], "none", "unknown action kinds are dropped");
+        assert_eq!(s["actions"]["k2"]["kind"], "offline", "unknown action kinds are dropped");
         assert!(validate_action("hotkey", "Ctrl + Enter", "").is_ok());
         assert!(validate_action("launch", "C:/x.exe", "").is_err(), "only reviewed kinds");
     }
@@ -1980,13 +2280,15 @@ mod tests {
         assert_eq!(s["keys"][2]["mode"], "uc", "K3 types its own F22");
         assert_eq!(s["keys"][3]["factory"], "Backspace");
         au.change(Change::StandbyTime(900)).unwrap();
-        au.change(Change::KeyTyping(KeyId::K1, KeyTyping::parse("Ctrl + D").unwrap())).unwrap();
+        // K1's offline layer: with no UC action it is what K1 types while UC runs too, so it is written now.
+        au.configure(&json!({"enabled": true, "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}}}));
         au.change(Change::SleepTime(0)).unwrap();
         au.change(Change::MicNrLevel(2)).unwrap();
         let s = wait_for(&au, |s| s["keys"][0]["mode"] == "keys" && s["standbyS"] == 900);
         assert_eq!(s["keys"][0]["label"], "Ctrl + D", "learned from the set's echo");
         let sent50: Vec<_> = au.fake_handle().unwrap().received().into_iter().filter(|p| p[2] == 0x50).collect();
-        assert_eq!(sent50.len(), 2, "one read (K3) and one set (K1); no read-back");
+        // One read (K3), one set (K1), and K3 back to its layer: it had no UC action but held F22.
+        assert_eq!(sent50.len(), 3, "K3 read, K1 set, K3 set to its offline typing; no read-back");
         assert_eq!(s["sleepS"], 0);
         let fake = au.fake_handle().unwrap();
         assert_eq!(fake.lock().mic, MicNr { level: 2, a: 100, b: 100 }, "the unknown values are kept");
@@ -2005,9 +2307,8 @@ mod tests {
         let mut claimed = desk.claimed();
         claimed.sort();
         assert_eq!(claimed, vec![hotkey::VK_F21, hotkey::VK_F22]);
-        wait_for(&au, |s| s["state"] == "connected" && s["micNr"].is_object());
-        au.read_key(KeyId::K3).unwrap();
-        let s = au.status();
+        // The live layer: K2 and K3 have UC actions, so the key is set to type their own codes.
+        let s = wait_for(&au, |s| s["keys"][1]["mode"] == "uc" && s["keys"][2]["mode"] == "uc");
         assert_eq!(s["keys"][2]["mode"], "uc");
         assert_eq!(s["keys"][2]["hotkey"]["state"], "ready");
         assert_eq!(s["keys"][0]["hotkey"]["state"], "off");
@@ -2018,10 +2319,13 @@ mod tests {
         assert_eq!(ev["control"], "K3");
         assert_eq!(ev["action"], "ran Claude: Start dictation");
         assert_eq!(*desk.ran.lock_or_recover(), vec!["focus claude.exe, press Ctrl + D".to_string()]);
-        // K2 types its factory Enter, not its own code: no hotkey press reaches UC.
+        // K2 now types F21 too: its action runs.
         au.test_control(&json!({"op":"click","control":"k2"})).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(desk.ran.lock_or_recover().len(), 1);
+        let end = Instant::now() + Duration::from_secs(3);
+        while desk.ran.lock_or_recover().len() < 2 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(desk.ran.lock_or_recover()[1], "press Enter");
         // Choosing "nothing" releases the key; disabling releases all.
         au.configure(&json!({"enabled": true, "actions": {"k2": {"kind":"enter"}}}));
         assert_eq!(desk.claimed(), vec![hotkey::VK_F21]);

@@ -163,6 +163,32 @@ microphone state (`au05_hotkey::dictate_send`).
 - The fake desktop models Claude's capture (start, stop and send, missed start, stop that does not end,
   focus lost: one test).
 
+## Two layers: with Unified Control and on its own (user request 2026-11-17)
+
+The key stores one list per control (what it types). The page edits two layers, switched above the drawing:
+
+- **With Unified Control** (live): each key has a UC action (palette) or "Same as on its own"; the knob turn
+  has UC codes (scroll, volume, nothing) or "Same as on its own". Profiles belong to this layer.
+- **On its own** (offline, `au05.offline` in settings): what each of the six controls types without UC
+  (another PC, or after Quit): plain keys or the factory default (knob turns: factory scroll or keys).
+
+UC keeps the key holding the right layer (`Worker::sync_layers`, every tick): while it runs, a control with a
+UC action is set to its own code and every other control to its offline typing; only controls whose stored
+list differs are written, through the usual key jobs (one key command at a time, read back from the set's
+echo, time limits, settle after wake, no retry: a failed job waits for "Try again"). A stored list that is
+not known (not read in this run) is written only for controls with a UC action, or whose layer changed in
+this run. Each panel shows "On the key now: …".
+
+The offline layer goes back on the key at: Quit (up to 8 s), disabling the Vibe Key (up to 8 s), Windows
+session end (a hidden window on the hotkey thread gets WM_ENDSESSION; up to 4 s), and "Store offline layer on
+the key now" (until "Back to Unified Control" or the next start). Only an awake key is written; otherwise, or
+when time runs out, settings keep `offlinePending` and the page shows "Offline layer not stored yet". If the
+PC loses power while UC runs, the key keeps F19–F24 (harmless) until UC runs again; the page says so in one
+line.
+
+Settings from before: a key action "none" (no UC action) became "offline" once (`au05.layers: 1`); the
+explicit UC "Nothing" stays "none" after that.
+
 ## Switched off (real key, 2026-11-17)
 
 After its power-off time (3600 s by default) the key switches itself off; a key press does not wake it, only

@@ -40,6 +40,8 @@ export class Au05Panel{
     this.selected='k1';this.lastFlashAt=null;this.lastChange={};
     // View-only state: which mode tab a panel shows, the menu card picker, profile renaming.
     this.modeView={};this.turnView=null;this.menuPick=null;this.renaming=false;this.dragPath=null;
+    // Which layer the page edits ("live": with Unified Control, "offline": on its own) and offline tab views.
+    this.layerView='live';this.offlineView={};
     // The palette: open or folded (remembered on this PC), the card being dragged, the last assignment to undo.
     this.paletteOpen=true;try{this.paletteOpen=localStorage.getItem('uc.au05.palette')!=='closed';}catch{}
     this.dragAction=null;this.undo=null;this.toastTimer=null;
@@ -111,7 +113,7 @@ export class Au05Panel{
       const end=()=>{if(pd?.ghost)pd.ghost.remove();pd=null;clear();document.body.classList.remove('au05-dragging');delete document.body.dataset.au05Drop;
         this.container?.querySelector('#au05-page')?.classList.remove('drag-key','drag-knob');
         if(this.dragAction!=null){this.dragAction=null;this.paint();}};
-      container.addEventListener('pointerdown',e=>{const c=e.target.closest?.('[data-au05-palette]');
+      container.addEventListener('pointerdown',e=>{const c=e.target.closest?.('[data-au05-palette]');if(this.layerView==='offline')return;
         if(!c||e.button!==0||c.disabled||!this.native||e.pointerType==='touch')return;pd={value:c.dataset.value,x:e.clientX,y:e.clientY,card:c,started:false};});
       document.addEventListener('pointermove',e=>{
         if(!pd)return;
@@ -158,7 +160,7 @@ export class Au05Panel{
   }
   select(zone){
     if(!Object.hasOwn(ZONES,zone))return;
-    this.selected=zone;this.modeView={};this.turnView=null;this.paint(true);
+    this.selected=zone;this.modeView={};this.turnView=null;this.offlineView={};this.paint(true);
     this.container?.querySelector(`.au05-diagram [data-au05-zone="${zone}"][tabindex]`)?.focus();
   }
   // A short flash on the diagram for each new key or knob message, and for each action UC ran on a hotkey.
@@ -195,7 +197,7 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
+    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(this.dragAction!=null&&!force)return this.flash();
@@ -253,46 +255,64 @@ export class Au05Panel{
           unverified:e.status!=='verified',title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}${extra}</div>`;
     const pill=(text,kind='',cls='')=>`<span class="au05-pill ${kind} ${cls}">${esc(text)}</span>`;
 
+    // ---- two layers: "With Unified Control" (live) and "On its own" (offline, stored on the key) ----
+    const L=s.layer||{target:'live',offline:{}};
+    const offlineView=this.layerView==='offline';
+    const shortLabel=t=>String(t||'').replace(/^Factory default \((.*)\)$/,'$1 (factory)');
+    const onKey=k=>k.mode==='unknown'?'not read':shortLabel(k.label);
+    const readLink=k=>`<button class="au05-link" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
+    const jobPill=(k)=>{const job=k.job;if(!job)return '';
+      return job.state==='done'?pill('Key updated','ok','au05-job'):job.state==='failed'?`<span class="au05-pill bad au05-job" title="${esc(job.message)}">Failed <button class="au05-link" type="button" data-au05-retry="${k.key}">Try again</button></span>`:pill(job.state==='sending'?'Sending…':'Waiting for key','warn','au05-job');};
     // ---- the side panel for one key: mode, status and the current action (the palette assigns) ----
     const current=(icon,name,sub)=>`<div class="au05-current"><span class="au05-card-icon">${icon}</span><div><strong>${esc(name)}</strong>${sub?`<span class="au05-muted">${esc(sub)}</span>`:''}</div></div>`;
-    const keyValue=k=>{
-      const a=s.actions?.[k.key]||{kind:'none'};const job=k.job;
-      const pendingMode=job&&job.state!=='done'&&job.state!=='failed'?(job.label===k.ownCode?'uc':job.label?.startsWith('Factory')?'factory':'keys'):null;
-      const effective=pendingMode||k.mode;
-      return (effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
-    };
+    const keyValue=k=>{const a=s.actions?.[k.key]||{kind:'offline'};return a.kind==='offline'?'offline':`uc:${a.kind}`;};
     const keyEditor=k=>{
-      const a=s.actions?.[k.key]||{kind:'none',value:'',app:''};
-      const job=k.job;
+      const a=s.actions?.[k.key]||{kind:'offline',value:'',app:''};
       const value=keyValue(k);
-      const view=this.modeView[k.key]||(value==='keys'?'keys':value==='factory'?'factory':'uc');
-      const seg=(id,label)=>`<button type="button" data-au05-segment="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
+      const view=this.modeView[k.key]||(value==='offline'?'offline':'uc');
+      const seg=(id,label)=>`<button type="button" data-au05-segment="${id}" aria-pressed="${view===id}"${native}>${esc(label)}</button>`;
       const pills=[
         k.checked?'':`<span class="chip attention au05-untested">Untested</span>`,
         value.startsWith('uc:')&&a.kind!=='none'&&k.hotkey?.state==='ready'?pill(`Ready · ${k.ownCode}`,'ok'):'',
         value.startsWith('uc:')&&a.kind!=='none'&&k.hotkey?.state==='failed'?pill(k.hotkey.message||'Not available','bad'):'',
-        job?(job.state==='done'?pill('Key updated','ok','au05-job'):job.state==='failed'?`<span class="au05-pill bad au05-job" title="${esc(job.message)}">Failed <button class="au05-link" type="button" data-au05-retry="${k.key}">Try again</button></span>`:pill(job.state==='sending'?'Sending…':'Waiting for key','warn','au05-job')):'',
-        !job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<span class="au05-pill warn">Not set up <button class="au05-link" type="button" data-au05-retry="${k.key}">Set up</button></span>`:'',
+        jobPill(k),
       ].join('');
       const custom=value==='uc:hotkey'?`<div class="au05-inline"><input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}">
         <select data-au05-action-app="${k.key}" aria-label="Send to">${opt('','To the focused app',a.app||'')}${(s.catalogue?.apps||[]).map(x=>opt(x.id,`To ${x.name}${x.verified?'':' (unverified)'}`,a.app||'')).join('')}</select></div>`:'';
       const press=keyOf('knobPress');
-      const menuLine=a.kind==='quickMenu'&&press&&press.mode!=='uc'&&k.key!=='knobPress'?'<p class="au05-line attention">Set the knob press to a Unified Control action (Nothing is fine) to choose with it.</p>':'';
+      const menuLine=a.kind==='quickMenu'&&press&&!press.uc&&k.key!=='knobPress'?'<p class="au05-line attention">Give the knob press a Unified Control action (Nothing is fine) to choose with it.</p>':'';
       const entry=cat.find(e=>e.id===a.kind);
-      const summary=!value.startsWith('uc:')?current(IC.dot,'No action yet','Pick one in the palette')
+      const summary=view==='offline'?current(IC.keyboard,shortLabel(k.offline),'What it types on its own (change it under "On its own")')
+        :!value.startsWith('uc:')?current(IC.dot,'No action yet','Pick one in the palette')
         :a.kind==='none'?current(actionIcon('none'),'Nothing','')
         :a.kind==='quickMenu'?current(actionIcon('quickMenu'),'Quick menu','Unified Control')
         :a.kind==='hotkey'?current(actionIcon('hotkey'),'Custom shortcut',a.value||'Type the keys')
         :entry?current(actionIcon(entry.id),shortName(entry),`${entry.group}${entry.keys&&entry.keys!==entry.label?` · ${entry.keys}`:''}`):current(IC.dot,a.kind,'');
-      const body=view==='keys'?`<div class="au05-inline"><input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}"></div>`
-        :view==='factory'?`<p class="au05-line">${esc(k.name)} types ${esc(k.factory)}, stored on the key.</p>`
-        :`${summary}${custom}${menuLine}`;
       return `<div class="au05-panel-head"><div><h2>${esc(ZONES[k.key])}</h2>
-          <span class="au05-types">Types ${esc(k.label?k.label.replace(/^Factory default \((.*)\)$/,'$1'):'—')} <button class="au05-link" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button></span></div>
+          <span class="au05-types">On the key now: ${esc(onKey(k))} ${readLink(k)}</span></div>
         <div class="au05-pills">${pills}</div></div>
-        <div class="au05-seg au05-mode" data-au05-mode="${k.key}" data-value="${esc(value)}" role="group" aria-label="What ${esc(k.name)} does">${seg('uc','UC action')}${seg('keys','Types keys')}${seg('factory','Factory')}</div>
+        <div class="au05-seg au05-mode" data-au05-mode="${k.key}" data-value="${esc(value)}" role="group" aria-label="What ${esc(k.name)} does with Unified Control">${seg('uc','UC action')}${seg('offline','Same as on its own')}</div>
         <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
-        ${body}`;
+        ${summary}${view==='uc'?custom+menuLine:''}`;
+    };
+    // ---- the offline layer for one control (what the key types without Unified Control) ----
+    const offlineRow=(name,label,factory,turn)=>{
+      const o=L.offline?.[name]||{factory:true};
+      const view=this.offlineView[name]||(o.factory?'factory':'keys');
+      const seg=(id,text)=>`<button type="button" data-au05-offline-mode="${id}" data-control="${name}" aria-pressed="${view===id}"${native}>${esc(text)}</button>`;
+      return `<div class="au05-offline-row">${label?`<div class="au05-set-label">${esc(label)}</div>`:''}
+        <div class="au05-seg" role="group" aria-label="${esc(label||ZONES[name]||name)} on its own">${seg('keys','Types keys')}${seg('factory',turn?'Factory scroll':`Factory (${factory})`)}</div>
+        ${view==='keys'?`<div class="au05-inline"><input data-au05-offline-keys="${name}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(label||name)} types on its own" value="${esc(o.keys||'')}"${native}></div>`:''}</div>`;
+    };
+    const offlineEditor=()=>{
+      if(this.selected==='knobTurn'){
+        const turns=s.turns||[];const t=n=>turns.find(x=>x.key===n)||{key:n,mode:'unknown'};
+        return `<div class="au05-panel-head"><div><h2>Knob turn · on its own</h2><span class="au05-types">On the key now: right ${esc(t('knobRight').mode==='unknown'?'not read':shortLabel(t('knobRight').label))}, left ${esc(t('knobLeft').mode==='unknown'?'not read':shortLabel(t('knobLeft').label))}</span></div></div>
+          ${offlineRow('knobRight','Right','',true)}${offlineRow('knobLeft','Left','',true)}`;
+      }
+      const k=keyOf(this.selected);if(!k)return '<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+      return `<div class="au05-panel-head"><div><h2>${esc(ZONES[k.key])} · on its own</h2><span class="au05-types">On the key now: ${esc(onKey(k))} ${readLink(k)}</span></div><div class="au05-pills">${jobPill(k)}</div></div>
+        ${offlineRow(k.key,'',k.factory,false)}`;
     };
 
     // ---- the knob turn panel ----
@@ -300,30 +320,30 @@ export class Au05Panel{
     const turnAct=m.knobTurnAction||'scroll';
     const TURN={scroll:['scroll','Scroll','One notch per click, under the mouse'],volume:['volume','Volume','Volume up and down'],none:['none','Nothing','Only moves the quick menu']};
     const knobEditor=()=>{
-      const view=this.turnView||(m.knobTurn==='uc'?'uc':'factory');
-      const seg=(id,label)=>`<button type="button" data-au05-turn-mode="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
-      const dir=t=>{const j=t.job;return `<div class="au05-dir"><span>${t.key==='knobRight'?'Right':'Left'} · ${esc(t.mode==='unknown'?'not read':t.mode==='uc'?t.ownCode:t.mode==='factory'?'factory':t.label)}</span>
-        ${t.checked?'':'<span class="chip attention au05-untested">Untested</span>'}
-        ${j?(j.state==='done'?pill('Key updated','ok'):j.state==='failed'?pill('Failed','bad'):pill(j.state==='sending'?'Sending…':'Waiting for key','warn')):''}
-        <button class="au05-link" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read':'Read again'}</button></div>`;};
+      const view=this.turnView||(m.knobTurn==='uc'?'uc':'offline');
+      const seg=(id,label)=>`<button type="button" data-au05-turn-mode="${id}" aria-pressed="${view===id}"${native}>${esc(label)}</button>`;
+      const dir=t=>`<div class="au05-dir"><span>${t.key==='knobRight'?'Right':'Left'} · on the key now: ${esc(t.mode==='unknown'?'not read':t.mode==='uc'?t.ownCode:shortLabel(t.label))}</span>
+        ${t.checked?'':'<span class="chip attention au05-untested">Untested</span>'}${jobPill(t)}
+        <button class="au05-link" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read':'Read again'}</button></div>`;
       const [ic,name,sub]=TURN[turnAct]||TURN.scroll;
-      return `<div class="au05-panel-head"><div><h2>Knob turn</h2><span class="au05-types">${m.knobTurn==='uc'?'Types F23 / F24':'Factory scroll'}${anyMenu?' · moves the quick menu':''}</span></div></div>
-        <div class="au05-seg" data-au05-turn-seg role="group" aria-label="What turning the knob does">${seg('uc','UC action')}${seg('factory','Factory scroll')}</div>
+      return `<div class="au05-panel-head"><div><h2>Knob turn</h2><span class="au05-types">${m.knobTurn==='uc'?'Types F23 / F24 with Unified Control':'Same as on its own'}${anyMenu?' · moves the quick menu':''}</span></div></div>
+        <div class="au05-seg" data-au05-turn-seg role="group" aria-label="What turning the knob does with Unified Control">${seg('uc','UC action')}${seg('offline','Same as on its own')}</div>
         <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
-        ${m.knobTurn==='uc'?current(actionIcon(ic),name,sub):''}
+        ${m.knobTurn==='uc'?current(actionIcon(ic),name,sub):current(IC.scroll,'Same as on its own','')}
         <div class="au05-dirs">${(s.turns||[]).map(dir).join('')}</div>`;
     };
 
     // ---- the drawing ----
     const assignment=id=>{
+      if(offlineView){
+        if(id==='knobTurn'){const r=L.offline?.knobRight,l=L.offline?.knobLeft;return r?.factory&&l?.factory?'Factory scroll':`R ${r?.factory?'scroll':r?.keys} · L ${l?.factory?'scroll':l?.keys}`;}
+        const o=L.offline?.[id];return o?(o.factory?`Factory: ${keyOf(id)?.factory||''}`:`Types ${o.keys}`):'';
+      }
       if(id==='knobTurn'){const act={scroll:'UC scroll',volume:'Volume',none:'Nothing'}[turnAct]||'UC scroll';return m.knobTurn==='uc'?`${act}${anyMenu?' · menu':''}`:`Factory scroll${anyMenu?' · menu':''}`;}
       const k=keyOf(id),a=s.actions?.[id];
       const waiting=k?.job&&(k.job.state==='waiting'||k.job.state==='sending')?' (waiting)':'';
-      if(a&&a.kind!=='none'&&(!k||k.mode==='uc'||k.mode==='unknown'||waiting))return actionName(a)+waiting;
-      if(!k||k.mode==='unknown')return 'Not read yet';
-      if(k.mode==='factory')return `Factory: ${k.factory}`+waiting;
-      if(k.mode==='keys')return `Types ${k.keys||''}`+waiting;
-      return 'Nothing';
+      if(!a||a.kind==='offline'){const o=L.offline?.[id];return (o?(o.factory?`Factory: ${k?.factory||''}`:`Types ${o.keys}`):'Same as on its own')+waiting;}
+      return actionName(a)+waiting;
     };
     const sel=id=>id===this.selected?' is-selected':'';
     const zone=(id,shape)=>shape.replace('<ZONE ','<').replace('/>',` data-au05-zone="${id}" class="au05-zone${sel(id)}${id==='knobTurn'?' au05-ring':''}" role="button" tabindex="0" aria-label="${ZONES[id]}: ${esc(assignment(id))}" aria-pressed="${id===this.selected}"/>`);
@@ -342,11 +362,19 @@ export class Au05Panel{
       <path d="M78 434l14 14M92 434l-14 14" class="au05-icon"/>
       ${callout('knobTurn',78,131,110)}${callout('knobPress',126,118,140)}${callout('k1',240,133,257)}${callout('k2',332,133,349)}${callout('k3',424,133,441)}
     </svg>`;
-    const editor=this.selected==='knobTurn'?knobEditor():keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+    const editor=offlineView?offlineEditor():this.selected==='knobTurn'?knobEditor():keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+    // The layer switch, where the key's layer stands, and the one risk line.
+    const layerBar=`<div class="au05-layerbar"><div class="au05-seg au05-layer-seg" role="group" aria-label="Which layer you edit">
+        <button type="button" data-au05-layer-view="live" aria-pressed="${!offlineView}">With Unified Control</button><button type="button" data-au05-layer-view="offline" aria-pressed="${offlineView}">On its own</button></div>
+      ${L.target==='offline'?`<span class="au05-pill ${L.offlineOnKey?'ok':'warn'}">${L.offlineOnKey?'Offline layer on the key':'Storing the offline layer…'}</span><button class="btn" type="button" data-au05-layer="live"${native}>Back to Unified Control</button>`
+        :`<button class="btn" type="button" data-au05-layer="offline"${live}>Store offline layer on the key now</button>`}
+      ${s.offlinePending&&!(L.target==='offline'&&L.offlineOnKey)?'<span class="au05-pill warn" title="At the last quit the key was asleep or there was no time">Offline layer not stored yet</span>':''}</div>
+      ${offlineView?'<p class="au05-line">What each control types when Unified Control is not running (another PC, or after Quit). It is stored on the key when Unified Control quits.</p>':''}
+      <p class="au05-line au05-risk">If the PC loses power while Unified Control runs, the key keeps its codes F19–F24 (harmless) until Unified Control runs again.</p>`;
 
     // ---- the action palette: always on the page; drag a card onto the drawing, or click to set the selected part ----
     const sel0=this.selected;const selKey=keyOf(sel0);
-    const selValue=sel0==='knobTurn'?(m.knobTurn==='uc'?`knob:${turnAct}`:''):selKey?keyValue(selKey):'';
+    const selValue=sel0==='knobTurn'?(m.knobTurn==='uc'?`knob:${turnAct}`:''):selKey?keyValue(selKey):(s.actions?.[sel0]?`uc:${s.actions[sel0].kind}`:'');
     const forKnob=sel0==='knobTurn';
     const pcard=(value,icon,name,{keys='',unverified=false,title='',fresh=false}={})=>{
       const knob=value.startsWith('knob:');const dim=knob!==forKnob;
@@ -467,8 +495,8 @@ export class Au05Panel{
       ${deviceCard(IC.sliders,'Controls',`<div class="au05-codes">${codes||'<span class="au05-muted">Read all settings to see each control\'s code.</span>'}</div>`)}
       </div>`;
 
-    return `${topBar}<div class="au05-workspace"><div class="au05-drawing">${batteryMarkup}${diagram}</div>
-    <div class="au05-side"><aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside>${palette}</div></div>
+    return `${topBar}${layerBar}<div class="au05-workspace"><div class="au05-drawing">${batteryMarkup}${diagram}</div>
+    <div class="au05-side"><aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside>${offlineView?'':palette}</div></div>
     <div class="au05-boxes">${menuBox}${claudeBox}</div>
     ${device}`;
   }
@@ -478,47 +506,31 @@ export class Au05Panel{
     catch(error){this.setNote(errorText(error),true);return false;}
     finally{this.sending--;this.paint(true);this.onState();}
   }
-  // Setting what a key types returns at once; the side panel follows the job ("Waiting for the key", "Done"
-  // or the error). Keys and factory default type on their own, so their UC action is cleared.
-  async setMode(key,mode,keys){
-    const change=mode==='keys'?{setting:'keyTyping',key,mode,keys}:{setting:'keyTyping',key,mode};
-    this.lastChange[key]=change;
-    try{this.state=await this.invoke('au05_change',{change});this.setNote('');}
-    catch(error){this.setNote(errorText(error),true);this.paint(true);return;}
-    const a=this.state?.actions?.[key];
-    if(mode!=='uc'&&a&&a.kind!=='none')await this.action(key,'none','','');
-    this.paint(true);this.onState();
-  }
-  // Choosing a UC action saves it at once (no device write), then makes the key type its own code.
+  // Choosing a UC action (or "Same as on its own") only saves it; Unified Control's layer sync then makes
+  // the key type its own code (or its offline typing), one key command at a time, and the panel shows it.
   async chooseAction(key,kind){
     await this.action(key,kind,kind==='hotkey'?(this.state?.actions?.[key]?.value||''):'',kind==='hotkey'?(this.state?.actions?.[key]?.app||''):'');
-    const k=(this.state?.keys||[]).find(x=>x.key===key);
-    const job=k?.job,busy=job&&(job.state==='waiting'||job.state==='sending')&&job.label===k.ownCode;
-    if(k&&k.mode!=='uc'&&!busy)await this.setMode(key,'uc');
   }
-  // The knob turn: Unified Control (the knob types F23/F24; UC scrolls, changes volume or does nothing) or the
-  // factory scroll. The choice is saved at once; the two key changes run as background jobs.
+  // The knob turn with Unified Control: its own codes F23/F24 (scroll, volume or nothing) or the same as on
+  // its own.
   async chooseTurn(value){
     const uc=value.startsWith('uc:');
     await this.configure(uc?{knobTurn:'uc',knobTurnAction:value.slice(3)}:{knobTurn:'factory'});
-    const want=uc?'uc':'factory',turns=this.state?.turns||[];
-    if(turns.length&&turns.every(t=>t.mode===want&&(!t.job||t.job.state==='done')))return;
-    try{this.state=await this.invoke('au05_change',{change:{setting:'knobTurn',mode:want}});this.setNote('');}
-    catch(error){this.setNote(errorText(error),true);}
-    this.paint(true);this.onState();
+  }
+  // The offline layer: what one control types on its own.
+  async setOffline(control,mode,keys){
+    await this.configure(mode==='keys'?{offline:{control,mode,keys}}:{offline:{control,mode}});
   }
   // What a part has now, so an assignment can be undone.
   snapshot(part){
     const s=this.state||{};
     if(part==='knobTurn')return {part,knobTurn:s.menu?.knobTurn||'factory',act:s.menu?.knobTurnAction||'scroll'};
-    const k=(s.keys||[]).find(x=>x.key===part);
-    return {part,action:{...(s.actions?.[part]||{kind:'none',value:'',app:''})},mode:k?.mode,keys:k?.keys};
+    return {part,action:{...(s.actions?.[part]||{kind:'offline',value:'',app:''})}};
   }
   async restore(snap){
     if(snap.part==='knobTurn'){await this.chooseTurn(snap.knobTurn==='uc'?`uc:${snap.act}`:'factory');return;}
-    const k=(this.state?.keys||[]).find(x=>x.key===snap.part);
-    if((snap.mode==='keys'||snap.mode==='factory')&&k?.mode!==snap.mode){this.modeView[snap.part]=snap.mode;await this.setMode(snap.part,snap.mode,snap.keys||'');}
-    await this.action(snap.part,snap.action.kind||'none',snap.action.value||'',snap.action.app||'');
+    this.modeView[snap.part]=null;
+    await this.action(snap.part,snap.action.kind||'offline',snap.action.value||'',snap.action.app||'');
   }
   // Give a part an action (a dropped or clicked palette card). A key in "Types keys" or "Factory" becomes a UC
   // action (the usual key set-up runs, with its status pill). Shows Undo for about 6 seconds.
@@ -612,10 +624,18 @@ export class Au05Panel{
     const segment=click('[data-au05-segment]');
     if(segment){const key=segment.closest('[data-au05-mode]').dataset.au05Mode,v=segment.dataset.au05Segment;
       this.modeView[key]=v;
-      if(v==='factory')this.setMode(key,'factory');else{this.paint(true);if(v==='keys')this.container.querySelector(`[data-au05-keys="${key}"]`)?.focus();}
+      if(v==='offline')this.chooseAction(key,'offline');else this.paint(true);
       return true;}
     const turnSeg=click('[data-au05-turn-mode]');
-    if(turnSeg){this.turnView=turnSeg.dataset.au05TurnMode;this.chooseTurn(this.turnView==='factory'?'factory':`uc:${this.state?.menu?.knobTurnAction||'scroll'}`);return true;}
+    if(turnSeg){this.turnView=turnSeg.dataset.au05TurnMode;this.chooseTurn(this.turnView==='offline'?'factory':`uc:${this.state?.menu?.knobTurnAction||'scroll'}`);return true;}
+    const lv=click('[data-au05-layer-view]');
+    if(lv){this.layerView=lv.dataset.au05LayerView;this.paint(true);return true;}
+    const ly=click('[data-au05-layer]');
+    if(ly){this.configure({layer:ly.dataset.au05Layer});return true;}
+    const om=click('[data-au05-offline-mode]');
+    if(om){const c=om.dataset.control,v=om.dataset.au05OfflineMode;this.offlineView[c]=v;
+      if(v==='factory')this.setOffline(c,'factory');else{this.paint(true);this.container.querySelector(`[data-au05-offline-keys="${c}"]`)?.focus();}
+      return true;}
     const turnPick=click('[data-au05-turn-pick]');
     if(turnPick){this.chooseTurn(turnPick.dataset.au05TurnPick);return true;}
     const profPick=click('[data-au05-profile-pick]');
@@ -643,8 +663,7 @@ export class Au05Panel{
     const zone=e.type==='click'&&t.closest?.('[data-au05-zone]');
     if(zone){this.select(zone.dataset.au05Zone);return true;}
     const retry=e.type==='click'&&t.closest?.('[data-au05-retry]');
-    if(retry){const key=retry.dataset.au05Retry,last=this.lastChange[key],a=this.state?.actions?.[key];
-      if(a&&a.kind!=='none')this.setMode(key,'uc');else if(last)this.setMode(key,last.mode,last.keys);return true;}
+    if(retry){this.change({setting:'retryJob',key:retry.dataset.au05Retry});return true;}
     const read=e.type==='click'&&t.closest?.('[data-au05-read]');
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
@@ -664,7 +683,7 @@ export class Au05Panel{
       if(t.value.startsWith('uc:')){this.chooseAction(key,t.value.slice(3));return true;}
       this.setMode(key,t.value);return true;
     }
-    if(t.dataset.au05Keys){this.setMode(t.dataset.au05Keys,'keys',t.value);return true;}
+    if(t.dataset.au05OfflineKeys!==undefined){this.setOffline(t.dataset.au05OfflineKeys,'keys',t.value);return true;}
     if(t.dataset.au05ActionValue){const key=t.dataset.au05ActionValue;this.action(key,'hotkey',t.value,this.state?.actions?.[key]?.app||'');return true;}
     if(t.dataset.au05ActionApp){const key=t.dataset.au05ActionApp;this.action(key,'hotkey',this.state?.actions?.[key]?.value||'',t.value);return true;}
     return false;
