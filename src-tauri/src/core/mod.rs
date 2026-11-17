@@ -6,6 +6,7 @@ pub mod app;
 pub mod assets;
 pub mod audio_capture;
 pub mod au05;
+pub mod au05_composer;
 pub mod au05_hotkey;
 pub mod au05_menu;
 pub mod claude_sessions;

@@ -251,8 +251,59 @@ pub trait Desktop: Send + Sync {
     fn is_foreground(&self, app: &'static App) -> bool;
     /// Press a key combination in the window in front ("Ctrl + D", "Enter").
     fn press(&self, keys: &str) -> Result<(), String>;
+    /// Find the app's message box in its window (in front), focus it and confirm the focus moved there
+    /// (`au05_composer`). Returns its description for the log, or why not. Sends no keys.
+    fn focus_composer(&self, app: &'static App) -> Result<String, String>;
     /// Called (on the desktop's thread) when Windows ends the session; it may block for a few seconds.
     fn set_session_end(&self, _handler: Arc<dyn Fn() + Send + Sync>) {}
+}
+
+/// Actions that type into the app's message box: the message box gets the focus first, or nothing is pressed
+/// (user report 2026-11-17: with Claude's terminal panel focused, Ctrl + D went into the terminal). Dictate &
+/// send does the same before each of its keys.
+pub const COMPOSER_ACTIONS: [&str; 4] = ["claudeDictation", "claudeSend", "chatgptDictation", "chatgptSend"];
+
+/// The app whose message box this action types into, if any.
+pub fn composer_app(action: &Action) -> Option<&'static App> {
+    match action {
+        Action::Entry(e) if COMPOSER_ACTIONS.contains(&e.id) || e.effect == DictateSend => e.app.and_then(app),
+        _ => None,
+    }
+}
+
+/// What the page shows when the message box was not found or not focused.
+pub fn no_message_box(app: &App) -> String {
+    format!("Couldn't find {}'s message box", app.name)
+}
+
+/// The message box was found once in this run (its description is logged once, to tune the search).
+static COMPOSER_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Focus the message box of `app` (in front), or explain why not. Logs the found element once per run and
+/// every failure.
+fn composer(d: &dyn Desktop, app: &'static App, log: &dyn Fn(&str)) -> Result<(), String> {
+    match d.focus_composer(app) {
+        Ok(seen) => {
+            if !COMPOSER_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                log(&format!("{} message box: {seen}", app.name));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            log(&format!("{} message box not found or not focused: {e}", app.name));
+            Err(no_message_box(app))
+        }
+    }
+}
+
+/// Run an action. One that types into a message box brings the app forward, focuses its message box and
+/// only then presses its keys; if that fails nothing is pressed.
+pub fn run_action(d: &dyn Desktop, action: &Action, log: &dyn Fn(&str)) -> Result<(), String> {
+    let Some(target) = composer_app(action) else { return d.run(action) };
+    let (_, send) = action.plan().ok_or("Nothing to do")?;
+    d.bring_forward(target)?;
+    composer(d, target, log)?;
+    d.press(&send.value)
 }
 
 /// Timing for [`dictate_send`].
@@ -288,13 +339,16 @@ fn wait_for(d: &dyn Desktop, exe: &str, want: bool, t: DictateTiming) -> Result<
 /// - not dictating (no active capture session of claude.exe): bring Claude forward, Ctrl + D, and confirm the
 ///   capture started; if not, report "Dictation didn't start" (no second Ctrl + D);
 /// - dictating: bring Claude forward, Ctrl + D, wait until the capture stops and the transcription settles,
-///   check Claude is still in front, then Enter. If the capture did not stop or Claude is not in front, no
+///   check Claude is still in front, then Enter.
+/// Before each key, Claude's message box gets the focus ([`run_action`]); if it cannot, nothing is pressed. If the capture did not stop or Claude is not in front, no
 ///   Enter: "Not sent".
 /// Returns what happened (for the log; no typed text) or why nothing more was done.
-pub fn dictate_send(d: &dyn Desktop, t: DictateTiming) -> Result<String, String> {
+pub fn dictate_send(d: &dyn Desktop, t: DictateTiming, log: &dyn Fn(&str)) -> Result<String, String> {
     let claude = app("claude").ok_or("Claude is not known")?;
     let dictating = d.capture_active(claude.exe)?;
     d.bring_forward(claude).map_err(|e| format!("Nothing done: {e}"))?;
+    // Every key goes to the message box only (never the terminal panel).
+    composer(d, claude, log).map_err(|e| format!("Nothing done: {e}"))?;
     if !dictating {
         d.press("Ctrl + D")?;
         return if wait_for(d, claude.exe, true, t)? {
@@ -311,6 +365,7 @@ pub fn dictate_send(d: &dyn Desktop, t: DictateTiming) -> Result<String, String>
     if !d.is_foreground(claude) {
         return Err("Not sent: Claude is no longer in front".into());
     }
+    composer(d, claude, log).map_err(|e| format!("Not sent: {e}"))?;
     d.press("Enter")?;
     Ok("dictating: Ctrl + D, dictation stopped, Enter sent".into())
 }
@@ -334,6 +389,8 @@ pub struct FakeDesktop {
     pub cannot_focus: std::sync::atomic::AtomicBool,
     pub loses_focus: std::sync::atomic::AtomicBool,
     pub claude_in_front: std::sync::atomic::AtomicBool,
+    /// The app's message box cannot be found (or focused).
+    pub no_composer: std::sync::atomic::AtomicBool,
 }
 impl FakeDesktop {
     pub fn claimed(&self) -> Vec<u16> {
@@ -405,6 +462,13 @@ impl Desktop for FakeDesktop {
     }
     fn is_foreground(&self, _app: &'static App) -> bool {
         self.claude_in_front.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn focus_composer(&self, app: &'static App) -> Result<String, String> {
+        if self.no_composer.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("no message box (fake)".into());
+        }
+        self.ran.lock_or_recover().push(format!("message box {}", app.exe));
+        Ok("Edit \"Message\" (fake)".into())
     }
     fn press(&self, keys: &str) -> Result<(), String> {
         use std::sync::atomic::Ordering::SeqCst;
@@ -635,6 +699,13 @@ mod native {
         fn bring_forward(&self, app: &'static App) -> Result<(), String> {
             unsafe { bring_forward(app.exe, app.title) }
         }
+        fn focus_composer(&self, app: &'static App) -> Result<String, String> {
+            let hwnd = unsafe { GetForegroundWindow() };
+            if hwnd.is_null() || window_exe(hwnd).is_none_or(|e| e != app.exe) {
+                return Err(format!("{} is not in front", app.name));
+            }
+            super::super::au05_composer::focus(hwnd as isize)
+        }
         fn is_foreground(&self, app: &'static App) -> bool {
             let hwnd = unsafe { GetForegroundWindow() };
             !hwnd.is_null() && window_exe(hwnd).is_some_and(|e| e == app.exe)
@@ -828,17 +899,17 @@ mod tests {
         let run = |setup: &dyn Fn(&FakeDesktop)| {
             let d = FakeDesktop::default();
             setup(&d);
-            let r = dictate_send(&d, t);
+            let r = dictate_send(&d, t, &|_| {});
             let ran = d.ran.lock_or_recover().clone();
             (r, ran, d.capture.load(SeqCst))
         };
         let (r, ran, cap) = run(&|_| {});
         assert!(r.unwrap().contains("dictation started"));
-        assert_eq!(ran, vec!["focus claude.exe", "press Ctrl + D"]);
+        assert_eq!(ran, vec!["focus claude.exe", "message box claude.exe", "press Ctrl + D"]);
         assert!(cap);
         let (r, ran, cap) = run(&|d| d.capture.store(true, SeqCst));
         assert!(r.unwrap().contains("Enter sent"));
-        assert_eq!(ran, vec!["focus claude.exe", "press Ctrl + D", "press Enter"]);
+        assert_eq!(ran, vec!["focus claude.exe", "message box claude.exe", "press Ctrl + D", "message box claude.exe", "press Enter"]);
         assert!(!cap);
         let (r, ran, _) = run(&|d| d.ctrl_d_ignored.store(true, SeqCst));
         assert!(r.unwrap_err().contains("didn't start"));
@@ -852,6 +923,43 @@ mod tests {
         let (r, ran, _) = run(&|d| d.cannot_focus.store(true, SeqCst));
         assert!(r.unwrap_err().starts_with("Nothing done"));
         assert!(ran.is_empty(), "no key when Claude cannot come forward");
+        // Claude's message box cannot be found (the terminal panel has the focus): no key at all.
+        let (r, ran, _) = run(&|d| d.no_composer.store(true, SeqCst));
+        assert_eq!(r.unwrap_err(), "Nothing done: Couldn't find Claude's message box");
+        assert!(ran.iter().all(|x| !x.starts_with("press")), "{ran:?}");
+    }
+
+    /// User report 2026-11-17: Start dictation / Send go to the message box only. If it cannot be found or
+    /// focused, nothing is pressed and the page says so; the log says why.
+    #[test]
+    fn message_box_actions_press_nothing_without_the_message_box() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let logs = Mutex::new(Vec::<String>::new());
+        let log = |l: &str| logs.lock_or_recover().push(l.to_string());
+        for id in COMPOSER_ACTIONS {
+            let d = FakeDesktop::default();
+            let action = Action::from_setting(id, "", "").unwrap();
+            let target = composer_app(&action).unwrap();
+            run_action(&d, &action, &log).unwrap();
+            let (_, send) = action.plan().unwrap();
+            assert_eq!(
+                *d.ran.lock_or_recover(),
+                vec![format!("focus {}", target.exe), format!("message box {}", target.exe), format!("press {}", send.value)],
+                "{id}"
+            );
+            let d = FakeDesktop::default();
+            d.no_composer.store(true, SeqCst);
+            assert_eq!(run_action(&d, &action, &log).unwrap_err(), no_message_box(target), "{id}");
+            assert!(d.ran.lock_or_recover().iter().all(|x| !x.starts_with("press")), "{id}: nothing pressed");
+        }
+        assert!(logs.lock_or_recover().iter().any(|l| l.contains("message box not found or not focused")));
+        // Target-app actions resolve first; actions that do not type into a message box are unchanged.
+        assert_eq!(composer_app(&Action::from_setting("targetDictation", "", "").unwrap().resolve("claude")), app("claude"));
+        assert_eq!(composer_app(&Action::from_setting("claudeNewSession", "", "").unwrap()), None);
+        let d = FakeDesktop::default();
+        d.no_composer.store(true, SeqCst);
+        run_action(&d, &Action::from_setting("volumeUp", "", "").unwrap(), &log).unwrap();
+        assert_eq!(*d.ran.lock_or_recover(), vec!["media Volume up".to_string()]);
     }
 
     #[test]
