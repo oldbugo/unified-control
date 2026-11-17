@@ -58,8 +58,7 @@ async function run(){
     await until(async()=>(await invoke('au05_state')).standbyS===900,'standby read back');
     assert.deepEqual((await invoke('au05_test_control',{patch:{op:'state'}})).fake.hotkeysClaimed,[],'no hotkey without an action');
     await pick('k3');
-    await page.locator('[data-au05-mode="k3"] [data-au05-segment="uc"]').click();
-    await page.locator('[data-au05-pick="k3"][data-value="uc:hotkey"]').click();
+    await page.locator('[data-au05-palette][data-value="uc:hotkey"]').click();
     const value=page.locator('input[data-au05-action-value="k3"]');await value.fill('Ctrl + Enter');await value.press('Tab');
     await until(async()=>(await invoke('au05_state')).actions.k3.value==='Ctrl + Enter','K3 UC action saved');
     assert.equal((await invoke('au05_state')).keys[2].hotkey.state,'ready');

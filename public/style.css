@@ -464,3 +464,41 @@ input[type="checkbox"][role="switch"]:disabled { opacity:.5;cursor:default; }
 @media (max-width: 760px) { .au05-wide { grid-column:auto; } }
 .au05-table select { width:64px; min-width:64px; }
 .au05-table th { font-size:var(--fs-tiny); color:var(--text-muted); font-weight:600; }
+/* ---- Vibe Key action palette (drag onto the drawing) ---- */
+.au05-side { display:flex; flex-direction:column; gap:var(--s4); min-width:0; }
+.au05-current { display:flex; align-items:center; gap:var(--s3); padding:var(--s3); border-radius:var(--r-md); background:var(--surface-2); border:1px solid var(--border); }
+.au05-current .au05-card-icon { width:34px; height:34px; color:var(--accent); background:var(--surface-1); }
+.au05-current > div { display:flex; flex-direction:column; min-width:0; }
+.au05-current strong { font-size:var(--fs-body); }
+.au05-palette { padding:var(--s3) var(--s4) var(--s4); }
+.au05-palette.is-collapsed { padding-bottom:var(--s3); }
+.au05-palette-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--s2); margin-bottom:var(--s3); }
+.au05-palette.is-collapsed .au05-palette-head { margin-bottom:0; }
+.au05-palette-toggle { display:inline-flex; align-items:center; gap:var(--s2); padding:var(--s1) var(--s2) var(--s1) 0; background:none; border:0; color:var(--text); font:inherit; font-size:var(--fs-h); font-weight:600; cursor:pointer; border-radius:var(--r-sm); }
+.au05-palette-toggle svg { width:18px; height:18px; color:var(--text-muted); }
+.au05-palette-toggle:focus-visible { outline:2px solid var(--accent); }
+.au05-palette-hint { font-size:var(--fs-tiny); }
+.au05-pcard { cursor:grab; }
+.au05-pcard:active { cursor:grabbing; }
+.au05-pcard.is-dim { opacity:.45; }
+.au05-pcard.is-dim:hover { opacity:.7; }
+/* while dragging: the valid parts glow, the one under the pointer glows strongly */
+#au05-page.drag-key .au05-zone:not(.au05-ring), #au05-page.drag-knob .au05-zone.au05-ring { stroke:var(--accent); }
+#au05-page.drag-key .au05-callout:not([data-au05-zone="knobTurn"]) rect, #au05-page.drag-knob .au05-callout[data-au05-zone="knobTurn"] rect { stroke:var(--accent); stroke-dasharray:4 3; }
+.au05-zone.drop-hover { fill:var(--accent-soft); stroke:var(--accent) !important; stroke-width:3; filter:drop-shadow(0 0 6px var(--accent)); }
+.au05-zone.au05-ring.drop-hover { fill:none; stroke-width:18; }
+.au05-callout.drop-hover rect { fill:var(--accent-soft); stroke:var(--accent); stroke-dasharray:none !important; }
+.au05-menu-row.drop-target, .au05-box-foot .btn.drop-target { border-color:var(--accent); background:var(--accent-soft); }
+/* undo toast */
+.au05-toast { position:fixed; right:var(--s5); bottom:var(--s6); z-index:var(--z-toast); display:flex; align-items:center; gap:var(--s3); max-width:min(420px, calc(100vw - 32px)); padding:var(--s3) var(--s4); border-radius:var(--r-md); background:var(--surface-3); border:1px solid var(--border-strong); box-shadow:var(--shadow); font-size:var(--fs-small); }
+.au05-toast[hidden] { display:none; }
+.au05-toast-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.au05-toast .au05-link { font-weight:600; }
+@media (max-width: 900px) { .au05-side { order:2; } }
+.au05-palette { user-select:none; -webkit-user-select:none; }
+@media (pointer: fine) { .au05-pcard { touch-action:none; } }
+.au05-ghost { position:fixed; left:0; top:0; z-index:var(--z-toast); pointer-events:none; opacity:.92; box-shadow:var(--shadow); border-color:var(--accent); }
+body.au05-dragging, body.au05-dragging * { cursor:grabbing !important; user-select:none; }
+body.au05-dragging[data-au05-drop="ok"], body.au05-dragging[data-au05-drop="ok"] * { cursor:copy !important; }
+body.au05-dragging[data-au05-drop="no"], body.au05-dragging[data-au05-drop="no"] * { cursor:not-allowed !important; }
+
