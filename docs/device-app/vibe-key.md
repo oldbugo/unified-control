@@ -163,6 +163,15 @@ microphone state (`au05_hotkey::dictate_send`).
 - The fake desktop models Claude's capture (start, stop and send, missed start, stop that does not end,
   focus lost: one test).
 
+## Switched off (real key, 2026-11-17)
+
+After its power-off time (3600 s by default) the key switches itself off; a key press does not wake it, only
+holding the power button on its right side for 2–3 s does. The receiver stays connected and silent. UC shows
+"The Vibe Key is switched off or asleep. Hold the power button on its right side for 2–3 s" (state `off`,
+also on the Home card) when nothing has arrived since the connection opened for longer than the standby time
++ 2 minutes, or nothing for longer than the power-off time. Any message from the key clears it. The power-off
+setting has a short note that "Never" avoids this at some battery cost; UC does not change it.
+
 ## Battery (user request 2026-11-17)
 
 - Above the drawing: a battery icon with its fill level and the percentage; warning colour at 15 % or less;

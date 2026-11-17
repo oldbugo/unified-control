@@ -7,7 +7,7 @@ const ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-wi
 export const AU05_ICON=ICON;
 const STATES={
   disabled:'Disabled',starting:'Starting',waiting:'Waiting for the key',connected:'Connected',asleep:'Asleep',
-  paused:'Paused',suspended:'Stopped',not_found:'Not plugged in',error:'Error',
+  paused:'Paused',suspended:'Stopped',off:'Switched off?',not_found:'Not plugged in',error:'Error',
 };
 
 const STANDBY=[[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes'],[600,'10 minutes'],[900,'15 minutes'],[1800,'30 minutes'],[3600,'1 hour']];
@@ -368,7 +368,7 @@ export class Au05Panel{
       ${paletteOpen?`<div class="au05-sections">${paletteSections}</div>`:''}</section>`;
 
     // ---- battery: icon with fill level, percent, low warning, asleep (last known), details on hover ----
-    const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting';
+    const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting'||s.state==='off';
     const low=pct!=null&&pct<=15;
     const fill=pct==null?0:Math.max(3,Math.min(100,pct));
     const bTime=b?.at?new Date(b.at).toLocaleTimeString('en-AU',{hour12:false}):'';
@@ -455,6 +455,7 @@ export class Au05Panel{
       ${deviceCard(IC.power,'Power',
         row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select>`,standby==null?null:`${standby} s`)+
         row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`)+
+        '<p class="au05-set-note">"Never" stops the key switching itself off, at some battery cost.</p>'+
         row('Standby status','',`<span class="au05-value">${s.standbyStatus==null?'—':esc(s.standbyStatus)}</span>`,null))}
       ${deviceCard(IC.light,'Light',
         row('Mode',this.untested('lightMode'),`<select data-au05-set="lightMode" aria-label="Light mode"${dis}>${notRead(light.mode)}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select>`,null)+
