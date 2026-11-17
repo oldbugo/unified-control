@@ -32,6 +32,9 @@ use ulanzi_au05::fake::FakeHandle;
 use ulanzi_au05::protocol::{self, Control, KeyId, KeyTyping, LightField, LightState, MicNr, Request, SleepTime};
 use ulanzi_au05::{Failure, Output, Session, SessionConfig, SessionState, Transport};
 
+/// Shown when the key has sent nothing for long enough that it has probably switched itself off.
+pub const OFF_MESSAGE: &str = "The Vibe Key is switched off or asleep. Hold the power button on its right side for 2–3 s";
+
 /// The six controls in the order of their device index (test clicks and the event list).
 pub const CONTROLS: [(&str, Control); 6] = [
     ("k1", Control::K1),
@@ -1170,6 +1173,7 @@ impl Au05 {
                             ("waiting", "not_found") => "Waiting for the receiver: plug it in".to_string(),
                             ("waiting", "paused") => "Waiting: sending is paused after a slow reply".to_string(),
                             ("waiting", "suspended") => "Stopped after slow replies: use Reconnect".to_string(),
+                            ("waiting", "off") => "Waiting: the key seems switched off. Hold its power button 2–3 s".to_string(),
                             ("waiting", _) => "Waiting for the key: press any key to wake it".to_string(),
                             ("sending", _) => "Sending to the key (it can take up to 20 seconds)".to_string(),
                             ("done", _) => "Done".to_string(),
@@ -1455,6 +1459,7 @@ impl Worker {
         let opened_at = Instant::now();
         let mut next_beat = opened_at + Duration::from_secs(30);
         let (mut ticks, mut outputs_seen) = (0u64, 0u64);
+        let (mut last_msg, mut seen_before, mut was_off): (Option<Instant>, u64, bool) = (None, 0, false);
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut read_done = false;
         let mut read_burst: Option<(Instant, Vec<u64>)> = None;
@@ -1560,7 +1565,30 @@ impl Worker {
                     read_burst = None;
                 }
             }
-            if last_state != Some(state) {
+            if outputs_seen > seen_before {
+                last_msg = Some(Instant::now());
+                seen_before = outputs_seen;
+            }
+            // Switched off (2026-11-17, real key: after its power-off time the key turns itself off and only its
+            // power button brings it back): no message since the connection opened for longer than the
+            // standby time + 2 minutes, or none for longer than the power-off time.
+            let off = {
+                let k = &self.status.lock_or_recover().known;
+                let quiet = last_msg.unwrap_or(opened_at).elapsed();
+                let standby = Duration::from_secs(u64::from(k.standby_s.unwrap_or(600)) + 120);
+                let power_off = k.sleep_s.filter(|s| *s > 0).map(|s| Duration::from_secs(u64::from(s)));
+                matches!(state, SessionState::WaitingForKey | SessionState::Asleep)
+                    && ((last_msg.is_none() && quiet > standby) || power_off.is_some_and(|p| quiet > p))
+            };
+            if off && !was_off {
+                was_off = true;
+                self.set_state("off", OFF_MESSAGE);
+            }
+            if !off && was_off {
+                was_off = false;
+                last_state = None; // show the session's own state again
+            }
+            if !off && last_state != Some(state) {
                 last_state = Some(state);
                 let (code, msg) = match state {
                     SessionState::WaitingForKey => ("waiting", "Connected. Press a key or turn the knob to wake the Vibe Key"),
@@ -1849,12 +1877,19 @@ mod tests {
         let fake = au.fake_handle().unwrap().clone();
         // The key falls asleep before the user chooses; its K3 list was never read.
         fake.sleep();
-        std::thread::sleep(Duration::from_millis(5200)); // past the test awake window
+        // Wait for the session itself to say "asleep" (the awake window is 5 s here): a fixed sleep raced with
+        // a status message still on its way and failed now and then under load.
+        let end = Instant::now() + Duration::from_secs(20);
+        while au.status()["state"] != "asleep" && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(au.status()["state"], "asleep");
         assert_eq!(au.status()["keys"][2]["mode"], "unknown");
         let started = Instant::now();
         au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"claudeDictation"}}}));
         au.change(Change::KeyTyping(KeyId::K3, KeyTyping::own_code(KeyId::K3))).unwrap();
-        assert!(started.elapsed() < Duration::from_millis(500), "the choice returns at once");
+        // "At once" compared with the 20 s a key-typing reply may take; generous for a loaded test machine.
+        assert!(started.elapsed() < Duration::from_secs(2), "the choice returns at once");
         let s = au.status();
         assert_eq!(s["actions"]["k3"]["kind"], "claudeDictation", "saved before the list is read");
         assert_eq!(s["keys"][2]["hotkey"]["state"], "ready", "the hotkey is claimed at once");

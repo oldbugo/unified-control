@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0 — 2026-11-17
+
+The Vibe Key page now says when the key has switched itself off: "The Vibe
+Key is switched off or asleep. Hold the power button on its right side for
+2–3 s" (also on the Home card), instead of waiting silently. A short note under
+the power-off setting explains that "Never" stops this at some battery cost.
+A flaky Vibe Key test was made reliable.
+
 ## 0.21.0 — 2026-11-17
 
 Fix: the real Vibe Key's messages never reached Unified Control (key presses,
