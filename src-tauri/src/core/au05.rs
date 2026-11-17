@@ -38,25 +38,22 @@ pub const AWAKE_MESSAGE: &str = "Receiver connected · Vibe Key awake";
 pub const ASLEEP_MESSAGE: &str = "Receiver connected · Vibe Key asleep. Press a key or turn the knob to wake it";
 pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the knob to wake the Vibe Key";
 
-/// Shown as asleep only after this long without a private message or a key hotkey (2026-11-17: the status
-/// messages come about every 10 s, so the session's 11 s send gate flipped the page to "asleep" while the key
-/// was in use). At least 25 s, or 2.5 times the observed status interval. Scaled by the session's awake window
-/// (11 s on the real key; tests use a shorter one). Display only: the send gate is unchanged.
-pub fn asleep_after(status_interval: Option<Duration>, awake_window: Duration) -> Duration {
-    let base = Duration::from_secs(25).max(status_interval.unwrap_or_default().mul_f64(2.5));
-    base.mul_f64(awake_window.as_secs_f64() / 11.0)
-}
+/// The standby time used before the key's own was read (0.36.0): the last one read (kept in the settings),
+/// else 300 s.
+pub const DEFAULT_STANDBY_S: u32 = 300;
 
-/// The state the page shows (display only; sending still follows the session's own state). `quiet`: since
-/// the last private message or key hotkey (`None`: none since the connection opened). `standby_off`: how long
-/// a connection may stay without any message before the key counts as off; `power_off`: the key's power-off
-/// time.
+/// The state the page shows (0.36.0, deterministic: the key's own timers run from its last input). Display
+/// only: sending still follows the session's own 11 s gate. `quiet`: since the last input, which is the latest
+/// private message or hotkey from one of the key's own codes (`None`: none since the connection opened).
+/// Awake while `quiet` is under the key's standby time; asleep from then on; probably switched off once it
+/// reaches the power-off time (`None` or 0: never). Any message or key hotkey makes it awake at once.
+/// (2026-11-17: during dictation the key sends nothing for 30 to 90 s, and status messages are not regular
+/// when idle, so no guess from silence is used.)
 pub fn shown_state(
     state: SessionState,
     quiet: Option<Duration>,
     since_open: Duration,
-    asleep_after: Duration,
-    standby_off: Duration,
+    standby: Duration,
     power_off: Option<Duration>,
 ) -> (&'static str, &'static str) {
     match state {
@@ -64,17 +61,16 @@ pub fn shown_state(
         SessionState::Suspended => return ("suspended", "Sending stopped after repeated slow replies. Use Reconnect"),
         _ => {}
     }
-    if state == SessionState::Awake || quiet.is_some_and(|q| q < asleep_after) {
-        return ("connected", AWAKE_MESSAGE);
+    let power_off = power_off.filter(|p| !p.is_zero());
+    match quiet {
+        Some(q) if power_off.is_some_and(|p| q >= p) => ("off", OFF_MESSAGE),
+        Some(q) if q < standby || state == SessionState::Awake => ("connected", AWAKE_MESSAGE),
+        Some(_) => ("asleep", ASLEEP_MESSAGE),
+        // Nothing since the connection opened: waiting, then (past standby + 2 minutes) probably off.
+        None if state == SessionState::Awake => ("connected", AWAKE_MESSAGE),
+        None if since_open > standby + Duration::from_secs(120) => ("off", OFF_MESSAGE),
+        None => ("waiting", WAITING_MESSAGE),
     }
-    let q = quiet.unwrap_or(since_open);
-    if power_off.is_some_and(|p| q > p) || (quiet.is_none() && q > standby_off) {
-        return ("off", OFF_MESSAGE);
-    }
-    if quiet.is_none() {
-        return ("waiting", WAITING_MESSAGE);
-    }
-    ("asleep", ASLEEP_MESSAGE)
 }
 
 /// The six controls in the order of their device index (test clicks and the event list).
@@ -361,6 +357,12 @@ pub fn sanitize(v: &Value) -> Value {
         // The offline layer could not be stored at the last quit or disable (key asleep or no time).
         "offlinePending": v["offlinePending"].as_bool().unwrap_or(false),
         "knobTurnAction": v["knobTurnAction"].as_str().filter(|a| TURN_ACTIONS.contains(a)).unwrap_or("scroll"),
+        // The key's standby and power-off times as last read (0.36.0: the shown state uses them before the
+        // key answers after a start).
+        "knownTimes": {
+            "standbyS": v["knownTimes"]["standbyS"].as_u64().filter(|s| (1..=86_400).contains(s)),
+            "sleepS": v["knownTimes"]["sleepS"].as_u64().filter(|s| *s <= 86_400),
+        },
     })
 }
 
@@ -541,6 +543,14 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
         }
         au["setUp"][name] = json!(true);
         lines.push(format!("{name} set up on this key"));
+    }
+    if let Some(t) = patch.get("knownTimes") {
+        // Saved by the worker when it reads the key's times (no log line: not a user change).
+        for (k, max, min) in [("standbyS", 86_400u64, 1u64), ("sleepS", 86_400, 0)] {
+            if let Some(v) = t[k].as_u64().filter(|v| (min..=max).contains(v)) {
+                au["knownTimes"][k] = json!(v);
+            }
+        }
     }
     if let Some(e) = patch.get("keyEcho") {
         // Saved by the worker when the key confirms a list (no log line: it is not a user change).
@@ -888,10 +898,29 @@ impl MenuCtl {
             None => Err("Claude's session files were not found".to_string()),
         };
         *self.session_source.lock_or_recover() = match &desktop {
-            Ok(d) => json!({"source": "desktop", "open": d.sessions.iter().filter(|s| !s.archived).count(),
-                            "groups": d.groups.as_ref().ok().map(|g| g.scopes.values().map(|s| s.groups.len()).sum::<usize>()),
-                            "groupsNote": d.groups.as_ref().err()}),
-            Err(e) => json!({"source": "hooks", "note": e}),
+            Ok(d) => {
+                let working: Vec<String> = list
+                    .iter()
+                    .filter(|s| s["state"] == "working")
+                    .filter_map(|s| s["desktopId"].as_str().map(str::to_string))
+                    .collect();
+                let mut v = super::claude_tree::summary(d, &working, now_ms(), 5);
+                v["source"] = json!("desktop");
+                v["groups"] = json!(d.groups.as_ref().ok().map(|g| g.scopes.values().map(|s| s.groups.len()).sum::<usize>()));
+                v["groupsNote"] = json!(d.groups.as_ref().err());
+                v["readAt"] = json!(now_ms());
+                v
+            }
+            // The hook list (Connect): its sessions, newest first.
+            Err(e) => {
+                let mut rows: Vec<&Value> = list.iter().collect();
+                rows.sort_by_key(|s| std::cmp::Reverse(s["last"].as_u64().unwrap_or(0)));
+                let projects: std::collections::BTreeSet<&str> = list.iter().filter_map(|s| s["project"].as_str()).collect();
+                json!({"source": "hooks", "note": e, "open": list.len(), "projects": projects.len(),
+                       "working": list.iter().filter(|s| s["state"] == "working").count(), "readAt": now_ms(),
+                       "recent": rows.iter().take(5).map(|s| json!({"title": s["title"].as_str().or(s["label"].as_str()).or(s["project"].as_str()).unwrap_or("Untitled session"),
+                           "project": s["project"], "working": s["state"] == "working", "at": s["last"]})).collect::<Vec<_>>()})
+            }
         };
         menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok())
     }
@@ -2070,6 +2099,23 @@ impl Worker {
     }
 
     /// Save the list the key just confirmed for a control (read, or a set whose echo matched).
+    /// Keep the key's standby or power-off time in the settings when it changed (the shown state uses it after
+    /// a restart, before the key answers).
+    fn save_known_time(&self, name: &str, value: Option<u32>) {
+        let Some(v) = value else { return };
+        if self.menu.settings()["knownTimes"][name].as_u64() == Some(u64::from(v)) {
+            return;
+        }
+        self.menu.settings.lock_or_recover()["knownTimes"][name] = json!(v);
+        let patch = json!({"knownTimes": {name: v}});
+        let persist = self.menu.persist.lock_or_recover().clone();
+        if let Some(p) = persist {
+            let _ = std::thread::Builder::new().name("uc-au05-times".into()).spawn(move || {
+                let _ = p(patch);
+            });
+        }
+    }
+
     fn save_echo(&self, key: KeyId, typing: Option<KeyTyping>) {
         let Some(i) = LAYER_CONTROLS.iter().position(|(_, id)| *id == key) else { return };
         let name = LAYER_CONTROLS[i].0;
@@ -2280,8 +2326,6 @@ impl Worker {
         let mut next_beat = opened_at + Duration::from_secs(30);
         let (mut ticks, mut outputs_seen) = (0u64, 0u64);
         let (mut last_msg, mut seen_before): (Option<Instant>, u64) = (None, 0);
-        // The observed status interval (gaps of 2 to 60 s between messages; control events come faster).
-        let mut interval: Option<Duration> = None;
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut reads = ConnectReads::default();
         reads.restart();
@@ -2461,9 +2505,6 @@ impl Worker {
                 read_burst = None;
             }
             if outputs_seen > seen_before {
-                if let Some(gap) = last_msg.map(|t| t.elapsed()).filter(|g| *g >= Duration::from_secs(2) && *g <= Duration::from_secs(60)) {
-                    interval = Some(interval.map_or(gap, |i| i.mul_f64(0.7) + gap.mul_f64(0.3)));
-                }
                 last_msg = Some(Instant::now());
                 seen_before = outputs_seen;
             }
@@ -2475,9 +2516,10 @@ impl Worker {
                 let k = &self.status.lock_or_recover().known;
                 let key_at = *self.menu.key_seen.lock_or_recover();
                 let signal = [last_msg, key_at.filter(|t| *t >= opened_at)].into_iter().flatten().max();
-                let standby = Duration::from_secs(u64::from(k.standby_s.unwrap_or(600)) + 120);
-                let power_off = k.sleep_s.filter(|s| *s > 0).map(|s| Duration::from_secs(u64::from(s)));
-                shown_state(state, signal.map(|t| t.elapsed()), opened_at.elapsed(), asleep_after(interval, self.config.awake_window), standby, power_off)
+                let saved = self.menu.settings()["knownTimes"].clone();
+                let standby = k.standby_s.map(u64::from).or(saved["standbyS"].as_u64()).unwrap_or(u64::from(DEFAULT_STANDBY_S));
+                let power_off = k.sleep_s.map(u64::from).or(saved["sleepS"].as_u64()).map(Duration::from_secs);
+                shown_state(state, signal.map(|t| t.elapsed()), opened_at.elapsed(), Duration::from_secs(standby), power_off)
             };
             if last_state != Some(shown) {
                 last_state = Some(shown);
@@ -2737,8 +2779,20 @@ impl Worker {
                 k.battery = Some(protocol::battery(r));
                 k.battery_at = Some(now_ms());
             }
-            Request::GetStandbyTime | Request::SetStandbyTime(_) => k.standby_s = Some(protocol::seconds(r)),
-            Request::GetSleepTime | Request::SetSleepTime(_) => k.sleep_s = Some(protocol::seconds(r)),
+            Request::GetStandbyTime | Request::SetStandbyTime(_) => {
+                k.standby_s = Some(protocol::seconds(r));
+                let v = k.standby_s;
+                drop(s);
+                self.save_known_time("standbyS", v);
+                return;
+            }
+            Request::GetSleepTime | Request::SetSleepTime(_) => {
+                k.sleep_s = Some(protocol::seconds(r));
+                let v = k.sleep_s;
+                drop(s);
+                self.save_known_time("sleepS", v);
+                return;
+            }
             Request::GetLight => k.light = Some(protocol::light(r)),
             Request::GetHooksMode => k.hooks_mode = Some(protocol::hooks_mode(r)),
             Request::GetStandbyStatus => k.standby_status = Some(protocol::standby_status(r)),
@@ -2929,32 +2983,37 @@ mod tests {
         au
     }
 
-    /// The shown state (2026-11-17, "asleep" while the key was in use): awake until 25 s (or 2.5 status
-    /// intervals) without a message or key hotkey, then asleep, then probably off after the power-off time.
+    /// The shown state (0.36.0, user report 2026-11-17: "asleep" 30 s into a dictation, while the key was in
+    /// use): driven by the key's own timers from its last input, never by silence.
     #[test]
-    fn the_shown_state_waits_longer_than_the_send_gate() {
-        let w = Duration::from_secs(11);
+    fn the_shown_state_follows_the_keys_own_timers() {
         let s = Duration::from_secs;
-        assert_eq!(asleep_after(None, w), s(25));
-        assert_eq!(asleep_after(Some(s(10)), w), s(25), "status every 10 s: 25 s");
-        assert_eq!(asleep_after(Some(s(20)), w), s(50), "2.5 intervals when longer");
-        let (st, sb, po) = (SessionState::Asleep, s(720), Some(s(3600)));
-        let shown = |q: Option<u64>| shown_state(st, q.map(s), s(5000), s(25), sb, po).0;
-        assert_eq!(shown(Some(13)), "connected", "the log's 13 s gap between K1 and the next message: still awake");
-        assert_eq!(shown(Some(26)), "asleep");
-        assert_eq!(shown(Some(3601)), "off", "past the power-off time");
-        assert!(OFF_MESSAGE.contains("probably switched off") && OFF_MESSAGE.contains("2–3 s"));
-        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(10), s(25), sb, po).0, "waiting");
-        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(721), s(25), sb, po).0, "off", "nothing since the connection opened");
-        assert_eq!(shown_state(SessionState::Awake, Some(s(30)), s(30), s(25), sb, po), ("connected", AWAKE_MESSAGE));
-        assert_eq!(shown_state(SessionState::Paused, Some(s(1)), s(30), s(25), sb, po).0, "paused");
+        let (sb, po) = (s(300), Some(s(3600)));
+        let shown = |q: u64| shown_state(SessionState::Asleep, Some(s(q)), s(5000), sb, po).0;
+        assert_eq!(shown(30), "connected", "30 s of dictation without a message: still awake");
+        assert_eq!(shown(90), "connected");
+        assert_eq!(shown(299), "connected");
+        assert_eq!(shown(300), "asleep", "past the key's standby time");
+        assert_eq!(shown(3599), "asleep");
+        assert_eq!(shown(3600), "off", "past its power-off time");
+        assert_eq!(shown_state(SessionState::Asleep, Some(s(9000)), s(9000), sb, Some(s(0))).0, "asleep", "power-off Never");
+        assert_eq!(shown_state(SessionState::Asleep, Some(s(9000)), s(9000), sb, None).0, "asleep", "power-off not known");
+        assert_eq!(shown_state(SessionState::Awake, Some(s(400)), s(400), sb, po), ("connected", AWAKE_MESSAGE), "a message: awake at once");
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(10), sb, po).0, "waiting");
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(421), sb, po).0, "off", "nothing since the connection opened");
+        assert_eq!(shown_state(SessionState::Paused, Some(s(1)), s(30), sb, po).0, "paused");
+        // The times are kept in the settings (used before the key answers after a start).
+        let mut au = sanitize(&json!({"knownTimes": {"standbyS": 0, "sleepS": 99_999}}));
+        assert_eq!(au["knownTimes"], json!({"standbyS": null, "sleepS": null}), "out of range: not kept");
+        apply_patch(&mut au, &json!({"knownTimes": {"standbyS": 60, "sleepS": 0}})).unwrap();
+        assert_eq!(sanitize(&au)["knownTimes"], json!({"standbyS": 60, "sleepS": 0}));
     }
 
-    /// A hotkey from the key's own code shows the key awake although it reports nothing privately (the
-    /// session still treats it as asleep for sending).
     #[test]
     fn a_key_hotkey_counts_as_awake_for_the_shown_state() {
         let au = worker();
+        // A short standby on the key, so the page shows "asleep" soon after it stops sending (0.36.0).
+        au.fake_handle().unwrap().lock().standby_s = 2;
         let desk = au.fake_desktop().unwrap().clone();
         au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "volumeUp"}}}));
         wait_for(&au, |s| s["micNr"].is_object());
@@ -2979,6 +3038,8 @@ mod tests {
     #[test]
     fn choosing_a_uc_action_never_waits_for_the_key() {
         let au = worker();
+        // A short standby on the key, so the page shows "asleep" soon after it stops sending (0.36.0).
+        au.fake_handle().unwrap().lock().standby_s = 2;
         au.configure(&json!({"enabled": true}));
         wait_for(&au, |s| s["micNr"].is_object());
         let fake = au.fake_handle().unwrap().clone();
@@ -3046,6 +3107,8 @@ mod tests {
 
         // The key asleep at quit: nothing written, the offline layer is reported as not stored.
         let au = worker();
+        // A short standby on the key, so the page shows "asleep" soon after it stops sending (0.36.0).
+        au.fake_handle().unwrap().lock().standby_s = 2;
         let fake = au.fake_handle().unwrap().clone();
         au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
         wait_for(&au, |s| s["keys"][0]["mode"] == "uc");

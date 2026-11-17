@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.36.0 — 2026-11-17
+
+The Vibe Key no longer shows "asleep" while you are using it, for example
+during a long dictation. The page now follows the key's own timers: it counts
+as awake until its standby time has passed since your last press, turn or
+message from it, then asleep, and "probably off" once its power-off time has
+passed. Any press wakes it on the page at once. The key's standby and power-off
+times are remembered, so this is right straight after a restart too.
+
+The Vibe Key page is tidier. The receiver, the key and the battery now show
+together in one small status line above the drawing, with a coloured dot each,
+instead of in three places. The long explanations are gone (a few are tooltips
+now). The quick menu's controls sit in one row, "In the menu", next to
+"Reopen where I left off". The Claude sessions card now shows what Unified
+Control reads, live: how many sessions are open, in how many projects, how many
+are working, and the latest few with their project. Connect is now a "Live
+working status" switch.
+
 ## 0.35.0 — 2026-11-17
 
 The quick menu dial is bigger and its names are easier to read. Names now curve

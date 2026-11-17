@@ -486,6 +486,27 @@ the middle ... a handlebar that we can drag it around."
   restore without animation, mouse, the 31-entry window, screenshots to `UC_QM_SHOTS`);
   `quick_menu::tests::the_dial_window_fits_its_rings_and_the_work_area`.
 
+### The shown state and the page, 0.36.0 (user reports 2026-11-17)
+
+- "It tells me it's not connected, but it should be ... the lights are on": during dictation the key sends no
+  private message for 30 to 90 s, and status messages are not regular when idle (19 in 10 min). So the shown
+  state no longer guesses from silence (`shown_state`): the last input is the latest private message or hotkey
+  from the key's own codes (K1-K3, knob press, F23/F24); awake while it is newer than the key's standby time
+  (`standbyS`, else the last one read, kept in the settings as `knownTimes`, else 300 s); asleep after that;
+  probably off once it is older than the power-off time (`sleepS`; Never: never). A message or key hotkey
+  makes it awake at once. The 11 s send gate is unchanged (it only gates sending).
+- Not built (orchestrator's note for a real-key test with the user): the standby-status get `01 01 0d 01` sent
+  to a sleeping key might be answered by the receiver (Studio polls it before commands). Never sent on a
+  sleeping key by UC.
+- The page: one status block where the battery was (receiver · Vibe Key · battery, a dot each: green
+  connected/awake, grey asleep/waiting, amber probably off with "Hold the power button 2–3 s", red no receiver);
+  the heading chip, the status line and the explanatory paragraphs (power loss, offline layer, "Never", the
+  menu codes, Claude Connect) are gone or tooltips. "In the menu": one row with the K2, K3 and knob press
+  roles and the "Reopen where I left off" switch. The Claude sessions card is live: counts (open sessions,
+  projects as the menu groups them, working), the newest five with their project and a working dot
+  (`claude_tree::summary`, titles only), the source with "updated n s ago" (or the fallback in amber), and a
+  "Live working status" switch (Connect / Disconnect).
+
 ### The dial, 0.35.0 (user feedback 2026-11-17: "I also don't want text to flow out or truncate")
 
 - Bigger: active ring outer radius 170, 210, 260 for 1, 2, 3 rings (window 388 x 484, 468 x 564, 568 x 664

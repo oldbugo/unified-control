@@ -301,6 +301,50 @@ pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[Str
     out
 }
 
+/// The live summary for the page's Claude sessions card (0.36.0): open sessions, projects (as the menu groups
+/// them), how many work now, and the newest few with their project. Titles only; nothing else from the files.
+pub fn summary(d: &Desktop, working: &[String], now_ms: u64, recent: usize) -> Value {
+    let t = tree(&d.sessions, d.groups.as_ref().ok(), working, &json!("none"), now_ms);
+    // Each session with the project it is listed under ("Other sessions" counts each folder).
+    let mut found: Vec<(String, String, bool)> = Vec::new();
+    fn walk(e: &Value, project: &str, out: &mut Vec<(String, String, bool)>) {
+        if let Some(id) = e["session"].as_str() {
+            if !out.iter().any(|(i, _, _)| i == id) && e["project"] != true {
+                out.push((id.to_string(), project.to_string(), e["working"] == true));
+            }
+        }
+        for c in e["entries"].as_array().into_iter().flatten() {
+            walk(c, project, out);
+        }
+    }
+    let mut projects = 0;
+    for p in &t {
+        if p["label"] == OTHER {
+            for f in p["entries"].as_array().into_iter().flatten() {
+                projects += 1;
+                walk(f, f["label"].as_str().unwrap_or(""), &mut found);
+            }
+        } else {
+            projects += 1;
+            walk(p, p["label"].as_str().unwrap_or(""), &mut found);
+        }
+    }
+    let mut rows: Vec<(&DesktopSession, &String, bool)> = found
+        .iter()
+        .filter_map(|(id, p, w)| d.sessions.iter().find(|s| &s.id == id).map(|s| (s, p, *w)))
+        .collect();
+    rows.sort_by_key(|(s, _, _)| std::cmp::Reverse(s.last_activity.max(s.last_turn.unwrap_or(0))));
+    json!({
+        "open": d.sessions.iter().filter(|s| !s.archived).count(),
+        "projects": projects,
+        "working": found.iter().filter(|(_, _, w)| *w).count(),
+        "recent": rows.iter().take(recent).map(|(s, p, w)| json!({
+            "title": if s.title.is_empty() { s.worktree.clone().unwrap_or_else(|| folder_name(&s.cwd)) } else { s.title.clone() },
+            "project": p, "working": w, "at": s.last_activity.max(s.last_turn.unwrap_or(0)),
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// Newest activity of a session and everything below it (within `all`).
 fn newest(s: &DesktopSession, all: &[&DesktopSession], depth: usize) -> u64 {
     let own = s.last_activity.max(s.last_turn.unwrap_or(0));
@@ -428,6 +472,11 @@ mod tests {
         let t = tree(&all, None, &[id(7)], &json!("none"), 300 + WORKING_MS - 1);
         assert_eq!(t[0]["working"], true);
         assert_eq!(t.iter().find(|p| p["label"] == "CoolerScreen").unwrap()["entries"][0]["working"], true);
+        // The page's live summary: counts and the newest sessions with their project.
+        let sum = summary(&read_desktop(&base).unwrap(), &[], 1_000_000, 2);
+        assert_eq!(sum["recent"].as_array().unwrap().len(), 2);
+        assert!(sum["open"].as_u64().unwrap() >= 2 && sum["projects"].as_u64().unwrap() >= 1, "{sum}");
+        assert!(sum["recent"][0]["at"].as_u64() >= sum["recent"][1]["at"].as_u64(), "newest first");
         // A missing folder is reported (the menu then uses the hook list).
         assert!(read_all(&base.join("none")).is_err());
         let _ = std::fs::remove_dir_all(&base);

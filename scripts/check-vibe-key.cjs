@@ -209,12 +209,27 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_reconnect'));
 
   // The knob press menu role is shown (Select after the 0.31.0 migration) and can be changed.
-  await page.evaluate(()=>{window.__au05.menu={controls:{k2:'select',k3:'back',knobPress:'select'},sessions:{source:'desktop',open:3,groups:2,groupsNote:null}};});
+  await page.evaluate(()=>{const now=Date.now();window.__au05.menu={controls:{k2:'select',k3:'back',knobPress:'select'},sessions:{source:'desktop',open:41,projects:7,working:3,groups:2,groupsNote:null,readAt:now-3000,
+    recent:[{title:'Vibe Key AU05 connection setup',project:'Unified Control',working:true,at:now-20000},{title:'Quick menu dial labels',project:'Unified Control',working:true,at:now-60000},
+      {title:'Cooler freeze diagnostics',project:'CoolerScreen',working:false,at:now-600000},{title:'Weekly notes',project:'vault',working:false,at:now-3600000}]}};});
   await page.getByRole('button',{name:'Reconnect'}).click();
   const press=page.locator('select[data-qm-role="knobPress"]');
   await press.waitFor();
   assert.equal(await press.inputValue(),'select','the knob press selects by default');
-  assert.match(await page.locator('.au05-claude').textContent(),/grouped by your Claude sidebar projects/);
+  // 0.36.0: the Claude sessions card is a live view (counts, the newest sessions, the source), no paragraphs.
+  assert.equal(await page.locator('#au05-cs-counts').textContent(),'41 open sessions · 7 projects · 3 working');
+  assert.equal(await page.locator('.au05-cs-row').count(),4);
+  assert.equal(await page.locator('.au05-cs-row.working').count(),2);
+  assert.match(await page.locator('.au05-cs-source').textContent(),/^From Claude's session list · updated \d+ s ago$/);
+  assert.match(await page.locator('.au05-live').textContent(),/Live working status: Off/);
+  assert.equal(await page.locator('.au05-claude p.au05-line').count(),0,'no explanatory paragraphs');
+  // 0.36.0: "In the menu" is one row with the three role selects and the reopen switch.
+  const inmenu=page.locator('.au05-inmenu');
+  assert.equal(await inmenu.locator('select[data-qm-role]').count(),3);
+  assert.equal(await inmenu.locator('input[data-qm-reopen]').count(),1);
+  const tops=await inmenu.locator('select[data-qm-role]').evaluateAll(els=>els.map(e=>Math.round(e.getBoundingClientRect().top)));
+  assert.ok(Math.max(...tops)-Math.min(...tops)<=2,`the role selects are on one row: ${tops}`);
+  assert.equal(await page.locator('.au05-menu-controls').count(),0,'the old box is gone');
   await press.selectOption('close');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.menuControls?.knobPress==='close'));
   await page.waitForFunction(()=>document.querySelector('select[data-qm-role="knobPress"]')?.value==='close');
@@ -225,7 +240,24 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.reopenWhereLeft===false));
   await page.evaluate(()=>{window.__au05.menu.sessions={source:'desktop',open:3,groups:null,groupsNote:"Claude's sidebar groups were not found"};});
   await page.getByRole('button',{name:'Reconnect'}).click();
-  await page.waitForFunction(()=>/groups the sessions by folder/.test(document.querySelector('.au05-claude')?.textContent||''));
+  await page.waitForFunction(()=>/grouped by folder/.test(document.querySelector('.au05-cs-source')?.textContent||''));
+  // 0.36.0: one status block (receiver · Vibe Key · battery), no copies elsewhere, no explanatory subtext.
+  const shots=process.env.UC_VK_SHOTS||path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(shots,{recursive:true});
+  const status=page.locator('#au05-status');
+  const showState=async st=>{await page.evaluate(st=>{window.__au05.state=st;},st);await page.getByRole('button',{name:'Reconnect'}).click();await page.waitForFunction(st=>document.querySelector('#au05-status')?.dataset.state===st,st);};
+  for(const [st,text,action] of [['connected',/Receiver connected\s*Vibe Key awake\s*30 %/,null],['asleep',/Vibe Key asleep/,null],['off',/Vibe Key probably off/,/Hold the power button 2–3 s/]]){
+    await showState(st);
+    assert.match(await status.textContent(),text,st);
+    if(action)assert.match(await page.locator('.au05-st-action').textContent(),action);else assert.equal(await page.locator('.au05-st-action').count(),0);
+    await status.screenshot({path:path.join(shots,`uc-vibe-key-status-${st}.png`)});
+    if(st==='connected')assert.ok(await page.locator('.au05-st-row').evaluate(e=>e.getBoundingClientRect().height<40),'one line when awake');
+  }
+  assert.equal(await page.locator('.au05-st .au05-status-dot.warn').count(),1,'amber for probably off');
+  await showState('connected');
+  const body=await page.locator('#au05-page').textContent();
+  assert.equal((body.match(/Vibe Key awake/g)||[]).length,1,'the state is shown once');
+  assert.ok(!/loses power|Menu controls \(while|grouped by your Claude sidebar/.test(body),'no explanatory subtext');
+  assert.equal(await page.locator('#au05-page-message,#au05-page-state,.au05-risk').count(),0,'no duplicate status lines');
   // 0.33.0: the settings reads stalled twice: the page says so and offers Read again.
   assert.equal(await page.locator('.au05-reads-failed').count(),0,'no note while the reads are fine');
   await page.evaluate(()=>{window.__au05.readsFailed="Couldn't read the settings: Read again";});
@@ -242,10 +274,22 @@ const server=http.createServer((req,res)=>{
   await pick('k3');
   await choose('k3','uc:volumeUp');
   await page.waitForFunction(()=>/Volume up/.test(document.querySelector('.au05-callout[data-au05-zone="k3"]')?.textContent||''));
+  // The live sessions card again (the fallback above was a test) and the full page at the end.
+  await page.evaluate(()=>{const now=Date.now();window.__au05.menu.sessions={source:'desktop',open:41,projects:7,working:3,groups:2,groupsNote:null,readAt:now-3000,
+    recent:[{title:'Vibe Key AU05 connection setup',project:'Unified Control',working:true,at:now-20000},{title:'Quick menu dial labels',project:'Unified Control',working:true,at:now-60000},
+      {title:'Cooler freeze diagnostics',project:'CoolerScreen',working:false,at:now-600000},{title:'Weekly notes',project:'vault',working:false,at:now-3600000}]};});
+  await page.getByRole('button',{name:'Reconnect'}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.au05-cs-row').length===4);
   for(const [width,height]of[[1440,1000],[800,700],[600,700]]){
     await page.setViewportSize({width,height});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no overflow at ${width}`);
     await page.screenshot({path:path.join(output,`uc-vibe-key-${width}.png`),fullPage:true});
+    if(width===1440){
+      // The whole page (the app's pane scrolls inside the window): a tall window for this one.
+      await page.setViewportSize({width:1440,height:2600});await page.waitForTimeout(100);
+      await page.screenshot({path:path.join(process.env.UC_VK_SHOTS||output,'uc-vibe-key-page.png')});
+      await page.setViewportSize({width,height});
+    }
   }
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('.au05-records').screenshot({path:path.join(output,'uc-vibe-key-light-records.png')});

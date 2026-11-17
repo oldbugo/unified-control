@@ -516,7 +516,17 @@ body.au05-dragging, body.au05-dragging * { cursor:grabbing !important; user-sele
 body.au05-dragging[data-au05-drop="ok"], body.au05-dragging[data-au05-drop="ok"] * { cursor:copy !important; }
 body.au05-dragging[data-au05-drop="no"], body.au05-dragging[data-au05-drop="no"] * { cursor:not-allowed !important; }
 /* Vibe Key battery (above the drawing) */
-.au05-battery { display:inline-flex; align-items:center; gap:var(--s2); margin:0 0 var(--s3) var(--s3); padding:var(--s1) var(--s3) var(--s1) var(--s2); border-radius:var(--r-full); background:var(--surface-1); border:1px solid var(--border); font-size:var(--fs-small); font-weight:600; color:var(--text); }
+/* 0.36.0: one status block (receiver · Vibe Key · battery) where the battery was; the action in one short line. */
+.au05-statusbar { display:inline-flex; flex-direction:column; gap:2px; margin:0 0 var(--s3); max-width:100%; }
+.au05-st-row { display:inline-flex; flex-wrap:wrap; align-items:center; gap:var(--s1) var(--s3); padding:var(--s1) var(--s3); border-radius:var(--r-full); background:var(--surface-1); border:1px solid var(--border); font-size:var(--fs-small); font-weight:600; }
+.au05-st { display:inline-flex; align-items:center; gap:var(--s2); white-space:nowrap; }
+.au05-st .au05-status-dot { width:9px; height:9px; box-shadow:0 0 0 3px var(--surface-3); }
+.au05-st .au05-status-dot.ok { box-shadow:0 0 0 3px var(--ok-soft); }
+.au05-st .au05-status-dot.warn { box-shadow:0 0 0 3px var(--warn-soft); }
+.au05-st .au05-status-dot.bad { box-shadow:0 0 0 3px var(--danger-soft); }
+.au05-st-action { padding-left:var(--s3); font-size:var(--fs-tiny); color:var(--text-muted); }
+.au05-st-action.attention { color:var(--warn); }
+.au05-battery { display:inline-flex; align-items:center; gap:var(--s2); font-size:var(--fs-small); font-weight:600; color:var(--text); }
 .au05-batt-icon { width:34px; height:17px; flex:none; }
 .au05-batt-icon .shell { fill:none; stroke:var(--text-muted); stroke-width:1.5; }
 .au05-batt-icon .tip { fill:var(--text-muted); }
@@ -543,3 +553,25 @@ body.au05-dragging[data-au05-drop="no"], body.au05-dragging[data-au05-drop="no"]
 .au05-offline-row { display:flex; flex-direction:column; gap:var(--s2); padding:var(--s2) 0; }
 .au05-offline-row + .au05-offline-row { border-top:1px solid var(--border); }
 
+
+/* 0.36.0: "In the menu": one tight row under the menu list (wraps on narrow widths). */
+.au05-inmenu { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s2) var(--s4); margin-top:var(--s3); padding:var(--s2) var(--s3); border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-1); }
+.au05-inmenu-title { font-weight:600; font-size:var(--fs-small); cursor:help; text-decoration:underline dotted var(--text-faint); text-underline-offset:3px; }
+.au05-inmenu .au05-role { display:inline-flex; align-items:center; gap:var(--s1); font-size:var(--fs-small); white-space:nowrap; }
+.au05-inmenu .au05-role select { width:auto; min-width:0; max-width:128px; padding-right:24px; }
+.au05-inmenu { column-gap:var(--s3); }
+.au05-inmenu-roles { display:inline-flex; flex-wrap:nowrap; align-items:center; gap:var(--s3); }
+@media (max-width: 640px) { .au05-inmenu-roles { flex-wrap:wrap; } }
+.au05-inmenu .au05-reopen { margin:0 0 0 auto; font-size:var(--fs-small); }
+/* 0.36.0: the Claude sessions card is a live view. */
+.au05-live { display:inline-flex; align-items:center; gap:var(--s2); font-size:var(--fs-small); color:var(--text-muted); cursor:pointer; }
+.au05-cs-counts { font-weight:600; }
+.au05-cs-list { list-style:none; margin:var(--s2) 0; padding:0; display:flex; flex-direction:column; gap:2px; }
+.au05-cs-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:var(--s2); padding:3px var(--s2); border-radius:var(--r-sm); font-size:var(--fs-small); }
+.au05-cs-row:nth-child(odd) { background:var(--surface-1); }
+.au05-cs-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.au05-cs-dot { width:8px; height:8px; border-radius:50%; background:var(--text-faint); opacity:.5; }
+.au05-cs-row.working .au05-cs-dot { background:var(--ok); opacity:1; }
+.au05-cs-when { font-variant-numeric:tabular-nums; }
+.au05-cs-source { font-size:var(--fs-tiny); color:var(--text-muted); }
+.au05-cs-source.attention { color:var(--warn); }
