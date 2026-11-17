@@ -108,40 +108,11 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) ->
         list.iter()
             .map(|e| match e["type"].as_str() {
                 Some("claudeSessions") => {
-                    let then = e["then"].clone();
-                    let row = |s: &Value| {
-                        // Its title (named in Claude), else its first prompt, else its folder.
-                        let label = s["title"].as_str().filter(|l| !l.is_empty())
-                            .or(s["label"].as_str().filter(|l| !l.is_empty()))
-                            .or(s["project"].as_str().filter(|l| !l.is_empty()))
-                            .unwrap_or("Untitled session");
-                        let state = if s["state"] == "working" { "working" } else { "idle" };
-                        let since = now_ms.saturating_sub(s["last"].as_u64().unwrap_or(now_ms));
-                        json!({"type": "claudeSession", "label": label, "session": s["desktopId"], "then": then,
-                               "detail": format!("{state} · {}", age(since))})
-                    };
-                    let shown: Vec<&Value> = sessions.iter().take(30).collect();
-                    let mut projects: Vec<String> = Vec::new();
-                    for s in &shown {
-                        let p = s["project"].as_str().unwrap_or("Other").to_string();
-                        if !projects.contains(&p) {
-                            projects.push(p);
-                        }
-                    }
-                    let entries: Vec<Value> = if shown.is_empty() {
+                    let entries = if sessions.is_empty() {
                         let note = if connected { "No Claude sessions yet" } else { "Connect Claude sessions on the Vibe Key page" };
                         vec![json!({"type": "note", "label": note})]
-                    } else if projects.len() == 1 {
-                        shown.iter().map(|s| row(s)).collect()
                     } else {
-                        projects
-                            .iter()
-                            .map(|p| {
-                                let rows: Vec<Value> =
-                                    shown.iter().filter(|s| s["project"].as_str().unwrap_or("Other") == p).map(|s| row(s)).collect();
-                                json!({"type": "submenu", "label": p, "entries": rows})
-                            })
-                            .collect()
+                        session_tree(sessions, &e["then"], now_ms)
                     };
                     json!({"type": "submenu", "label": e["label"], "entries": entries})
                 }
@@ -154,6 +125,47 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64) ->
             })
             .collect(),
     )
+}
+
+/// The Claude sessions as a tree (2026-11-17): level 1 the projects (repositories, by folder name, most recent
+/// activity first); under each, the session in the main checkout first, then the worktree sessions, most
+/// recent first. A project node carries its main (else most recent) session, so K1 can dictate into it. A
+/// node is generic (`entries`), so a real parent link can nest sessions later. At most 30 sessions.
+pub fn session_tree(sessions: &[Value], then: &Value, now_ms: u64) -> Vec<Value> {
+    let shown: Vec<&Value> = sessions.iter().take(30).collect();
+    let key = |s: &Value| s["root"].as_str().or(s["project"].as_str()).unwrap_or("Other").to_lowercase();
+    let mut roots: Vec<String> = Vec::new();
+    for s in &shown {
+        if !roots.contains(&key(s)) {
+            roots.push(key(s));
+        }
+    }
+    let row = |s: &Value| {
+        // Its title (named in Claude), else its first prompt, else its worktree or project folder.
+        let label = s["title"].as_str().filter(|l| !l.is_empty())
+            .or(s["label"].as_str().filter(|l| !l.is_empty()))
+            .or(s["worktree"].as_str().filter(|l| !l.is_empty()))
+            .or(s["project"].as_str().filter(|l| !l.is_empty()))
+            .unwrap_or("Untitled session");
+        let working = s["state"] == "working";
+        let since = now_ms.saturating_sub(s["last"].as_u64().unwrap_or(now_ms));
+        let place = s["worktree"].as_str().map(|w| format!("{w} · ")).unwrap_or_else(|| "main · ".into());
+        json!({"type": "claudeSession", "label": label, "session": s["desktopId"], "then": then, "working": working,
+               "detail": format!("{}{place}{}", if working { "● working · " } else { "" }, age(since))})
+    };
+    roots
+        .iter()
+        .map(|r| {
+            let mine: Vec<&Value> = shown.iter().copied().filter(|s| key(s) == *r).collect();
+            let mut ordered: Vec<&Value> = mine.iter().copied().filter(|s| s["worktree"].as_str().is_none()).collect();
+            ordered.extend(mine.iter().copied().filter(|s| s["worktree"].as_str().is_some()));
+            let main = ordered.first().map(|s| s["desktopId"].clone()).unwrap_or(Value::Null);
+            let working = ordered.iter().any(|s| s["state"] == "working");
+            let name = mine.first().and_then(|s| s["project"].as_str()).unwrap_or("Other");
+            json!({"type": "submenu", "label": name, "project": true, "session": main, "working": working,
+                   "detail": if working { "● working" } else { "" }, "entries": ordered.iter().map(|s| row(s)).collect::<Vec<_>>()})
+        })
+        .collect()
 }
 
 /// Keep only valid entries (unknown types, unknown actions, missing profiles, too deep or too many are
@@ -253,6 +265,8 @@ pub enum Input {
     Choose,
     /// Up one level (the "Back" row, Backspace).
     Back,
+    /// K1 on a highlighted session or project: open it and run this catalogue action (dictation).
+    Dictate(String),
     Close,
     /// A mouse click on a row.
     Pick(usize),
@@ -338,16 +352,24 @@ impl MenuState {
         self.highlight = self.highlight.min(rows - 1);
         match input {
             Input::Toggle | Input::Close => self.close(),
+            // No wrap-around (2026-11-17): at the first or last row, further turns stay put.
             Input::Next => {
-                self.highlight = (self.highlight + 1) % rows;
+                self.highlight = (self.highlight + 1).min(rows - 1);
                 self.note = None;
                 Outcome::Moved
             }
             Input::Prev => {
-                self.highlight = (self.highlight + rows - 1) % rows;
+                self.highlight = self.highlight.saturating_sub(1);
                 self.note = None;
                 Outcome::Moved
             }
+            Input::Dictate(then) => match self.highlighted_session(menu) {
+                Some(id) => {
+                    self.close();
+                    Outcome::Session(id, then)
+                }
+                None => Outcome::Nothing,
+            },
             Input::Back => match self.path.pop() {
                 None => self.close(),
                 Some(i) => {
@@ -406,6 +428,16 @@ impl MenuState {
         }
     }
 
+    /// The Claude session behind the highlighted row: a session, or a project's main session.
+    pub fn highlighted_session(&mut self, menu: &Value) -> Option<String> {
+        if !self.open || self.highlight == 0 {
+            return None;
+        }
+        let level = self.level(menu);
+        let id = level.get(self.highlight - 1)?["session"].as_str()?.to_string();
+        super::claude_sessions::valid_desktop_id(&id).then_some(id)
+    }
+
     /// What the window shows. `settings` is the sanitized `au05` settings (for the header); `menu` is the
     /// menu as shown (with the Claude sessions expanded).
     pub fn view(&mut self, settings: &Value, menu: &Value) -> Value {
@@ -434,11 +466,11 @@ impl MenuState {
                         _ => String::new(),
                     }
                 }
-                "claudeSession" => e["detail"].as_str().unwrap_or("").to_string(),
+                "claudeSession" | "submenu" => e["detail"].as_str().unwrap_or("").to_string(),
                 _ => String::new(),
             };
             let current = (t == "profile" && e["profile"] == profile) || (t == "target" && e["target"] == target);
-            rows.push(json!({"label": e["label"], "type": t, "detail": detail, "current": current}));
+            rows.push(json!({"label": e["label"], "type": t, "detail": detail, "current": current, "working": e["working"] == true}));
         }
         let mut title = vec!["Quick menu".to_string()];
         let mut cur = menu.as_array().cloned().unwrap_or_default();
@@ -497,9 +529,7 @@ mod tests {
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
         assert_eq!(m.highlight, 0);
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
-        assert_eq!(m.highlight, 8, "wraps to the last row");
-        assert_eq!(m.step(&menu, Input::Next, t0), Outcome::Moved);
-        assert_eq!(m.highlight, 0);
+        assert_eq!(m.highlight, 0, "no wrap-around: stays on the first row");
         // Choosing Close closes.
         assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Closed);
         m.step(&menu, Input::Toggle, t0);
@@ -571,5 +601,58 @@ mod tests {
         assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "close"}));
         assert_eq!(role(&json!({}), "k1"), "none");
         assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 select · K3 back · Knob press close");
+    }
+
+    /// Session tree: projects by recent activity; in a project the main checkout's session first, then the
+    /// worktrees; a project carries its main session; a working dot. No wrap-around; K1 on a session or a
+    /// project dictates into it, elsewhere it does nothing here.
+    #[test]
+    fn sessions_form_a_project_tree_and_k1_dictates_into_the_highlighted_one() {
+        let id = |n: u8| format!("local_0123abcd-0000-4000-8000-0000000000{n:02}");
+        let s = |n: u8, root: &str, wt: Option<&str>, title: &str, working: bool| {
+            json!({"desktopId": id(n), "root": format!("C:\\{root}"), "project": root, "worktree": wt, "title": title,
+                   "state": if working { "working" } else { "idle" }, "last": 1})
+        };
+        // Most recent first (as the session list gives them).
+        let sessions = vec![
+            s(1, "UnifiedControl", Some("wt-a"), "Vibe key fixes", true),
+            s(2, "vault", None, "", false),
+            s(3, "UnifiedControl", None, "Orchestrator", false),
+            s(4, "UnifiedControl", Some("wt-b"), "", false),
+        ];
+        let tree = session_tree(&sessions, &json!("none"), 1);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[0]["label"], "UnifiedControl", "the most recently active project first");
+        assert_eq!(tree[0]["session"], id(3), "a project carries its main-checkout session");
+        assert_eq!(tree[0]["working"], true);
+        let labels: Vec<&str> = tree[0]["entries"].as_array().unwrap().iter().map(|e| e["label"].as_str().unwrap()).collect();
+        assert_eq!(labels, ["Orchestrator", "Vibe key fixes", "wt-b"], "main first, then worktrees; title, else the worktree folder");
+        assert!(tree[0]["entries"][1]["detail"].as_str().unwrap().starts_with("● working"));
+        assert_eq!(tree[1]["entries"][0]["label"], "vault", "no title or prompt: the project folder");
+
+        let menu = json!([{"type": "submenu", "label": "Claude sessions", "entries": tree}, {"type": "action", "label": "X", "action": {"kind": "playPause"}}]);
+        let t0 = Instant::now();
+        let mut m = MenuState::default();
+        m.step(&menu, Input::Toggle, t0);
+        // No wrap-around.
+        m.step(&menu, Input::Next, t0);
+        m.step(&menu, Input::Next, t0);
+        assert_eq!(m.highlight, 2, "stays on the last row");
+        m.step(&menu, Input::Prev, t0);
+        m.step(&menu, Input::Prev, t0);
+        m.step(&menu, Input::Prev, t0);
+        assert_eq!(m.highlight, 0, "stays on the first row");
+        assert_eq!(m.step(&menu, Input::Dictate("claudeDictation".into()), t0), Outcome::Nothing, "Close is not a session");
+        // Into Claude sessions; K1 on the project dictates into its main session.
+        m.highlight = 1;
+        m.step(&menu, Input::Choose, t0);
+        assert_eq!(m.highlighted_session(&menu), Some(id(3)));
+        // Into the project; K2 (Choose) on a session opens it; K1 dictates into it.
+        m.step(&menu, Input::Choose, t0);
+        m.step(&menu, Input::Next, t0);
+        assert_eq!(m.step(&menu, Input::Dictate("claudeDictateSend".into()), t0), Outcome::Session(id(1), "claudeDictateSend".into()));
+        assert!(!m.open, "the menu closes");
+        let v = { let mut m = MenuState::default(); m.step(&menu, Input::Toggle, t0); m.step(&menu, Input::Choose, t0); m.view(&json!({}), &menu) };
+        assert_eq!(v["rows"][1]["working"], true, "the window gets the working dot");
     }
 }

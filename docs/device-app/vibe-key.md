@@ -398,6 +398,24 @@ one key opens a menu.
   is bold with a stronger outline, and the footer shows the hints ("Turn: move · K2 select · K3 back · Knob
   press close").
 
+### Session tree and navigation (user decisions 2026-11-17)
+
+- **Tree from folders.** Claude gives no parent-session id, so the "Claude sessions" sub-menu is built from
+  folders (`claude_sessions::locate`): level 1 is the project, the repository root (a `…\.claude\worktrees\<name>`
+  folder, or a worktree anywhere whose `.git` file points into `<repo>\.git\worktrees`, belongs to `<repo>`),
+  shown by its folder name, most recent activity first. Under a project: the session in the main checkout first,
+  then the worktree sessions, most recent first, each by its title (else its first prompt, else the worktree
+  folder). A green dot marks sessions working now. Nodes are generic (`entries`), so a real parent link can nest
+  sessions later (`au05_menu::session_tree`).
+- **Navigation** for the whole menu: the knob moves up and down, K2 goes into the highlighted entry (on a session:
+  opens it in Claude), K3 goes up one level (at the top: closes). No wrap-around: at the first or last row,
+  further turns stay put.
+- **K1 on a session** (or on a project: its main session): Claude opens the session; once Claude is in front (at
+  most 1.5 s, else nothing is pressed) the dictation runs there through the message-box guard: Dictate & send if
+  that is K1's action, else Start dictation. The menu closes. On other entries K1 keeps its own action.
+- The Claude sessions card says that sessions appear once they start (or restart) after Connect, because Claude
+  reads its hook settings when a session starts.
+
 ## Claude sessions (2026-11-17)
 
 The user chose Claude Code hooks. Opt-in: "Connect Claude sessions" on the Vibe Key page.

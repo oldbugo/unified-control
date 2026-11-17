@@ -135,6 +135,44 @@ pub fn project_name(cwd: &str) -> String {
     if name.is_empty() { "Other".into() } else { name }
 }
 
+/// Where a session runs (session tree, 2026-11-17; Claude has no parent-session id, so the tree comes from
+/// folders): the repository root (its main checkout) and, for a worktree, the worktree's folder name. From the
+/// folder alone: a `...\.claude\worktrees\<name>` path, else the nearest `.git` above the folder (a folder:
+/// the main checkout; a file `gitdir: <repo>\.git\worktrees\<name>`: a worktree of <repo>). Only `.git`
+/// entries are looked at (at most 12 levels up, the first 4 KB of a `.git` file).
+pub fn locate(cwd: &str) -> (String, Option<String>) {
+    let trimmed = cwd.trim_end_matches(['\\', '/']);
+    let lower = trimmed.to_ascii_lowercase().replace('/', "\\");
+    if let Some(i) = lower.find("\\.claude\\worktrees\\") {
+        let rest = &trimmed[i + "\\.claude\\worktrees\\".len()..];
+        let name = rest.split(['\\', '/']).next().unwrap_or("").to_string();
+        return (trimmed[..i].to_string(), (!name.is_empty()).then_some(name));
+    }
+    let mut dir = Path::new(trimmed);
+    for _ in 0..12 {
+        let git = dir.join(".git");
+        match std::fs::symlink_metadata(&git) {
+            Ok(m) if m.is_dir() => return (dir.to_string_lossy().into_owned(), None),
+            Ok(m) if m.is_file() && m.len() <= 4096 => {
+                let text = std::fs::read_to_string(&git).unwrap_or_default();
+                let gitdir = text.lines().find_map(|l| l.strip_prefix("gitdir:")).map(str::trim).unwrap_or("");
+                let g = gitdir.replace('/', "\\");
+                if let Some(i) = g.to_ascii_lowercase().find("\\.git\\worktrees\\") {
+                    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+                    return (g[..i].to_string(), name);
+                }
+                return (dir.to_string_lossy().into_owned(), None);
+            }
+            _ => {}
+        }
+        match dir.parent() {
+            Some(p) if !p.as_os_str().is_empty() => dir = p,
+            _ => break,
+        }
+    }
+    (trimmed.to_string(), None)
+}
+
 /// The session list (in memory and `claude-sessions.json`).
 pub struct Sessions {
     path: PathBuf,
@@ -198,9 +236,13 @@ impl Sessions {
             if bound.is_empty() && !code.is_empty() {
                 s["codeSessionId"] = json!(code);
             }
-            if !cwd.is_empty() {
+            if !cwd.is_empty() && (s["cwd"] != cwd.as_str() || s["root"].is_null()) {
+                // The project is the repository (worktrees grouped under it).
+                let (root, worktree) = locate(&cwd);
                 s["cwd"] = json!(cwd);
-                s["project"] = json!(project_name(&cwd));
+                s["root"] = json!(root);
+                s["project"] = json!(project_name(&root));
+                s["worktree"] = json!(worktree.map(|w| clean(&w, PROJECT_MAX)));
             }
             s["last"] = json!(now_ms);
             s["state"] = json!(if event == "UserPromptSubmit" { "working" } else { "idle" });
@@ -680,6 +722,35 @@ mod tests {
         list.record(&json!({"event": "Stop", "desktopId": id, "title": "Two"}), 2).unwrap();
         list.record(&json!({"event": "Stop", "desktopId": id}), 3).unwrap();
         assert_eq!(list.list(3)[0]["title"], "Two");
+    }
+
+    /// The session tree comes from folders: a worktree (under `.claude\worktrees`, or anywhere with a `.git`
+    /// file pointing into `<repo>\.git\worktrees`) belongs to its repository; a subfolder to the nearest `.git`.
+    #[test]
+    fn worktree_sessions_belong_to_their_repository() {
+        let base = temp("tree");
+        let repo = base.join("UnifiedControl");
+        std::fs::create_dir_all(repo.join(".git").join("worktrees").join("wt2")).unwrap();
+        std::fs::create_dir_all(repo.join("src-tauri")).unwrap();
+        let wt1 = repo.join(".claude").join("worktrees").join("wt1").join("src-tauri");
+        std::fs::create_dir_all(&wt1).unwrap();
+        let wt2 = base.join("uc-worktrees").join("wt2");
+        std::fs::create_dir_all(wt2.join("docs")).unwrap();
+        std::fs::write(wt2.join(".git"), format!("gitdir: {}/.git/worktrees/wt2\n", repo.to_string_lossy().replace('\\', "/"))).unwrap();
+        let r = |p: &Path| locate(&p.to_string_lossy());
+        let root = repo.to_string_lossy().into_owned();
+        assert_eq!(r(&repo), (root.clone(), None), "the main checkout");
+        assert_eq!(r(&repo.join("src-tauri")), (root.clone(), None), "a subfolder");
+        assert_eq!(r(&wt1), (root.clone(), Some("wt1".into())), ".claude worktree");
+        let (other, name) = r(&wt2.join("docs"));
+        assert_eq!((other.replace('/', "\\").to_lowercase(), name), (root.to_lowercase(), Some("wt2".into())), "a worktree elsewhere");
+        assert_eq!(r(&base.join("plain")).1, None, "no repository: its own folder");
+        // Recorded sessions carry the repository as their project.
+        let list = Sessions::load(base.join("claude-sessions.json"));
+        let id = "local_0123abcd-0000-4000-8000-00000000abcd";
+        list.record(&json!({"event": "Stop", "desktopId": id, "cwd": wt1.to_string_lossy()}), 1).unwrap();
+        let s = &list.list(1)[0];
+        assert_eq!((s["project"].as_str(), s["worktree"].as_str()), (Some("UnifiedControl"), Some("wt1")));
     }
 
     #[test]
