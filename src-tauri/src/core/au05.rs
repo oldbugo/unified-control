@@ -957,8 +957,26 @@ impl MenuCtl {
             *me.last.lock_or_recover() = Some(note);
             if result.is_ok() && then != "none" {
                 if let Some(e) = hotkey::entry(&then) {
-                    std::thread::sleep(Duration::from_millis(1200));
-                    me.run(Action::Entry(e), None, false);
+                    // Wait (at most 1.5 s) until Claude is in front with the session; the action itself then
+                    // focuses Claude's message box first (or presses nothing).
+                    let claude = hotkey::app("claude");
+                    let desk = me.desktop.lock_or_recover().clone().and_then(|d| d.upgrade());
+                    let end = Instant::now() + Duration::from_millis(1500);
+                    let shown = loop {
+                        let front = matches!((&desk, claude), (Some(d), Some(a)) if d.is_foreground(a));
+                        if front || Instant::now() >= end {
+                            break front;
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    };
+                    if shown {
+                        std::thread::sleep(Duration::from_millis(150));
+                        me.run(Action::Entry(e), None, false);
+                    } else {
+                        let note = "Claude did not show the session in time: nothing pressed".to_string();
+                        me.log.line(&format!("menu: {note}"));
+                        *me.last.lock_or_recover() = Some(note);
+                    }
                 }
             }
         });
@@ -995,6 +1013,14 @@ impl MenuCtl {
         }
         let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
         let name = key.control().name();
+        // K1 on a highlighted Claude session (or project): dictate into it, with K1's own kind of dictation.
+        if open && key == KeyId::K1 && menu::role(&settings["menuControls"], "k1") == "none" {
+            let then = if settings["actions"]["k1"]["kind"] == "claudeDictateSend" { "claudeDictateSend" } else { "claudeDictation" };
+            let shown = self.shown_menu(&settings);
+            if self.state.lock_or_recover().highlighted_session(&shown).is_some() {
+                return self.input(Input::Dictate(then.into()), name);
+            }
+        }
         // While the menu is open, a control with a menu role does only that (its normal action waits).
         if open {
             match menu::role(&settings["menuControls"], settings_key(key)) {
@@ -3330,6 +3356,32 @@ mod tests {
         assert_eq!(s["menu"][0]["label"], "B");
         apply_patch(&mut s, &json!({"profileEdit": {"op": "add", "name": "Work"}})).unwrap();
         assert_eq!(menu_of(&s, "work"), "B", "a new profile starts with a copy of the current menu");
+    }
+
+    /// K1 on a highlighted Claude session in the menu: Claude opens the session, and once it is in front the
+    /// dictation runs there (through the message box guard). The menu closes.
+    #[test]
+    fn k1_dictates_into_the_highlighted_claude_session() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        let id = "local_0123abcd-0000-4000-8000-000000000042";
+        let list = vec![json!({"desktopId": id, "root": "C:\\UC", "project": "UC", "worktree": null, "title": "Main", "state": "idle", "last": now_ms()})];
+        au.set_sessions(Arc::new(move || (list.clone(), true)));
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        desk.claude_in_front.store(true, Ordering::SeqCst);
+        desk.press(hotkey::VK_F20); // open
+        au.menu_input("next", None).unwrap();
+        au.menu_input("next", None).unwrap(); // Claude sessions (third entry of the default menu)
+        desk.press(hotkey::VK_F21); // K2: into Claude sessions
+        desk.press(hotkey::VK_F20); // K1 on the project: dictate into its main session
+        assert_eq!(au.status()["menu"]["view"]["open"], false);
+        let end = Instant::now() + Duration::from_secs(5);
+        while !desk.ran.lock_or_recover().iter().any(|r| r == "press Ctrl + D") && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let ran = desk.ran.lock_or_recover().clone();
+        assert_eq!(ran, vec![format!("open claude://claude.ai/epitaxy/{id}"), "focus claude.exe".into(), "message box claude.exe".into(), "press Ctrl + D".into()]);
+        au.shutdown();
     }
 
     /// While the menu is open: K2 selects, K3 goes back (closes at the top), the knob press closes without

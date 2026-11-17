@@ -15,7 +15,7 @@ export function render(v){
   $('qm-rows').innerHTML=rows.length?rows.map((r,i)=>{
     const detail=r.type==='submenu'?'›':r.current?'current':r.detail||'';
     return `<li class="qm-row" role="option" data-index="${i}" data-type="${esc(r.type)}" data-current="${r.current?'true':'false'}" aria-selected="${i===v.highlight}">
-      <span class="qm-label">${r.type==='back'?'‹ ':r.type==='close'?'× ':''}${esc(r.label)}</span><span class="qm-detail">${esc(detail)}</span></li>`;
+      <span class="qm-label">${r.type==='back'?'‹ ':r.type==='close'?'× ':''}${r.working?'<span class="qm-dot" aria-label="working"></span>':''}${esc(r.label)}</span><span class="qm-detail">${esc(detail)}</span></li>`;
   }).join(''):'<li class="qm-empty">This menu is empty. Add entries on the Vibe Key page.</li>';
   $('qm-rows').querySelector('[aria-selected="true"]')?.scrollIntoView({block:'nearest'});
   const foot=$('qm-foot');

@@ -16,4 +16,5 @@ html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(-
 .qm-row[data-current="true"] .qm-detail { color: var(--ok); }
 .qm-foot { padding: var(--s2) var(--s3); font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); border-top: 1px solid var(--border); }
 .qm-foot.note { color: var(--warn); }
+.qm-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: middle; }
 .qm-empty { padding: var(--s3); color: var(--text-muted); }
