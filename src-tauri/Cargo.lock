@@ -4059,6 +4059,7 @@ dependencies = [
  "tempfile",
  "ulanzi_au05",
  "ulanzi_dock",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

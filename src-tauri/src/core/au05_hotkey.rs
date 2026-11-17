@@ -52,6 +52,8 @@ pub enum Effect {
     Media(&'static str),
     /// Follows the target app (quick menu): the Claude entry or the ChatGPT entry.
     Target(&'static str, &'static str),
+    /// Claude "Dictate & send": decided from whether Claude is capturing audio (see [`dictate_send`]).
+    DictateSend,
 }
 
 /// One action in the catalogue. Data only: add apps and actions here.
@@ -79,7 +81,7 @@ const fn e(
 ) -> Entry {
     Entry { id, group, label, app, effect, status, note }
 }
-use Effect::{Keys, Media, Target};
+use Effect::{DictateSend, Keys, Media, Target};
 const CL: Option<&str> = Some("claude");
 const GPT: Option<&str> = Some("chatgpt");
 
@@ -91,6 +93,7 @@ const GPT: Option<&str> = Some("chatgpt");
 pub const CATALOGUE: &[Entry] = &[
     e("claudeDictation", "Claude", "Start dictation", CL, Keys("Ctrl + D"), "verified", "Checked on this PC"),
     e("claudeSend", "Claude", "Send message", CL, Keys("Enter"), "verified", "Claude Code docs"),
+    e("claudeDictateSend", "Claude", "Dictate & send", CL, DictateSend, "unverified", "New: first press starts dictation, the next stops it and sends; it checks Claude's microphone each time"),
     e("claudeNewSession", "Claude", "New session", CL, Keys("Ctrl + N"), "unverified", "Inferred from the macOS list"),
     e("claudeNextSession", "Claude", "Next session", CL, Keys("Ctrl + Tab"), "unverified", "Inferred from the macOS list"),
     e("claudePrevSession", "Claude", "Previous session", CL, Keys("Ctrl + Shift + Tab"), "unverified", "Inferred from the macOS list"),
@@ -141,7 +144,7 @@ pub fn catalogue_json() -> serde_json::Value {
     serde_json::json!({
         "actions": CATALOGUE.iter().map(|e| serde_json::json!({
             "id": e.id, "group": e.group, "label": e.label, "status": e.status, "note": e.note,
-            "keys": match e.effect { Keys(k) => k, Media(m) => m, Target(..) => "Follows the target app" },
+            "keys": match e.effect { Keys(k) => k, Media(m) => m, Target(..) => "Follows the target app", DictateSend => "Ctrl + D, then Enter" },
         })).collect::<Vec<_>>(),
         "apps": APPS.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "verified": a.verified})).collect::<Vec<_>>(),
     })
@@ -194,13 +197,13 @@ impl Action {
         let target = |a: Option<&'static App>| a.map(|a| (a.exe, a.title));
         match self {
             Action::Nothing | Action::QuickMenu => None,
-            Action::Entry(Entry { effect: Target(..), .. }) => None,
+            Action::Entry(Entry { effect: Target(..) | DictateSend, .. }) => None,
             Action::Entry(e) => Some((
                 target(e.app.and_then(app)),
                 match e.effect {
                     Keys(k) => PendingAction { kind: "hotkey".into(), value: k.into() },
                     Media(m) => PendingAction { kind: "media".into(), value: m.into() },
-                    Target(..) => unreachable!("matched above"),
+                    Target(..) | DictateSend => unreachable!("matched above"),
                 },
             )),
             Action::Custom { keys, app } => {
@@ -238,6 +241,74 @@ pub trait Desktop: Send + Sync {
     fn scroll(&self, notches: i32) -> Result<(), String>;
     /// Open a Claude session link (`claude://claude.ai/epitaxy/local_<uuid>`, checked by the caller).
     fn open_link(&self, url: &str) -> Result<(), String>;
+    /// Does a process with this exe name (any of its processes) have an active audio capture session?
+    fn capture_active(&self, exe: &str) -> Result<bool, String>;
+    /// Bring the app's window to the front.
+    fn bring_forward(&self, app: &'static App) -> Result<(), String>;
+    /// Is the app's window in front now?
+    fn is_foreground(&self, app: &'static App) -> bool;
+    /// Press a key combination in the window in front ("Ctrl + D", "Enter").
+    fn press(&self, keys: &str) -> Result<(), String>;
+}
+
+/// Timing for [`dictate_send`].
+#[derive(Clone, Copy, Debug)]
+pub struct DictateTiming {
+    /// How long a start or stop may take to show in the capture state.
+    pub confirm: std::time::Duration,
+    /// After capture ends: time for the transcription to land in the message box.
+    pub settle: std::time::Duration,
+    pub poll: std::time::Duration,
+}
+impl Default for DictateTiming {
+    fn default() -> Self {
+        use std::time::Duration;
+        Self { confirm: Duration::from_millis(1500), settle: Duration::from_millis(800), poll: Duration::from_millis(50) }
+    }
+}
+
+fn wait_for(d: &dyn Desktop, exe: &str, want: bool, t: DictateTiming) -> Result<bool, String> {
+    let end = std::time::Instant::now() + t.confirm;
+    loop {
+        if d.capture_active(exe)? == want {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= end {
+            return Ok(false);
+        }
+        std::thread::sleep(t.poll);
+    }
+}
+
+/// Claude "Dictate & send", decided from real state, never from counting presses (user request 2026-11-17):
+/// - not dictating (no active capture session of claude.exe): bring Claude forward, Ctrl + D, and confirm the
+///   capture started; if not, report "Dictation didn't start" (no second Ctrl + D);
+/// - dictating: bring Claude forward, Ctrl + D, wait until the capture stops and the transcription settles,
+///   check Claude is still in front, then Enter. If the capture did not stop or Claude is not in front, no
+///   Enter: "Not sent".
+/// Returns what happened (for the log; no typed text) or why nothing more was done.
+pub fn dictate_send(d: &dyn Desktop, t: DictateTiming) -> Result<String, String> {
+    let claude = app("claude").ok_or("Claude is not known")?;
+    let dictating = d.capture_active(claude.exe)?;
+    d.bring_forward(claude).map_err(|e| format!("Nothing done: {e}"))?;
+    if !dictating {
+        d.press("Ctrl + D")?;
+        return if wait_for(d, claude.exe, true, t)? {
+            Ok("not dictating: Ctrl + D, dictation started".into())
+        } else {
+            Err("Dictation didn't start (Ctrl + D sent once, no microphone use seen)".into())
+        };
+    }
+    d.press("Ctrl + D")?;
+    if !wait_for(d, claude.exe, false, t)? {
+        return Err("Not sent: dictation did not stop".into());
+    }
+    std::thread::sleep(t.settle);
+    if !d.is_foreground(claude) {
+        return Err("Not sent: Claude is no longer in front".into());
+    }
+    d.press("Enter")?;
+    Ok("dictating: Ctrl + D, dictation stopped, Enter sent".into())
 }
 
 // ---------- fake ----------
@@ -252,6 +323,13 @@ pub struct FakeDesktop {
     pub ran: Mutex<Vec<String>>,
     /// Tests: `run` panics, to check that a crash in an action is contained.
     pub crash: std::sync::atomic::AtomicBool,
+    /// Claude's microphone capture (Dictate & send): on or off, whether Ctrl + D toggles it, whether Claude
+    /// can be brought forward, and whether it loses the front after Ctrl + D.
+    pub capture: std::sync::atomic::AtomicBool,
+    pub ctrl_d_ignored: std::sync::atomic::AtomicBool,
+    pub cannot_focus: std::sync::atomic::AtomicBool,
+    pub loses_focus: std::sync::atomic::AtomicBool,
+    pub claude_in_front: std::sync::atomic::AtomicBool,
 }
 impl FakeDesktop {
     pub fn claimed(&self) -> Vec<u16> {
@@ -309,12 +387,42 @@ impl Desktop for FakeDesktop {
         self.ran.lock_or_recover().push(format!("open {url}"));
         Ok(())
     }
+    fn capture_active(&self, exe: &str) -> Result<bool, String> {
+        Ok(exe == "claude.exe" && self.capture.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn bring_forward(&self, app: &'static App) -> Result<(), String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.cannot_focus.load(SeqCst) {
+            return Err(format!("{} could not be brought to the front", app.title));
+        }
+        self.claude_in_front.store(true, SeqCst);
+        self.ran.lock_or_recover().push(format!("focus {}", app.exe));
+        Ok(())
+    }
+    fn is_foreground(&self, _app: &'static App) -> bool {
+        self.claude_in_front.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn press(&self, keys: &str) -> Result<(), String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.ran.lock_or_recover().push(format!("press {keys}"));
+        if keys == "Ctrl + D" {
+            if !self.ctrl_d_ignored.load(SeqCst) {
+                self.capture.fetch_xor(true, SeqCst);
+            }
+            if self.loses_focus.load(SeqCst) {
+                self.claude_in_front.store(false, SeqCst);
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------- Windows ----------
 
 #[cfg(windows)]
 pub use native::WindowsDesktop;
+#[cfg(windows)]
+pub(crate) use native::process_exe;
 
 #[cfg(windows)]
 mod native {
@@ -466,6 +574,20 @@ mod native {
             let sent = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) };
             if sent == 1 { Ok(()) } else { Err("Windows did not accept the scroll".into()) }
         }
+        fn capture_active(&self, exe: &str) -> Result<bool, String> {
+            super::super::audio_capture::capture_active(exe)
+        }
+        fn bring_forward(&self, app: &'static App) -> Result<(), String> {
+            unsafe { bring_forward(app.exe, app.title) }
+        }
+        fn is_foreground(&self, app: &'static App) -> bool {
+            let hwnd = unsafe { GetForegroundWindow() };
+            !hwnd.is_null() && window_exe(hwnd).is_some_and(|e| e == app.exe)
+        }
+        fn press(&self, keys: &str) -> Result<(), String> {
+            use super::super::actions::ActionSink;
+            self.actions.lock_or_recover().execute(&PendingAction { kind: "hotkey".into(), value: keys.into() })
+        }
         fn open_link(&self, url: &str) -> Result<(), String> {
             use windows_sys::Win32::UI::Shell::ShellExecuteW;
             use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -516,6 +638,24 @@ mod native {
             }
         }
         1
+    }
+
+    /// The exe file name (lower case) of a window's process.
+    fn window_exe(hwnd: HWND) -> Option<String> {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        process_exe(pid)
+    }
+    pub(crate) fn process_exe(pid: u32) -> Option<String> {
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return None;
+        }
+        let mut path = [0u16; 520];
+        let mut len = path.len() as u32;
+        let ok = unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut len) } != 0;
+        unsafe { CloseHandle(process) };
+        ok.then(|| String::from_utf16_lossy(&path[..len as usize]).to_ascii_lowercase().rsplit(['\\', '/']).next().unwrap_or("").to_string())
     }
 
     /// Tap Alt, unless Alt is already down. Returns false when the input was not accepted.
@@ -616,13 +756,49 @@ mod tests {
         assert_eq!(target.clone().resolve("claude"), Action::Entry(entry("claudeDictation").unwrap()));
         assert_eq!(target.resolve("chatgpt"), Action::Entry(entry("chatgptDictation").unwrap()));
         // Every catalogue entry is a valid plan for the reviewed senders.
-        for e in CATALOGUE {
+        for e in CATALOGUE.iter().filter(|e| e.effect != DictateSend) {
             let (_, send) = Action::Entry(e).resolve("chatgpt").plan().unwrap();
             assert!(Action::Entry(e).resolve("claude").plan().is_some(), "{}", e.id);
             assert!(super::super::actions::plan_action(&send).is_ok(), "{}", e.id);
             assert!(e.app.is_none_or(|a| app(a).is_some()), "{}", e.id);
         }
     }
+    /// Dictate & send decides from the capture state: start, stop and send, a missed start (no second Ctrl + D),
+    /// a stop that does not end the capture, and Claude losing the front: no Enter in the last three.
+    #[test]
+    fn dictate_and_send_follows_the_real_capture_state() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use std::time::Duration;
+        let t = DictateTiming { confirm: Duration::from_millis(60), settle: Duration::from_millis(5), poll: Duration::from_millis(5) };
+        let run = |setup: &dyn Fn(&FakeDesktop)| {
+            let d = FakeDesktop::default();
+            setup(&d);
+            let r = dictate_send(&d, t);
+            let ran = d.ran.lock_or_recover().clone();
+            (r, ran, d.capture.load(SeqCst))
+        };
+        let (r, ran, cap) = run(&|_| {});
+        assert!(r.unwrap().contains("dictation started"));
+        assert_eq!(ran, vec!["focus claude.exe", "press Ctrl + D"]);
+        assert!(cap);
+        let (r, ran, cap) = run(&|d| d.capture.store(true, SeqCst));
+        assert!(r.unwrap().contains("Enter sent"));
+        assert_eq!(ran, vec!["focus claude.exe", "press Ctrl + D", "press Enter"]);
+        assert!(!cap);
+        let (r, ran, _) = run(&|d| d.ctrl_d_ignored.store(true, SeqCst));
+        assert!(r.unwrap_err().contains("didn't start"));
+        assert_eq!(ran.iter().filter(|x| *x == "press Ctrl + D").count(), 1, "never a blind second Ctrl + D");
+        let (r, ran, _) = run(&|d| { d.capture.store(true, SeqCst); d.ctrl_d_ignored.store(true, SeqCst); });
+        assert!(r.unwrap_err().starts_with("Not sent"));
+        assert!(!ran.contains(&"press Enter".to_string()));
+        let (r, ran, _) = run(&|d| { d.capture.store(true, SeqCst); d.loses_focus.store(true, SeqCst); });
+        assert!(r.unwrap_err().contains("no longer in front"));
+        assert!(!ran.contains(&"press Enter".to_string()));
+        let (r, ran, _) = run(&|d| d.cannot_focus.store(true, SeqCst));
+        assert!(r.unwrap_err().starts_with("Nothing done"));
+        assert!(ran.is_empty(), "no key when Claude cannot come forward");
+    }
+
     #[test]
     fn the_fake_delivers_only_claimed_keys_and_records_actions() {
         let d = FakeDesktop::default();

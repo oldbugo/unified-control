@@ -144,6 +144,34 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 - Colours come from tokens only (`--hue-1..6`, `--hue-claude`, `--hue-chatgpt`, `--hue-system` added); UC is
   dark only, so a later light theme needs only new token values.
 
+## Claude "Dictate & send" (user request 2026-11-17; marked New until confirmed)
+
+A Claude action next to plain "Dictation". It never counts presses: each press decides from Claude's real
+microphone state (`au05_hotkey::dictate_send`).
+
+- **Dictating?** Windows Core Audio (`core/audio_capture.rs`): an Active capture session on any active
+  recording device whose process is `claude.exe` (any of its processes). Read only. UI Automation was not
+  added (the capture state proved enough in tests; it can be a later tiebreaker).
+- **Not dictating:** bring Claude forward, Ctrl + D, then confirm within 1.5 s that the capture started. If
+  not: "Dictation didn't start" (logged, the key flashes red, a short notice). Never a second Ctrl + D.
+- **Dictating:** bring Claude forward, Ctrl + D, wait up to 1.5 s for the capture to stop, then 0.8 s for the
+  transcription to settle, check Claude is still in front, then Enter. If the capture did not stop or
+  Claude is no longer in front: no Enter, "Not sent".
+- **Guards:** a second press within 400 ms is ignored; one run at a time (a press while it runs is ignored);
+  if Claude cannot come forward, nothing is pressed. Each decision is logged (state seen, keys sent, result;
+  no typed text).
+- The fake desktop models Claude's capture (start, stop and send, missed start, stop that does not end,
+  focus lost: one test).
+
+## Battery (user request 2026-11-17)
+
+- Above the drawing: a battery icon with its fill level and the percentage; warning colour at 15 % or less;
+  "Full" at 100 %; "Asleep — last known 30 %" while the key sleeps; on hover: volts, the time of the last
+  report and the raw status flags. The Home card's status chip shows it too ("Connected · 30 %").
+- The periodic status message (class 0x7B) carries millivolts, percent and a flags byte (0x08 seen so far,
+  not understood). Charging is not shown until a flag bit is confirmed; every change of the flags is logged
+  ("battery status flags 0x08 -> ...") so plugging the charger in on the real key can map it.
+
 ## Action palette (user request 2026-11-17: drag an action onto the key)
 
 - The action cards are a persistent "Actions" palette beside the drawing (below it on narrow windows). It can
@@ -324,6 +352,11 @@ changes, and menu edits (entry count only); knob turn changes; Claude sessions c
     the action runs once, and no F19 or Backspace reaches the app. Drag the menu to another monitor, close it,
     open it again: it comes back there. Check a monitor with a different scale. Wait 8 s: it closes.
 13. Quick menu profiles: switch to ChatGPT and Media and back; confirm K3 still opens the menu.
+16. Dictate & send on K1: press once (Claude comes forward, dictation starts), speak, press again (dictation
+    stops, the text is sent once). Press quickly twice: nothing odd. With Claude closed: nothing is pressed.
+    With the microphone muted in Windows: "Dictation didn't start". Watch the Vibe Key log lines.
+17. Battery: plug in the charger, then unplug; note the "battery status flags" lines in the log to map
+    charging and full.
 14. Knob turn: choose Unified Control, Scroll. Both directions are set (knob left is the first real F24 set).
     Check one notch per click in both directions with the menu closed, one menu step per click with it open,
     no scrolling behind the menu, then Volume. Then Factory scroll: confirm the n 0 write restores the

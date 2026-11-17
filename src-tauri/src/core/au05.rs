@@ -381,6 +381,11 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
 #[derive(Clone, Debug, Default)]
 struct Known {
     battery: Option<(u16, u8)>,
+    /// The status message's flags byte (class 0x7B, byte 4). Its bits are not understood yet; changes are
+    /// logged so charging and full can be mapped on the real key.
+    battery_flags: Option<u8>,
+    /// When the battery was last reported (ms since 1970).
+    battery_at: Option<u64>,
     standby_s: Option<u32>,
     sleep_s: Option<u32>,
     light: Option<LightState>,
@@ -489,6 +494,9 @@ pub struct MenuCtl {
     opened: AtomicU64,
     /// The result of the last menu choice (shown on the page).
     last: Arc<Mutex<Option<String>>>,
+    /// Dictate & send: running now, and when it last started (debounce).
+    dictate_busy: Arc<AtomicBool>,
+    dictate_last: Mutex<Option<Instant>>,
     sessions: Mutex<Option<SessionsFn>>,
 }
 
@@ -606,6 +614,21 @@ impl MenuCtl {
     fn run(&self, action: Action, key: Option<KeyId>, from_menu: bool) {
         let target = self.settings()["target"].as_str().unwrap_or("claude").to_string();
         let action = action.resolve(&target);
+        let dictate = matches!(action, Action::Entry(e) if e.effect == hotkey::Effect::DictateSend);
+        // Dictate & send: one at a time, and a second press within 400 ms is ignored (debounce).
+        if dictate {
+            let mut last = self.dictate_last.lock_or_recover();
+            if last.is_some_and(|t| t.elapsed() < Duration::from_millis(400)) {
+                self.log.line("dictate & send: second press within 400 ms ignored");
+                return;
+            }
+            if self.dictate_busy.swap(true, Ordering::SeqCst) {
+                self.log.line("dictate & send: still running, press ignored");
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        let busy = self.dictate_busy.clone();
         let desk = self.desktop.lock_or_recover().clone();
         let (status, log, last) = (self.status.clone(), self.log.clone(), self.last.clone());
         let _ = std::thread::Builder::new().name("uc-au05-action".into()).spawn(move || {
@@ -616,8 +639,21 @@ impl MenuCtl {
                 .and_then(|d| d.upgrade())
                 .ok_or_else(|| "Unified Control is closing".to_string())
                 .and_then(|d| {
-                    super::sync::guarded("Vibe Key action", || d.run(&action)).unwrap_or_else(|| Err("The action crashed".into()))
+                    super::sync::guarded("Vibe Key action", || {
+                        if dictate {
+                            // Decided from Claude's real microphone state; logs what was seen and sent.
+                            hotkey::dictate_send(&*d, hotkey::DictateTiming::default()).map(|seen| {
+                                log.line(&format!("dictate & send: {seen}"));
+                            })
+                        } else {
+                            d.run(&action)
+                        }
+                    })
+                    .unwrap_or_else(|| Err("The action crashed".into()))
                 });
+            if dictate {
+                busy.store(false, Ordering::SeqCst);
+            }
             let note = match result {
                 Ok(()) => format!("ran {}", action.label()),
                 Err(e) => format!("{}: {e}", action.label()),
@@ -803,6 +839,8 @@ impl Au05 {
             opened: AtomicU64::new(0),
             last: Arc::new(Mutex::new(None)),
             sessions: Mutex::new(None),
+            dictate_busy: Arc::new(AtomicBool::new(false)),
+            dictate_last: Mutex::new(None),
         });
         let au = Arc::new(Self {
             fake: fake.then(FakeHandle::default),
@@ -1159,7 +1197,9 @@ impl Au05 {
             "fake": fake,
             "state": s.state,
             "message": s.message,
-            "battery": k.battery.map(|(mv, pct)| json!({"millivolts": mv, "percent": pct})),
+            // Charging is not known yet (the flag bits are not mapped): null until verified on the real key.
+            "battery": k.battery.map(|(mv, pct)| json!({"millivolts": mv, "percent": pct, "flags": k.battery_flags,
+                "at": k.battery_at, "charging": Value::Null, "full": pct >= 100})),
             "standbyS": k.standby_s,
             "sleepS": k.sleep_s,
             "sleepChoices": SleepTime::CHOICES,
@@ -1239,6 +1279,12 @@ impl Au05 {
             "stallWrites" => fake.lock().stall_writes = v["value"].as_bool().unwrap_or(false),
             "dropReplies" => fake.lock().drop_replies = v["value"].as_u64().unwrap_or(0).min(10) as u32,
             "battery" => fake.lock().percent = v["value"].as_u64().unwrap_or(30).min(100) as u8,
+            // Dictate & send on the fake desktop: Claude capturing or not, and Ctrl + D doing nothing.
+            "claudeCapture" | "ctrlDIgnored" => {
+                let d = self.fake_desktop.as_ref().ok_or("No fake desktop")?;
+                let flag = if v["op"] == "claudeCapture" { &d.capture } else { &d.ctrl_d_ignored };
+                flag.store(v["value"].as_bool().unwrap_or(false), Ordering::SeqCst);
+            }
             "actionCrash" => {
                 let d = self.fake_desktop.as_ref().ok_or("No fake desktop")?;
                 d.crash.store(v["value"].as_bool().unwrap_or(false), Ordering::SeqCst);
@@ -1605,7 +1651,16 @@ impl Worker {
     fn handle(&self, o: Output, tickets: &mut HashMap<u64, Purpose>) {
         match o {
             Output::Status(st) => {
-                self.status.lock_or_recover().known.battery = Some((st.millivolts, st.percent));
+                let mut s = self.status.lock_or_recover();
+                let before = s.known.battery_flags;
+                s.known.battery = Some((st.millivolts, st.percent));
+                s.known.battery_flags = Some(st.flags);
+                s.known.battery_at = Some(now_ms());
+                drop(s);
+                if before != Some(st.flags) {
+                    let was = before.map(|f| format!("{f:#04x}")).unwrap_or_else(|| "none".into());
+                    self.log.line(&format!("battery status flags {was} -> {:#04x} at {} % ({} mV)", st.flags, st.percent, st.millivolts));
+                }
             }
             // Private events are shown (K1 and the knob turns send them). Actions use hotkeys; knob turns
             // also move an open quick menu (unless the knob is set to type F23/F24 instead).
@@ -1671,7 +1726,10 @@ impl Worker {
         let mut s = self.status.lock_or_recover();
         let k = &mut s.known;
         match request {
-            Request::GetBattery => k.battery = Some(protocol::battery(r)),
+            Request::GetBattery => {
+                k.battery = Some(protocol::battery(r));
+                k.battery_at = Some(now_ms());
+            }
             Request::GetStandbyTime | Request::SetStandbyTime(_) => k.standby_s = Some(protocol::seconds(r)),
             Request::GetSleepTime | Request::SetSleepTime(_) => k.sleep_s = Some(protocol::seconds(r)),
             Request::GetLight => k.light = Some(protocol::light(r)),
