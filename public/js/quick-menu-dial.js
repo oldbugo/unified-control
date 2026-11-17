@@ -5,11 +5,15 @@
 
 /** At most this many segments per ring, Close/Back included; longer lists become a moving window. */
 export const MAX_SLOTS=8;
-/** How far the highlighted segment is pushed out (px). */
+/** How far the highlighted segment grows outward (px). */
 export const PUSH=10;
-/** The taper (the end cue, user feedback 2026-11-17): Close/Back reaches this much further out than the band,
- * the next segments step down to the band, and the last one sits this much inside it ("just a notch"). */
-export const TAPER_FIRST=12, TAPER_NEXT=6, TAPER_LAST=-9;
+/** The spiral (the end cue, user feedback 2026-11-17: "like a nautilus shell"): the outer edge is one smooth
+ * spiral. It starts this far outside the band at Close/Back's left edge, falls evenly clockwise and ends this
+ * far inside it at the last segment's right edge, so every segment lines up with the next and the step back up
+ * to Close/Back at 12 o'clock marks the end. */
+export const TAPER_FIRST=12, TAPER_LAST=-36;
+/** Half the gap between segments (px): the gaps have parallel sides, the same width from the hole to the rim. */
+export const HALF_GAP=2.5;
 /** The label font: from the normal size down to a readable minimum (px). */
 export const FONT_MAX=15, FONT_MIN=11;
 /** A single word too long for its segment may go this small before it is split with a hyphen. */
@@ -43,11 +47,17 @@ export function slotAngles(n){
   return Array.from({length:Math.max(n,1)},(_,i)=>({start:i*step-step/2,mid:i*step,end:i*step+step/2}));
 }
 
-/** The taper: how far each visible slot's outer edge sits from the band's outer radius. Slot 0 is the
- * largest, the next ones step down evenly to the band, the last one is a notch inside it. */
+/** How far the spiral's outer edge sits from the band's outer radius at angle `a` (degrees), for n slots. */
+export function spiralAt(n,a){
+  if(n<=1)return TAPER_FIRST;
+  const start=-180/n;
+  const t=Math.min(Math.max((a-start)/360,0),1);
+  return TAPER_FIRST+(TAPER_LAST-TAPER_FIRST)*t;
+}
+/** The spiral offset at each visible slot's middle (largest at Close/Back, smaller every slot). */
 export function taper(n){
   if(n<=1)return [TAPER_FIRST];
-  return Array.from({length:n},(_,i)=>i===0?TAPER_FIRST:i===n-1?TAPER_LAST:n<=3?0:TAPER_NEXT*(1-(i-1)/(n-3)));
+  return slotAngles(n).map(a=>spiralAt(n,a.mid));
 }
 /** The subtle shading toward the end of the list: 0 at the start, 1 at the last slot. */
 export function shade(n,i){return n<=1?0:i/(n-1);}
@@ -98,6 +108,23 @@ export function segmentPath(r0,r1,a0,a1){
   const large=a1-a0>180?1:0;
   const [x0,y0]=point(r1,a0),[x1,y1]=point(r1,a1),[x2,y2]=point(r0,a1),[x3,y3]=point(r0,a0);
   return `M ${f(x0)} ${f(y0)} A ${r1} ${r1} 0 ${large} 1 ${f(x1)} ${f(y1)} L ${f(x2)} ${f(y2)} A ${r0} ${r0} 0 ${large} 0 ${f(x3)} ${f(y3)} Z`;
+}
+
+const deg=x=>x*180/Math.PI;
+/** The angle a parallel-sided gap takes at radius r (degrees). */
+export function gapAngle(r,half=HALF_GAP){return deg(Math.asin(Math.min(half/Math.max(r,half),1)));}
+/** An SVG path for a slot of the spiral: inner edge a circle at r0, outer edge `outer(a)` (a radius for each
+ * angle), between slot angles a0 < a1, with parallel-sided gaps of 2 × `half` px (none for a single slot). */
+export function spiralPath(r0,outer,a0,a1,half=HALF_GAP){
+  if(a1-a0>=359.99)return segmentPath(r0,outer(a0),a0,a1);
+  const b0=a0+gapAngle(outer(a0),half),b1=a1-gapAngle(outer(a1),half);
+  const steps=Math.max(2,Math.ceil((b1-b0)/1.5));
+  const pts=[];
+  for(let i=0;i<=steps;i++){const a=b0+(b1-b0)*i/steps;pts.push(point(outer(a),a));}
+  const c0=a0+gapAngle(r0,half),c1=a1-gapAngle(r0,half);
+  const [x2,y2]=point(r0,c1),[x3,y3]=point(r0,c0);
+  const large=c1-c0>180?1:0;
+  return `M ${pts.map(([x,y])=>`${f(x)} ${f(y)}`).join(' L ')} L ${f(x2)} ${f(y2)} A ${r0} ${r0} 0 ${large} 0 ${f(x3)} ${f(y3)} Z`;
 }
 
 /** Whether an upright box (centre cx, cy; w x h) lies inside the segment {r0, r1, a0, a1}, `margin` px from

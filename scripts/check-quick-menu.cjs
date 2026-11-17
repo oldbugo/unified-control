@@ -63,7 +63,7 @@ const views={
       radii:[1,2,3,4].map(n=>d.ringRadii(n)),
       sizes:[1,2,3].map(n=>d.dialSize(n)),
       scale:[d.fitScale(3,682,778),d.fitScale(3,500,500)],
-      tapers:[2,3,4,8].map(n=>d.taper(n)),shades:[0,7].map(i=>d.shade(8,i)),
+      tapers:[2,3,4,8].map(n=>d.taper(n)),spiral:[d.spiralAt(4,-45),d.spiralAt(4,315),d.spiralAt(4,45)],gapPx:[60,225].map(r=>r*Math.sin(d.gapAngle(r)*Math.PI/180)),shades:[0,7].map(i=>d.shade(8,i)),
       fits:[d.boxFits(0,-140,60,20,{r0:60,r1:225,a0:-45,a1:45}),d.boxFits(0,-140,300,20,{r0:60,r1:225,a0:-45,a1:45}),d.boxFits(0,-62,20,10,{r0:60,r1:225,a0:-45,a1:45})],
       short:[d.shortForm('Unified Control: fix the Vibe Key reads',['Unified Control: dial','Unified Control: notes']),d.shortForm('Session 12 dock layout',['Session 1 vault','Session 2 wake'])],
     };
@@ -85,10 +85,14 @@ const views={
   assert.deepEqual(g.sizes,[{width:522,height:618},{width:580,height:676},{width:682,height:778}],'the same sizes as quick_menu.rs dial_size');
   assert.equal(g.scale[0],1);assert.ok(g.scale[1]<0.8,'scaled down in a small window');
   for(const t of g.tapers){
-    assert.equal(t[0],12,'Close/Back reaches furthest out');
-    for(let i=1;i<t.length;i++)assert.ok(t[i]<t[i-1]||(t[i]===t[i-1]&&i<t.length-1),`each segment a smidge smaller: ${t}`);
-    assert.ok(t.at(-1)<=t.at(-2)-6,`the last one a notch smaller: ${t}`);
+    assert.ok(t[0]<=12&&t[0]>t[1],'Close/Back reaches furthest out');
+    for(let i=1;i<t.length;i++)assert.ok(t[i]<t[i-1],`each segment a smidge smaller: ${t}`);
+    const steps=t.slice(1).map((x,i)=>t[i]-x);
+    assert.ok(Math.max(...steps)-Math.min(...steps)<1e-9,`one smooth spiral, the same step every slot: ${t}`);
   }
+  assert.deepEqual(g.spiral.slice(0,2),[12,-36],'the spiral starts outside the band at Close/Back and ends inside it');
+  assert.equal(g.spiral[2],12-48/4,'continuous: a segment edge sits where its neighbour ends');
+  for(const w of g.gapPx)assert.ok(Math.abs(w-2.5)<1e-9,'parallel gaps: the same width at the hole and at the rim');
   assert.deepEqual(g.shades,[0,1],'heavier toward the end');
   assert.deepEqual(g.fits,[true,false,false],'a box fits inside a segment, not past its sides or its inner edge');
   assert.deepEqual(g.short[0].kept.map(i=>g.short[0].words[i]),['Vibe','Key','reads'],'the shared project prefix and filler words go');
@@ -123,7 +127,7 @@ const views={
   };
   // The taper on the drawn ring: Close/Back furthest out, each next one a smidge smaller, the last a notch.
   const checkTaper=async name=>{
-    const o=await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] .qm-seg')].map(p=>Number(p.dataset.outer)));
+    const o=await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] .qm-seg:not([data-hl="true"])')].map(p=>Number(p.dataset.outer)));
     assert.ok(o.length>1,name);
     assert.equal(Math.max(...o),o[0],`${name}: Close/Back is the biggest (${o})`);
     assert.equal(Math.min(...o),o.at(-1),`${name}: the last is the smallest (${o})`);
@@ -153,7 +157,10 @@ const views={
   assert.equal(await page.locator('.qm-stop').count(),0,'no stick: the taper is the end cue');
   await checkTaper('top');
   assert.equal(await page.locator('.qm-slot[data-hl="true"]').getAttribute('data-row'),'2');
-  assert.notEqual(await page.locator('.qm-slot[data-hl="true"]').getAttribute('transform'),'translate(0.00 0.00)','pushed out');
+  assert.equal(await page.locator('.qm-slot[data-hl="true"]').getAttribute('transform'),'translate(0.00 0.00)','the highlight stays in line');
+  const grown=await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] .qm-seg')].map(p=>[p.dataset.hl==='true',Number(p.dataset.outer)]));
+  const hi=grown.findIndex(x=>x[0]);
+  assert.ok(grown[hi][1]>grown[hi-1][1],'the highlight grows outward past the one before it');
   const ink=await page.evaluate(()=>getComputedStyle(document.querySelector('.qm-label[data-hl="true"]')).fill);
   assert.match(ink,/rgb\(4, 18, 31\)/,`dark text on the accent (${ink})`);
   const topFit=await checkFit('top');

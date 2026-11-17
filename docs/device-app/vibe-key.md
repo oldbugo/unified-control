@@ -501,6 +501,12 @@ the middle ... a handlebar that we can drag it around."
   is 12 px past the band, the next ones step down to the band, the last one is 9 px inside it (`taper`); in
   long lists the taper is on the visible window, with the "more" fades. Subtle shading: up to 28 % darker
   toward the last segment. The 120 ms bump at both ends stays.
+- 0.38.0 (user 2026-11-17: "not lined up properly ... almost like a nautilus shell ... spiraling"): the taper
+  is one smooth spiral (`spiralAt`, `spiralPath`). The outer edge runs from 12 px past the band at Close/Back's
+  left edge to 36 px inside it at the last segment's right edge, linear in angle, so neighbouring segments meet
+  at the same radius and the only step is the seam at 12 o'clock. Gaps have parallel sides (2.5 px each side,
+  `gapAngle`). The highlight grows 10 px outward along the spiral instead of being pushed sideways, so its
+  sides stay in line; the bump is a tangential nudge only. Parent rings stay plain circles.
 
 ### Sending to a quiet key, 0.37.0 (real key 2026-11-17: a brightness change ended "Asleep" while the key was awake)
 

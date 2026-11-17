@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.38.0 — 2026-11-17
+
+The quick menu dial is one spiral now, like a nautilus shell. The outer edge
+falls smoothly clockwise from Close/Back, the largest, to the last entry, the
+smallest, so every segment lines up with the next. The step back up to
+Close/Back at the top marks the end of the list. The gaps between segments are
+the same width from the centre to the rim. The highlighted entry grows outward
+along the spiral instead of moving sideways, so it stays lined up with its
+neighbours.
+
 ## 0.37.0 — 2026-11-17
 
 Changes on the Vibe Key page now reach an awake key. Before, Unified Control
