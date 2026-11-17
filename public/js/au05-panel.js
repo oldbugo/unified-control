@@ -467,10 +467,19 @@ export class Au05Panel{
         ${profiles.map(p=>qmCard(`p:${p.id}`,IC.profile,p.name,`Switch to the profile ${p.name}`)).join('')}
         ${(m.targets||[]).map(t=>qmCard(`t:${t.id}`,IC.target,`Target ${t.name}`,`Target app: ${t.name}`)).join('')}
         ${qmCard('submenu',IC.folder,'Sub-menu','A menu inside the menu')}${qmCard('sessions',IC.sessions,'Claude sessions','The live list of Claude sessions')}</div></section>`)}</div>`:'';
-    const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2></div>
+    // What K2, K3 and the knob press do while the menu is open.
+    const ROLE={select:'Select',back:'Back',close:'Close',none:'Its own action'};
+    const ctl=m.controls||{};
+    const roleSel=(k,label)=>`<label class="au05-role"><span>${esc(label)}</span><select data-qm-role="${k}" aria-label="${esc(label)} while the menu is open"${native}>${Object.entries(ROLE).map(([v,t])=>opt(v,t,ctl[k]||'none')).join('')}</select></label>`;
+    const usesCodes=anyMenu?['k2','k3'].filter(k=>(ctl[k]||'none')!=='none'&&(s.actions?.[k]?.kind||'offline')==='offline').map(k=>k.toUpperCase()):[];
+    const controlsBox=`<div class="au05-menu-controls"><div class="au05-set-label">Menu controls (while the menu is open)</div>
+      <div class="au05-roles"><span class="au05-role"><span>Knob turn</span><span class="au05-muted">Move</span></span>${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</div>
+      <p class="au05-line">${usesCodes.length?`<strong>${usesCodes.join(' and ')} type ${usesCodes.length>1?'their':'its'} own code${usesCodes.length>1?'s':''} (${usesCodes.map(k=>k==='K2'?'F21':'F22').join(', ')}) while Unified Control runs</strong>, so the menu can use ${usesCodes.length>1?'them':'it'}; when the menu is closed, Unified Control types ${usesCodes.length>1?'their':'its'} usual keys. `:''}Their normal actions wait while the menu is open.</p></div>`;
+    const profileName=(profiles.find(p=>p.id===m.profile)||{}).name||'';
+    const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2>${profileName?`<span class="au05-muted">for the profile ${esc(profileName)}</span>`:''}</div>
       <div class="au05-box-actions"><button class="btn" type="button" data-qm-op="open"${live}>Open</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset</button></div></header>
-      <ul class="au05-menu-list" aria-label="Quick menu entries">${rows.join('')||'<li class="au05-line">Empty.</li>'}</ul>
-      <div class="au05-box-foot"><button class="btn" type="button" data-qm-op="add-top"${native}>${IC.plus} Add entry</button>${m.last?`<span class="au05-muted">Last: ${esc(m.last)}</span>`:''}</div>${picker}</section>`;
+      <ul class="au05-menu-list" aria-label="Quick menu entries"><li class="au05-menu-row au05-menu-fixed" style="--depth:0" title="Always the first entry; inside a sub-menu the first entry is Back"><span class="au05-card-icon">${IC.close}</span><span class="au05-fixed-label">Close</span><span class="au05-muted">Always first</span></li>${rows.join('')}</ul>
+      <div class="au05-box-foot"><button class="btn" type="button" data-qm-op="add-top"${native}>${IC.plus} Add entry</button>${m.last?`<span class="au05-muted">Last: ${esc(m.last)}</span>`:''}</div>${controlsBox}${picker}</section>`;
 
     // ---- Claude sessions ----
     const cs=s.claude||{},full=this.claudeFull||{};
@@ -478,7 +487,7 @@ export class Au05Panel{
     const csState=full.blocked?'bad':cs.connected?(full.hooks&&full.hooks!=='connected'?'warn':'ok'):'off';
     const csText=full.blocked?'Blocked by Claude settings':cs.connected?(full.hooks&&full.hooks!=='connected'?'Hooks missing: connect again':cs.lastEvent?`Connected · last event ${when(cs.lastEvent)}`:'Connected · no event yet'):'Not connected';
     const projects=[...new Set((cs.sessions||[]).map(x=>x.project||'Other'))];
-    const sessionChips=(cs.sessions||[]).length?`<div class="au05-session-groups">${projects.map(g=>`<div class="au05-session-group"><span class="au05-muted">${esc(g)}</span>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<span class="au05-session${x.state==='working'?' working':''}" title="${esc(x.state==='working'?'Working':'Idle')} · ${esc(when(x.last))}">${esc(x.label||'Untitled session')}</span>`).join('')}</div>`).join('')}</div>`:'';
+    const sessionChips=(cs.sessions||[]).length?`<div class="au05-session-groups">${projects.map(g=>`<div class="au05-session-group"><span class="au05-muted">${esc(g)}</span>${cs.sessions.filter(x=>(x.project||'Other')===g).map(x=>`<span class="au05-session${x.state==='working'?' working':''}" title="${esc(x.state==='working'?'Working':'Idle')} · ${esc(when(x.last))}">${esc(x.title||x.label||x.project||'Untitled session')}</span>`).join('')}</div>`).join('')}</div>`:'';
     const claudeBox=`<section class="au05-box au05-claude"><div class="au05-claude-main"><span class="au05-status-dot ${csState}" aria-hidden="true"></span>
       <div class="au05-claude-text"><h2>Claude sessions</h2><span class="au05-muted">${esc(csText)}</span></div>
       ${cs.connected?`<button class="btn au05-big" type="button" data-claude-op="${full.hooks&&full.hooks!=='connected'&&!full.blocked?'connect':'disconnect'}"${native}>${full.hooks&&full.hooks!=='connected'&&!full.blocked?'Connect again':'Disconnect'}</button>`:`<button class="btn primary au05-big" type="button" data-claude-op="connect"${native||full.blocked||full.error?' disabled':''}>Connect</button>`}</div>
@@ -692,6 +701,7 @@ export class Au05Panel{
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
+    if(t.dataset.qmRole!==undefined){this.configure({menuControls:{[t.dataset.qmRole]:t.value}});return true;}
     if(t.dataset.qmThen!==undefined){const path=t.dataset.qmThen;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].then=t.value;});return true;}
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}
     if(t.dataset.au05Profile!==undefined){this.configure({profile:t.value});return true;}

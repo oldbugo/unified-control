@@ -33,6 +33,11 @@ pub const DISCONNECT_FLAG: &str = "--claude-disconnect";
 pub const IDLE_EXPIRY_MS: u64 = 24 * 3600 * 1000;
 pub const MAX_SESSIONS: usize = 200;
 pub const LABEL_MAX: usize = 80;
+/// A session's title (named in Claude): at most this many characters.
+pub const TITLE_MAX: usize = 120;
+/// Only the end of a transcript is read for the title.
+pub const TITLE_TAIL: u64 = 256 * 1024;
+const TITLE_PREFIX: &str = r#"{"type":"custom-title""#;
 pub const PROJECT_MAX: usize = 60;
 pub const BACKUPS_KEPT: usize = 3;
 const BACKUP_PREFIX: &str = "settings.json.uc-backup-";
@@ -54,6 +59,50 @@ pub fn session_link(desktop_id: &str) -> Option<String> {
 fn clean(s: &str, max: usize) -> String {
     let t: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).take(max).collect();
     t.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The session's title from the end of its transcript (user request 2026-11-17): the LAST line that starts
+/// with `{"type":"custom-title"` and parses, its `customTitle` (control characters removed, at most 120
+/// characters). Nothing else in the transcript is looked at; other and malformed lines are ignored.
+pub fn title_from_tail(tail: &[u8]) -> Option<String> {
+    tail.split(|b| *b == b'\n')
+        .rev()
+        .filter(|l| l.starts_with(TITLE_PREFIX.as_bytes()))
+        .find_map(|l| {
+            let v: Value = serde_json::from_slice(l.strip_suffix(b"\r").unwrap_or(l)).ok()?;
+            (v["type"] == "custom-title").then(|| clean(v["customTitle"].as_str().unwrap_or(""), TITLE_MAX))
+        })
+        .filter(|t| !t.is_empty())
+}
+
+/// Is this a Claude Code transcript (`...\.claude\projects\<project>\<id>.jsonl`)? Only such a file is read.
+pub fn is_transcript(path: &Path) -> bool {
+    let parts: Vec<String> = path.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
+    let n = parts.len();
+    path.is_absolute()
+        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))
+        && n >= 4
+        && parts[n - 3] == "projects"
+        && parts[n - 4] == ".claude"
+}
+
+/// Read the session title from the last 256 KB of a transcript (see [`title_from_tail`]). The caller bounds
+/// the time.
+pub fn read_title(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !is_transcript(path) {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let start = meta.len().saturating_sub(TITLE_TAIL);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    f.take(TITLE_TAIL).read_to_end(&mut buf).ok()?;
+    title_from_tail(&buf)
 }
 
 /// Is this program the hook proxy (by its file name)? Then it only ever runs the hook.
@@ -155,6 +204,10 @@ impl Sessions {
             }
             s["last"] = json!(now_ms);
             s["state"] = json!(if event == "UserPromptSubmit" { "working" } else { "idle" });
+            // The title (named in Claude) follows each change.
+            if let Some(t) = v["title"].as_str().map(|t| clean(t, TITLE_MAX)).filter(|t| !t.is_empty()) {
+                s["title"] = json!(t);
+            }
             // The label is the first prompt only.
             if s["label"].as_str().unwrap_or("").is_empty() {
                 if let Some(l) = v["label"].as_str() {
@@ -583,6 +636,52 @@ mod tests {
 
     /// Claude's settings file: never written when nothing changes, backed up first, untouched when invalid,
     /// unchanged when someone else edits it meanwhile or the replace fails; BOM, missing and empty files.
+    /// Session titles: the last custom-title line wins, malformed and other lines are ignored, the title is
+    /// capped and cleaned, only the end of a transcript is read, and only a transcript path is read at all.
+    #[test]
+    fn session_titles_come_from_the_last_custom_title_line() {
+        let lines = [
+            r#"{"type":"user","message":{"content":"{\"type\":\"custom-title\",\"customTitle\":\"no\"}"}}"#,
+            r#"{"type":"custom-title","customTitle":"First name","sessionId":"x"}"#,
+            r#"{"type":"agent-name","agentName":"Helper"}"#,
+            r#"{"type":"custom-title","customTitle":"Fix the cooler\u0007 page","sessionId":"x"}"#,
+            r#"{"type":"custom-title","customTitle":"broken"#,
+            r#"{"type":"assistant","message":"secret text"}"#,
+        ];
+        assert_eq!(title_from_tail(lines.join("\n").as_bytes()).as_deref(), Some("Fix the cooler page"));
+        assert_eq!(title_from_tail(lines.join("\r\n").as_bytes()).as_deref(), Some("Fix the cooler page"));
+        assert_eq!(title_from_tail(b"{\"type\":\"user\"}"), None);
+        let long = format!(r#"{{"type":"custom-title","customTitle":"{}"}}"#, "x".repeat(500));
+        assert_eq!(title_from_tail(long.as_bytes()).unwrap().chars().count(), TITLE_MAX);
+        // Only a transcript under .claude\projects is read, and only its last 256 KB.
+        let dir = temp("titles").join(".claude").join("projects").join("C--x");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("0123abcd-0000-4000-8000-00000000abcd.jsonl");
+        let early = r#"{"type":"custom-title","customTitle":"Too early"}"#;
+        let filler = format!(r#"{{"type":"user","x":"{}"}}"#, "y".repeat(1000));
+        let mut text = format!("{early}\n");
+        for _ in 0..300 {
+            text.push_str(&filler);
+            text.push('\n');
+        }
+        std::fs::write(&file, &text).unwrap();
+        assert_eq!(read_title(&file), None, "a title more than 256 KB from the end is not read");
+        text.push_str(r#"{"type":"custom-title","customTitle":"Named"}"#);
+        std::fs::write(&file, &text).unwrap();
+        assert_eq!(read_title(&file).as_deref(), Some("Named"));
+        let other = temp("titles2").join("notes.jsonl");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, r#"{"type":"custom-title","customTitle":"No"}"#).unwrap();
+        assert_eq!(read_title(&other), None, "not a transcript path");
+        // UC keeps the latest title for the session.
+        let list = Sessions::load(temp("titles3").join("claude-sessions.json"));
+        let id = "local_0123abcd-0000-4000-8000-00000000abcd";
+        list.record(&json!({"event": "Stop", "desktopId": id, "title": "One"}), 1).unwrap();
+        list.record(&json!({"event": "Stop", "desktopId": id, "title": "Two"}), 2).unwrap();
+        list.record(&json!({"event": "Stop", "desktopId": id}), 3).unwrap();
+        assert_eq!(list.list(3)[0]["title"], "Two");
+    }
+
     #[test]
     fn the_claude_settings_file_is_changed_safely() {
         let dir = temp("file");

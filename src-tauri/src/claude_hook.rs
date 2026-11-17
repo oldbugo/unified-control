@@ -7,6 +7,10 @@
 //! read (the environment holds tokens and the user's email). It prints nothing (SessionStart and
 //! UserPromptSubmit stdout would reach Claude's context), writes no file, never opens a window, and always
 //! exits 0 within about 200 ms, so Claude is never slowed or blocked. If UC is not running, nothing happens.
+//!
+//! Session title (2026-11-17): from the hook's `transcript_path`, only a Claude Code transcript file is read,
+//! only its last 256 KB, at most 50 ms, and only the last `{"type":"custom-title"...}` line's title is sent
+//! (`claude_sessions::read_title`). Nothing else from the transcript is read or sent.
 use std::io::Read;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uc_core::core::claude_sessions;
@@ -32,7 +36,16 @@ pub fn run(args: &[String]) -> i32 {
         let desktop = std::env::var("CLAUDE_CODE_HOST_SESSION_ID").ok();
         let code = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-        if let Some(payload) = claude_sessions::hook_payload(&event, &stdin, desktop.as_deref(), code.as_deref(), now) {
+        if let Some(mut payload) = claude_sessions::hook_payload(&event, &stdin, desktop.as_deref(), code.as_deref(), now) {
+            if let Some(path) = stdin["transcript_path"].as_str().filter(|p| p.len() <= 1024).map(std::path::PathBuf::from) {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let _ = std::thread::Builder::new().spawn(move || {
+                    let _ = tx.send(claude_sessions::read_title(&path));
+                });
+                if let Ok(Some(title)) = rx.recv_timeout(Duration::from_millis(50)) {
+                    payload["title"] = serde_json::json!(title);
+                }
+            }
             crate::agent_transport::notify(
                 serde_json::json!({"method": "claude_hook", "params": payload}),
                 Duration::from_millis(120),

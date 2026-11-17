@@ -154,6 +154,8 @@ impl Layers {
             let is_uc = match id {
                 KeyId::KnobRight | KeyId::KnobLeft => au["knobTurn"] == "uc",
                 KeyId::KnobPress if any_menu => true,
+                // K2 / K3 with a menu role need their own codes too (else K3's factory Esc reaches the app).
+                KeyId::K2 | KeyId::K3 if any_menu && menu::role(&au["menuControls"], name) != "none" => true,
                 _ => au["actions"][name]["kind"].as_str().unwrap_or(hotkey::OFFLINE) != hotkey::OFFLINE,
             };
             live.push(if is_uc { KeyTyping::own_code(id) } else { off.clone() });
@@ -247,31 +249,49 @@ pub fn sanitize(v: &Value) -> Value {
             continue;
         }
         let name = menu::clean_label(&p["name"]);
+        // Each profile has its own quick menu (user request 2026-11-17). Settings from before had one menu:
+        // it is copied to every profile.
+        let own = if p["menu"].is_array() { p["menu"].clone() } else if v["menu"].is_array() { v["menu"].clone() } else { menu::default_menu() };
         profiles.push(json!({"id": id, "name": if name.is_empty() { id.to_string() } else { name },
-                             "actions": sanitize_actions(&p["actions"])}));
+                             "actions": sanitize_actions(&p["actions"]), "menu": own}));
     }
     if profiles.is_empty() {
         profiles = menu::default_profiles(&actions).as_array().cloned().unwrap_or_default();
+        let start = if v["menu"].is_array() { v["menu"].clone() } else { menu::default_menu() };
+        for p in profiles.iter_mut() {
+            p["menu"] = start.clone();
+        }
     }
     let current = v["profile"]
         .as_str()
         .filter(|id| profiles.iter().any(|p| p["id"] == *id))
         .map(str::to_string)
         .unwrap_or_else(|| profiles[0]["id"].as_str().unwrap_or("").to_string());
+    let ids: Vec<String> = profiles.iter().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
+    // The live menu is the current profile's (the top-level `menu` wins, as `actions` do).
+    let entries = if v["menu"].is_array() {
+        v["menu"].clone()
+    } else {
+        profiles.iter().find(|p| p["id"] == current.as_str()).map(|p| p["menu"].clone()).unwrap_or_else(menu::default_menu)
+    };
+    let entries = menu::sanitize_menu(&entries, &ids);
     for p in profiles.iter_mut() {
         if p["id"] == current.as_str() {
             p["actions"] = actions.clone();
+            p["menu"] = entries.clone();
+        } else {
+            p["menu"] = menu::sanitize_menu(&p["menu"], &ids);
         }
     }
-    let ids: Vec<String> = profiles.iter().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
-    let entries = if v["menu"].is_array() { v["menu"].clone() } else { menu::default_menu() };
     json!({
         "enabled": v["enabled"].as_bool().unwrap_or(false),
         "actions": actions,
         "profiles": profiles,
         "profile": current,
         "target": v["target"].as_str().filter(|t| TARGETS.contains(t)).unwrap_or("claude"),
-        "menu": menu::sanitize_menu(&entries, &ids),
+        "menu": entries,
+        // While the quick menu is open (user request 2026-11-17): what K2, K3 and the knob press do there.
+        "menuControls": menu::sanitize_controls(&v["menuControls"]),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -300,11 +320,16 @@ pub fn sanitize(v: &Value) -> Value {
 fn switch_profile(au: &mut Value, id: &str) -> Result<(), String> {
     let current = au["profile"].as_str().unwrap_or("").to_string();
     let actions = au["actions"].clone();
+    let current_menu = au["menu"].clone();
     let profiles = au["profiles"].as_array_mut().ok_or("No profiles")?;
-    let mut next = profiles.iter().find(|p| p["id"] == id).ok_or("Choose a saved profile")?["actions"].clone();
+    let target = profiles.iter().find(|p| p["id"] == id).ok_or("Choose a saved profile")?;
+    let mut next = target["actions"].clone();
+    // Each profile has its own menu: switching switches the menu.
+    let next_menu = if target["menu"].is_array() { target["menu"].clone() } else { current_menu.clone() };
     for p in profiles.iter_mut() {
         if p["id"] == current.as_str() {
             p["actions"] = actions.clone();
+            p["menu"] = current_menu.clone();
         }
     }
     if !ACTION_KEYS.iter().any(|(k, _)| next[k]["kind"] == QUICK_MENU) {
@@ -315,6 +340,7 @@ fn switch_profile(au: &mut Value, id: &str) -> Result<(), String> {
         }
     }
     au["actions"] = next;
+    au["menu"] = next_menu;
     au["profile"] = json!(id);
     Ok(())
 }
@@ -370,11 +396,11 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
                 if name.is_empty() {
                     return Err("Give the profile a name".into());
                 }
-                // A new profile starts as a copy of the current key actions.
+                // A new profile starts as a copy of the current key actions and menu.
                 let new_id = profile_id(&name, &profiles);
-                let actions = au["actions"].clone();
+                let (actions, menu_now) = (au["actions"].clone(), au["menu"].clone());
                 if let Some(ps) = au["profiles"].as_array_mut() {
-                    ps.push(json!({"id": new_id, "name": name, "actions": actions}));
+                    ps.push(json!({"id": new_id, "name": name, "actions": actions, "menu": menu_now}));
                 }
                 lines.push(format!("page profile added {new_id}"));
             }
@@ -470,8 +496,23 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
         if !m.is_array() {
             return Err("Invalid quick menu".into());
         }
+        // The current profile's menu (sanitize copies it into the profile).
         au["menu"] = m.clone();
-        lines.push(format!("page menu saved ({} entries)", m.as_array().map(|a| a.len()).unwrap_or(0)));
+        lines.push(format!("page menu saved for profile {} ({} entries)", au["profile"].as_str().unwrap_or(""), m.as_array().map(|a| a.len()).unwrap_or(0)));
+    }
+    if let Some(c) = patch.get("menuControls") {
+        if !c.is_object() {
+            return Err("Invalid menu controls".into());
+        }
+        let mut next = au["menuControls"].clone();
+        for (k, _) in menu::CONTROL_KEYS {
+            if let Some(r) = c.get(k) {
+                let r = r.as_str().filter(|r| menu::ROLES.contains(r)).ok_or("Choose what the control does in the menu")?;
+                next[k] = json!(r);
+                lines.push(format!("page menu control {k} = {r}"));
+            }
+        }
+        au["menuControls"] = next;
     }
     if let Some(k) = patch.get("knobTurn") {
         let k = k.as_str().filter(|k| *k == "factory" || *k == "uc").ok_or("Choose what the knob turn does")?;
@@ -953,14 +994,27 @@ impl MenuCtl {
             return;
         }
         let Some(key) = KeyId::ALL.into_iter().find(|k| own_vk(*k) == vk) else { return };
-        if open && key == KeyId::KnobPress {
-            self.input(Input::Choose, "knob press");
-            return;
+        let name = key.control().name();
+        // While the menu is open, a control with a menu role does only that (its normal action waits).
+        if open {
+            match menu::role(&settings["menuControls"], settings_key(key)) {
+                "select" => return self.input(Input::Choose, name),
+                "back" => return self.input(Input::Back, name),
+                "close" => return self.input(Input::Close, name),
+                _ => {}
+            }
         }
         let action = saved_action(&settings["actions"], settings_key(key));
         match action {
-            Action::QuickMenu => self.input(Input::Toggle, key.control().name()),
-            Action::Nothing => {}
+            Action::QuickMenu => self.input(Input::Toggle, name),
+            Action::Nothing => {
+                // "Same as on its own" while it types its own code for the menu: type its offline keys.
+                if settings["actions"][settings_key(key)]["kind"] == hotkey::OFFLINE {
+                    if let Some(keys) = self.offline_keys(&settings, key) {
+                        self.run(Action::Custom { keys, app: None }, Some(key), false);
+                    }
+                }
+            }
             action => {
                 if open {
                     self.input(Input::Close, "another key");
@@ -968,6 +1022,18 @@ impl MenuCtl {
                 self.run(action, Some(key), false);
             }
         }
+    }
+
+    /// What a control types on its own, as keys UC can press (factory: the factory key), if UC can press it.
+    fn offline_keys(&self, settings: &Value, key: KeyId) -> Option<String> {
+        let name = settings_key(key);
+        let o = &settings["offline"][name];
+        let keys = if o["mode"] == "keys" { o["keys"].as_str().unwrap_or("").to_string() } else { key.factory_label().to_string() };
+        let ok = super::actions::plan_action(&super::dock_runtime::PendingAction { kind: "hotkey".into(), value: keys.clone() }).is_ok();
+        if !ok {
+            self.log.line(&format!("{name}: its own typing cannot be pressed by UC"));
+        }
+        ok.then_some(keys)
     }
 
     pub fn status(&self) -> Value {
@@ -983,6 +1049,7 @@ impl MenuCtl {
             "targets": TARGETS.iter().map(|t| json!({"id": t, "name": menu::target_name(t)})).collect::<Vec<_>>(),
             "knobTurn": settings["knobTurn"],
             "knobTurnAction": settings["knobTurnAction"],
+            "controls": settings["menuControls"],
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
             "last": self.last.lock_or_recover().clone(),
@@ -1179,9 +1246,15 @@ impl Au05 {
             Vec::new()
         };
         let any_menu = ACTION_KEYS.iter().any(|(k, _)| saved_action(&actions, k) == Action::QuickMenu);
-        // The knob press (F19) chooses in the menu, even when it has no action of its own.
-        if enabled && any_menu && !wanted.contains(&hotkey::VK_F19) {
-            wanted.push(hotkey::VK_F19);
+        // Keys with a menu role (default: K2 select, K3 back, knob press close) are claimed while a key opens
+        // the menu, even with no action of their own: their own code reaches UC, which restores their normal
+        // typing while the menu is closed.
+        if enabled && any_menu {
+            for (k, id) in ACTION_KEYS {
+                if (id == KeyId::KnobPress || menu::role(&settings["menuControls"], k) != "none") && !wanted.contains(&own_vk(id)) {
+                    wanted.push(own_vk(id));
+                }
+            }
         }
         // The knob types F23/F24: they move the menu, or run the knob turn action (UC's own scrolling).
         if enabled && settings["knobTurn"] == "uc" {
@@ -1192,7 +1265,7 @@ impl Au05 {
         for (key, id) in ACTION_KEYS {
             let vk = own_vk(id);
             let what = match saved_action(&actions, key) {
-                Action::Nothing if any_menu && id == KeyId::KnobPress => "chooses in the quick menu".to_string(),
+                Action::Nothing if any_menu => format!("menu: {}", menu::role(&settings["menuControls"], key)),
                 a => a.label(),
             };
             let line = match results.get(&vk) {
@@ -3235,5 +3308,80 @@ mod tests {
         assert_eq!(log_text(&dir).matches("hotkey k3 claimed").count(), 2, "a change is logged");
         au.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// User request 2026-11-17: each profile has its own menu (the old single menu is copied to every
+    /// profile); the editor edits the current profile's menu; switching profile switches the menu.
+    #[test]
+    fn each_profile_has_its_own_menu() {
+        let a = json!([{"type": "action", "label": "A", "action": {"kind": "playPause"}}]);
+        let b = json!([{"type": "action", "label": "B", "action": {"kind": "nextTrack"}}]);
+        let mut s = sanitize(&json!({"menu": a}));
+        for p in s["profiles"].as_array().unwrap() {
+            assert_eq!(p["menu"][0]["label"], "A", "copied to {}", p["id"]);
+        }
+        apply_patch(&mut s, &json!({"menu": b})).unwrap();
+        let menu_of = |s: &Value, id: &str| s["profiles"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["menu"][0]["label"].clone();
+        assert_eq!(s["menu"][0]["label"], "B");
+        assert_eq!(menu_of(&s, "claude"), "B", "the current profile's menu");
+        assert_eq!(menu_of(&s, "chatgpt"), "A", "the others keep theirs");
+        apply_patch(&mut s, &json!({"profile": "chatgpt"})).unwrap();
+        assert_eq!(s["menu"][0]["label"], "A", "switching profile switches the menu");
+        apply_patch(&mut s, &json!({"profile": "claude"})).unwrap();
+        assert_eq!(s["menu"][0]["label"], "B");
+        apply_patch(&mut s, &json!({"profileEdit": {"op": "add", "name": "Work"}})).unwrap();
+        assert_eq!(menu_of(&s, "work"), "B", "a new profile starts with a copy of the current menu");
+    }
+
+    /// While the menu is open: K2 selects, K3 goes back (closes at the top), the knob press closes without
+    /// doing anything. While it is closed they do their normal thing again; K2 / K3 with "Same as on its own"
+    /// type their own codes for UC, which types their offline keys for them (K3: Esc).
+    #[test]
+    fn menu_controls_while_open_and_normal_keys_after_close() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        let mut claimed = desk.claimed();
+        claimed.sort();
+        assert_eq!(claimed, vec![hotkey::VK_F19, hotkey::VK_F20, hotkey::VK_F21, hotkey::VK_F22]);
+        {
+            let l = au.layers.lock_or_recover();
+            assert!(l.uc[1] && l.uc[2] && l.uc[3], "K2, K3 and the knob press type their own codes");
+            assert_eq!(l.live[2], KeyTyping::own_code(KeyId::K3));
+        }
+        let ran = |n: usize| {
+            let end = Instant::now() + Duration::from_secs(3);
+            while desk.ran.lock_or_recover().len() < n && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            desk.ran.lock_or_recover().clone()
+        };
+        let open = |au: &Au05| au.status()["menu"]["view"]["open"] == true;
+        // Closed: K3 types Esc (its factory typing), as without UC.
+        assert!(desk.press(hotkey::VK_F22));
+        assert_eq!(ran(1), vec!["press Esc"]);
+        // Open; K3 at the top closes; nothing runs.
+        desk.press(hotkey::VK_F20);
+        assert!(open(&au));
+        desk.press(hotkey::VK_F22);
+        assert!(!open(&au), "K3 at the top closes");
+        // Open; the knob press closes without doing anything.
+        desk.press(hotkey::VK_F20);
+        desk.press(hotkey::VK_F19);
+        assert!(!open(&au));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(desk.ran.lock_or_recover().len(), 1, "nothing ran");
+        // Open; K2 selects the first entry (Claude dictation), which runs after the menu closes.
+        desk.press(hotkey::VK_F20);
+        desk.press(hotkey::VK_F21);
+        assert!(!open(&au));
+        assert_eq!(ran(4)[1..], ["focus claude.exe", "message box claude.exe", "press Ctrl + D"]);
+        // Closed again: K2 types Enter (its factory typing).
+        desk.press(hotkey::VK_F21);
+        assert_eq!(ran(5)[4], "press Enter");
+        // Roles can be changed: K3 "none" is released from the menu and keeps its offline typing on the key.
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}, "menuControls": {"k3": "none"}}));
+        assert!(!desk.claimed().contains(&hotkey::VK_F22));
+        assert!(!au.layers.lock_or_recover().uc[2]);
+        au.shutdown();
     }
 }

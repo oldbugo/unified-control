@@ -3,14 +3,16 @@ html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(-
 .qm { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--border-strong); box-sizing: border-box; }
 .qm-head { padding: var(--s2) var(--s3); background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: move; min-height: 41px; }
 .qm-title { font-size: var(--fs-h); line-height: var(--lh-h); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qm-context { font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); }
+.qm-context { display: flex; gap: var(--s2); margin-top: 2px; font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); }
+.qm-chip { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); }
+.qm-chip b { color: var(--text); font-weight: 600; }
 .qm-rows { list-style: none; margin: 0; padding: var(--s1); flex: 1; overflow-y: auto; }
-.qm-row { display: flex; align-items: center; gap: var(--s2); height: 36px; margin: 2px 0; padding: 0 var(--s3); border-radius: var(--r-sm); cursor: pointer; }
+.qm-row { display: flex; align-items: center; gap: var(--s2); height: 42px; margin: 2px 0; padding: 0 var(--s3); border-radius: var(--r-sm); cursor: pointer; font-size: calc(var(--fs-body) + 1px); }
 .qm-row:hover { background: var(--accent-faint); }
-.qm-row[aria-selected="true"] { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.qm-row[aria-selected="true"] { background: var(--accent-soft); outline: 2px solid var(--accent); font-weight: 600; }
 .qm-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qm-detail { font-size: var(--fs-tiny); color: var(--text-faint); }
-.qm-row[data-type="back"] .qm-label { color: var(--text-muted); }
+.qm-row[data-type="back"] .qm-label, .qm-row[data-type="close"] .qm-label { color: var(--text-muted); }
 .qm-row[data-current="true"] .qm-detail { color: var(--ok); }
 .qm-foot { padding: var(--s2) var(--s3); font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); border-top: 1px solid var(--border); }
 .qm-foot.note { color: var(--warn); }
