@@ -622,6 +622,8 @@ struct SyncState {
     uncertain: [bool; 6],
     /// Not checked on the real key: the user allowed writing it with "Set up".
     allowed: [bool; 6],
+    /// "needs Set up" was logged for this control in this run (logged once).
+    check_logged: [bool; 6],
     /// A key-typing command failed (no reply, write timeout...): no automatic one until Reconnect or Try again.
     blocked: bool,
     /// Quit or disable ran out of time: start no new key-typing command.
@@ -668,6 +670,8 @@ pub struct Au05 {
     desktop: Option<Arc<dyn Desktop>>,
     fake_desktop: Option<Arc<FakeDesktop>>,
     hotkeys: Mutex<BTreeMap<u16, Result<(), String>>>,
+    /// The hotkey lines last logged (only changes are logged).
+    hotkey_lines: Mutex<Vec<String>>,
     /// Serialises start, stop and hotkey claims, so two commands can never start two sessions.
     config_lock: Mutex<()>,
     config: SessionConfig,
@@ -1080,6 +1084,7 @@ impl Au05 {
             desktop,
             fake_desktop,
             hotkeys: Mutex::new(BTreeMap::new()),
+            hotkey_lines: Mutex::new(Vec::new()),
             config_lock: Mutex::new(()),
             config,
             log,
@@ -1183,6 +1188,7 @@ impl Au05 {
             wanted.extend([hotkey::VK_F23, hotkey::VK_F24]);
         }
         let results = d.set_hotkeys(&wanted);
+        let mut lines = Vec::new();
         for (key, id) in ACTION_KEYS {
             let vk = own_vk(id);
             let what = match saved_action(&actions, key) {
@@ -1194,18 +1200,27 @@ impl Au05 {
                 Some(Err(e)) => format!("hotkey {key} not claimed: {e}"),
                 None => continue,
             };
-            self.log.line(&line);
+            lines.push(line);
         }
         for (vk, name) in [(hotkey::VK_F23, "knob right F23"), (hotkey::VK_F24, "knob left F24")] {
             match results.get(&vk) {
-                Some(Ok(())) => self.log.line(&format!("hotkey {name} claimed")),
-                Some(Err(e)) => self.log.line(&format!("hotkey {name} not claimed: {e}")),
+                Some(Ok(())) => lines.push(format!("hotkey {name} claimed")),
+                Some(Err(e)) => lines.push(format!("hotkey {name} not claimed: {e}")),
                 None => {}
             }
         }
         if wanted.is_empty() {
-            self.log.line("hotkeys released");
+            lines.push("hotkeys released".into());
         }
+        // Logged only when something changed (every settings save re-applies the hotkeys).
+        let mut last = self.hotkey_lines.lock_or_recover();
+        if *last != lines {
+            for line in &lines {
+                self.log.line(line);
+            }
+            *last = lines;
+        }
+        drop(last);
         *self.hotkeys.lock_or_recover() = results;
     }
 
@@ -1878,44 +1893,40 @@ impl Worker {
                     _ => {}
                 }
             }
+            let check = !l.verified[i] && !s.sync.allowed[idx];
+            // What UC would do for this control: read it first (unknown list) or write it (known, differs).
+            let wanted = match &known {
+                None => {
+                    !s.sync.read_tried[idx]
+                        && l.echo[i].as_ref() != Some(&want)
+                        && (l.dirty[i] || (!l.target_offline && l.uc[i]) || l.echo[i].is_some())
+                }
+                Some(held) => l.seeded[i] && *held != want && s.sync.attempted[idx].as_ref() != Some(&want),
+            };
+            if !wanted {
+                continue;
+            }
+            // Not checked on the real key: always visible as "Needs a check" with Set up (even while key changes
+            // are paused), never written by UC on its own.
+            if check {
+                if !s.sync.check_logged[idx] {
+                    s.sync.check_logged[idx] = true;
+                    self.log.line(&format!("layer sync: {name} needs Set up (not checked on the real key; wants {})", want.label(*id)));
+                }
+                s.jobs[idx] = Some(KeyJob { typing: want, state: "check", message: "Not checked on the real key yet: press Set up".into(), next: None, read: false });
+                continue;
+            }
             if s.sync.blocked || s.sync.no_new {
                 continue;
             }
-            let check = !l.verified[i] && !s.sync.allowed[i];
-            let job = |read: bool, typing: KeyTyping, state: &'static str, message: String| {
-                Some(KeyJob { typing, state, message, next: None, read })
-            };
-            match known {
-                None => {
-                    // The key confirmed this very list before (saved): no read, no write.
-                    if s.sync.read_tried[idx] || l.echo[i].as_ref() == Some(&want) {
-                        continue;
-                    }
-                    // Only what UC would write is read: a control with a UC action in the live layer, one whose
-                    // layer changed in this run, or one whose saved list differs from what UC wants.
-                    if !(l.dirty[i] || (!l.target_offline && l.uc[i]) || l.echo[i].is_some()) {
-                        continue;
-                    }
-                    if check {
-                        s.jobs[idx] = job(false, want, "check", "Not checked on the real key yet: press Set up".into());
-                        continue;
-                    }
-                    s.sync.read_tried[idx] = true;
-                    self.log.line(&format!("layer sync: read {name} first"));
-                    s.jobs[idx] = job(true, want, "waiting", String::new());
-                }
-                Some(held) => {
-                    if !l.seeded[i] || held == want || s.sync.attempted[idx].as_ref() == Some(&want) {
-                        continue;
-                    }
-                    if check {
-                        s.jobs[idx] = job(false, want, "check", "Not checked on the real key yet: press Set up".into());
-                        continue;
-                    }
-                    self.log.line(&format!("layer sync: {name} -> {} ({})", want.label(*id), if l.target_offline { "offline" } else { "live" }));
-                    s.sync.attempted[idx] = Some(want.clone());
-                    s.jobs[idx] = job(false, want, "waiting", String::new());
-                }
+            if known.is_none() {
+                s.sync.read_tried[idx] = true;
+                self.log.line(&format!("layer sync: read {name} first"));
+                s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None, read: true });
+            } else {
+                self.log.line(&format!("layer sync: {name} -> {} ({})", want.label(*id), if l.target_offline { "offline" } else { "live" }));
+                s.sync.attempted[idx] = Some(want.clone());
+                s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None, read: false });
             }
         }
     }
@@ -3159,5 +3170,70 @@ mod tests {
         apply_patch(&mut au_settings, &json!({"setUp": {"control": "knobPress"}})).unwrap();
         assert_eq!(au_settings["setUp"]["knobPress"], true);
         au.shutdown();
+    }
+    fn log_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("uc-au05-{name}-{}-{}", std::process::id(), now_ms()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+    fn log_text(d: &std::path::Path) -> String {
+        std::fs::read_to_string(d.join("device.log")).unwrap_or_default()
+    }
+
+    /// Real-key bug on 0.24.0: the knob press with "Open quick menu" kept typing Backspace and showed nothing.
+    /// An unchecked control UC needs to write always shows "Needs a check" (also while key changes are
+    /// paused), is logged once, and is never written; Set up reads it, then sets it, once.
+    #[test]
+    fn an_unchecked_control_with_a_uc_action_shows_needs_a_check() {
+        let au = worker();
+        let dir = log_dir("check");
+        au.set_log_dir(dir.clone());
+        let fake = au.fake_handle().unwrap().clone();
+        let idx = KeyId::KnobPress.index() as usize;
+        let press_cmds = |f: &FakeHandle| f.received().into_iter().filter(|p| p[2] == 0x50 && p.get(4).copied().unwrap_or(0) as usize == idx).count();
+        // The user's settings: the knob press opens the quick menu; other lists confirmed before.
+        let settings = json!({"enabled": true, "layers": 1, "actions": {"knobPress": {"kind": "quickMenu"}, "k1": {"kind": "claudeDictation"}},
+            "keyEcho": {"k1": KeyTyping::own_code(KeyId::K1).label(KeyId::K1), "k2": "factory", "knobRight": "factory"}});
+        au.configure(&settings);
+        let s = wait_for(&au, |s| job(s, "knobPress")["state"] == "check");
+        assert_eq!(job(&s, "knobPress")["state"], "check", "{s}");
+        assert_eq!(job(&s, "knobPress")["label"], "F19");
+        // Paused key changes keep it visible.
+        au.status.lock_or_recover().sync.blocked = true;
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(job(&au.status(), "knobPress")["state"], "check", "still shown while key changes are paused");
+        assert_eq!(press_cmds(&fake), 0, "nothing sent for the knob press before Set up");
+        assert_eq!(log_text(&dir).matches("layer sync: knobPress needs Set up").count(), 1, "logged once");
+        // Set up: one read, one set, done; the knob press now types F19.
+        au.change(Change::Retry(KeyId::KnobPress)).unwrap();
+        let s = wait_for(&au, |s| job(s, "knobPress")["state"] == "done");
+        assert_eq!(job(&s, "knobPress")["state"], "done", "{s}");
+        assert_eq!(fake.lock().typing[idx], KeyTyping::own_code(KeyId::KnobPress));
+        let sent: Vec<_> = fake.received().into_iter().filter(|p| p[2] == 0x50 && p.get(4).copied().unwrap_or(0) as usize == idx).collect();
+        assert_eq!(sent.len(), 2, "one read, one set");
+        assert_eq!((sent[0][3], sent[1][3]), (0x01, 0x00), "read first, then set");
+        // Knob left the same, through the knob turn's UC codes.
+        au.configure(&json!({"enabled": true, "layers": 1, "knobTurn": "uc", "actions": {"knobPress": {"kind": "quickMenu"}}}));
+        wait_for(&au, |s| job(s, "knobLeft")["state"] == "check");
+        assert!(log_text(&dir).contains("layer sync: knobLeft needs Set up"));
+        au.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every settings save re-applies the hotkeys: the "hotkey ... claimed" lines are logged only on a change.
+    #[test]
+    fn hotkey_lines_are_logged_only_when_they_change() {
+        let au = worker();
+        let dir = log_dir("hotkeys");
+        au.set_log_dir(dir.clone());
+        let settings = json!({"enabled": true, "actions": {"k3": {"kind": "claudeDictation"}}});
+        for _ in 0..5 {
+            au.configure(&settings);
+        }
+        assert_eq!(log_text(&dir).matches("hotkey k3 claimed").count(), 1);
+        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind": "enter"}}}));
+        assert_eq!(log_text(&dir).matches("hotkey k3 claimed").count(), 2, "a change is logged");
+        au.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

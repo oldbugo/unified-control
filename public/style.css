@@ -274,6 +274,8 @@ input[type="checkbox"][role="switch"]:disabled { opacity:.5;cursor:default; }
 .au05-mark, .au05-icon { fill:none; stroke:var(--text-muted); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
 .au05-callout { cursor:pointer; }
 .au05-callout rect { fill:var(--surface-1); stroke:var(--border); }
+.au05-needs-check circle { fill:var(--warn-soft); stroke:var(--warn); }
+.au05-needs-check text { fill:var(--warn); font-size:10px; font-weight:700; }
 .au05-callout.is-selected rect { stroke:var(--accent); fill:var(--accent-faint); }
 .au05-callout.au05-flash rect { fill:var(--accent-soft); stroke:var(--accent); }
 .au05-leader { fill:none; stroke:var(--border-strong); }

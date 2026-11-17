@@ -349,7 +349,9 @@ export class Au05Panel{
     };
     const sel=id=>id===this.selected?' is-selected':'';
     const zone=(id,shape)=>shape.replace('<ZONE ','<').replace('/>',` data-au05-zone="${id}" class="au05-zone${sel(id)}${id==='knobTurn'?' au05-ring':''}" role="button" tabindex="0" aria-label="${ZONES[id]}: ${esc(assignment(id))}" aria-pressed="${id===this.selected}"/>`);
-    const callout=(id,y,anchorX,anchorY)=>`<g class="au05-callout${sel(id)}" data-au05-zone="${id}"><path d="M${anchorX} ${anchorY}H164V${y+17}H176" class="au05-leader"/><rect x="176" y="${y}" width="196" height="34" rx="8"/><text x="186" y="${y+14}" class="au05-name">${esc(ZONES[id])}</text><text x="186" y="${y+28}" class="au05-assign">${esc(clip(assignment(id)))}</text></g>`;
+    // A control waiting for "Set up" (not checked on the real key) is marked on the drawing.
+    const needsCheck=id=>{const ks=id==='knobTurn'?[...(s.turns||[])]:[...(s.keys||[])].filter(k=>k.key===id);return ks.some(k=>k.job?.state==='check');};
+    const callout=(id,y,anchorX,anchorY)=>`<g class="au05-callout${sel(id)}" data-au05-zone="${id}"><path d="M${anchorX} ${anchorY}H164V${y+17}H176" class="au05-leader"/><rect x="176" y="${y}" width="196" height="34" rx="8"/><text x="186" y="${y+14}" class="au05-name">${esc(ZONES[id])}</text><text x="186" y="${y+28}" class="au05-assign">${esc(clip(assignment(id)))}</text>${needsCheck(id)?`<g class="au05-needs-check"><title>Needs a check: choose it and press Set up</title><circle cx="360" cy="${y+10}" r="6"/><text x="360" y="${y+13.5}" text-anchor="middle">!</text></g>`:''}</g>`;
     const diagram=`<svg class="au05-diagram" viewBox="0 0 380 500" role="group" aria-label="Vibe Key layout. Choose a control.">
       <rect x="20" y="8" width="130" height="484" rx="22" class="au05-body"/>
       <text x="85" y="34" text-anchor="middle" class="au05-logo">Ulanzi</text>

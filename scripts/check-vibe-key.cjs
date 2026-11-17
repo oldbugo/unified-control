@@ -170,6 +170,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForSelector('[data-au05-retry="knobPress"]',{timeout:5000});
   assert.match(await page.locator('.au05-layerbar').textContent(),/Key changes paused: use Reconnect/);
   assert.match(await page.locator('[data-au05-retry="knobPress"]').textContent(),/Set up/);
+  assert.equal(await page.locator('.au05-callout[data-au05-zone="knobPress"] .au05-needs-check').count(),1,'the drawing marks the knob press');
   await page.locator('[data-au05-retry="knobPress"]').click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='retryJob'&&w.change.key==='knobPress'));
   // Drag and drop: a card dropped on K2 gives K2 that action; Undo restores the previous one (Ctrl + Enter).
