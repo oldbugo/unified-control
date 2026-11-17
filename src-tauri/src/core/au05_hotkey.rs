@@ -135,9 +135,11 @@ pub const TARGETS: [&str; 2] = ["claude", "chatgpt"];
 
 /// Every saved kind: "none", "hotkey" (custom combination), "quickMenu" or a catalogue id.
 pub fn kind_known(kind: &str) -> bool {
-    kind == "none" || kind == "hotkey" || kind == QUICK_MENU || entry(kind).is_some()
+    kind == "none" || kind == OFFLINE || kind == "hotkey" || kind == QUICK_MENU || entry(kind).is_some()
 }
 pub const QUICK_MENU: &str = "quickMenu";
+/// "Same as on its own": no UC action; the key types its offline layer even while UC runs.
+pub const OFFLINE: &str = "offline";
 
 /// The catalogue for the page, grouped in order.
 pub fn catalogue_json() -> serde_json::Value {
@@ -164,7 +166,7 @@ pub enum Action {
 impl Action {
     pub fn from_setting(kind: &str, value: &str, app_id: &str) -> Option<Self> {
         Some(match kind {
-            "none" => Action::Nothing,
+            "none" | OFFLINE => Action::Nothing,
             QUICK_MENU => Action::QuickMenu,
             // A custom combination that is still being typed does nothing.
             "hotkey" if value.trim().is_empty() => Action::Nothing,
@@ -249,6 +251,8 @@ pub trait Desktop: Send + Sync {
     fn is_foreground(&self, app: &'static App) -> bool;
     /// Press a key combination in the window in front ("Ctrl + D", "Enter").
     fn press(&self, keys: &str) -> Result<(), String>;
+    /// Called (on the desktop's thread) when Windows ends the session; it may block for a few seconds.
+    fn set_session_end(&self, _handler: Arc<dyn Fn() + Send + Sync>) {}
 }
 
 /// Timing for [`dictate_send`].
@@ -429,7 +433,7 @@ mod native {
     use super::*;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT};
     use windows_sys::Win32::System::Threading::{
         GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
@@ -444,6 +448,50 @@ mod native {
     };
 
     const WM_RECONCILE: u32 = WM_APP + 0x51;
+
+    /// The session-end handler for the hidden window (one desktop per app).
+    static SESSION_END: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+    unsafe extern "system" fn session_proc(hwnd: HWND, msg: u32, wparam: usize, lparam: LPARAM) -> LRESULT {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION, WM_QUERYENDSESSION};
+        match msg {
+            WM_QUERYENDSESSION => 1, // never block the end of the session
+            WM_ENDSESSION => {
+                if wparam != 0 {
+                    let h = SESSION_END.lock_or_recover().clone();
+                    if let Some(h) = h {
+                        let _ = super::super::sync::guarded("Vibe Key session end", || h());
+                    }
+                }
+                0
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    /// A hidden top-level window (never shown) so the hotkey thread hears about session end.
+    unsafe fn session_window() {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, RegisterClassW, WNDCLASSW, WS_OVERLAPPED};
+        let name: Vec<u16> = "UnifiedControlVibeKeySession\0".encode_utf16().collect();
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        let class = WNDCLASSW {
+            style: 0,
+            lpfnWndProc: Some(session_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: instance,
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: name.as_ptr(),
+        };
+        unsafe { RegisterClassW(&class) };
+        unsafe {
+            CreateWindowExW(0, name.as_ptr(), name.as_ptr(), WS_OVERLAPPED, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null())
+        };
+    }
 
     struct Shared {
         handler: Mutex<Option<PressHandler>>,
@@ -489,6 +537,7 @@ mod native {
         // Create the thread's message queue before anyone posts to it.
         unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE) };
         let _ = ready.send(unsafe { GetCurrentThreadId() });
+        unsafe { session_window() };
         let mut claimed: Vec<u16> = Vec::new();
         loop {
             let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
@@ -529,7 +578,10 @@ mod native {
                         let _ = reply.send(results);
                     }
                 }
-                _ => {}
+                _ => unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                    windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
+                },
             }
         }
         for vk in claimed {
@@ -576,6 +628,9 @@ mod native {
         }
         fn capture_active(&self, exe: &str) -> Result<bool, String> {
             super::super::audio_capture::capture_active(exe)
+        }
+        fn set_session_end(&self, handler: Arc<dyn Fn() + Send + Sync>) {
+            *SESSION_END.lock_or_recover() = Some(handler);
         }
         fn bring_forward(&self, app: &'static App) -> Result<(), String> {
             unsafe { bring_forward(app.exe, app.title) }

@@ -229,6 +229,13 @@ impl App {
             let connected = store.load().0["au05"]["claudeSessions"].as_bool().unwrap_or(false);
             (if connected { sessions.list(now_ms()) } else { Vec::new() }, connected)
         }));
+        // Windows session end (shutdown, sign-out): the key gets its offline layer back first.
+        let weak_end = self.me.lock_or_recover().clone();
+        au05.on_session_end(Arc::new(move || {
+            if let Some(app) = weak_end.upgrade() {
+                app.au05_session_end();
+            }
+        }));
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);
@@ -633,6 +640,7 @@ impl App {
         let saved = self.settings.load().0["au05"].clone();
         v["enabled"] = saved["enabled"].clone();
         v["actions"] = saved["actions"].clone();
+        v["offlinePending"] = saved["offlinePending"].clone();
         // The Claude session list (memory only; the full Claude settings check is `claude_state`).
         let connected = saved["claudeSessions"].as_bool().unwrap_or(false);
         v["claude"] = json!({"connected": connected, "sessions": if connected { self.claude.list(now_ms()) } else { Vec::new() },
@@ -647,6 +655,16 @@ impl App {
             return Err(CoreError::new("The app is closing"));
         }
         let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        // "Store offline layer on the key now" / "Back to Unified Control": which layer the key should hold
+        // (not a setting; the next start goes back to the live layer).
+        if let Some(layer) = patch.get("layer") {
+            match layer.as_str() {
+                Some("offline") => au05.set_layer_offline(true),
+                Some("live") => au05.set_layer_offline(false),
+                _ => return Err(CoreError::new("Choose a layer")),
+            }
+            return Ok(self.au05_state());
+        }
         // Checked on a copy first; the lock above keeps the copy current until it is saved.
         let mut next = self.settings.load().0["au05"].clone();
         let lines = super::au05::apply_patch(&mut next, patch).map_err(CoreError::new)?;
@@ -655,7 +673,44 @@ impl App {
             au05.log_line(&line);
         }
         au05.configure(&saved.0["au05"]);
+        // Disabling wrote the offline layer back (or could not): remember it for the page.
+        if let Some(ok) = au05.take_offline_result() {
+            self.save_offline_pending(au05, !ok);
+        }
         Ok(self.au05_state())
+    }
+    /// The offline layer is not on the key yet (key asleep, or no time at quit / disable / session end).
+    /// Also saved: when a key-typing command was left unanswered (the next run waits before its first one).
+    fn save_offline_pending(&self, au05: &super::au05::Au05, pending: bool) {
+        let abandoned = au05.take_abandoned();
+        let _ = self.settings.update(|s| {
+            s["au05"]["offlinePending"] = serde_json::json!(pending);
+            if let Some(at) = abandoned {
+                s["au05"]["slowAbandonedAt"] = serde_json::json!(at);
+            }
+        });
+    }
+    /// Windows is ending the session: store the offline layer within the time Windows allows. Nothing to do
+    /// when the Vibe Key is disabled (its offline layer was stored, or recorded as pending, at disable).
+    pub fn au05_session_end(&self) {
+        if let Some(au05) = self.au05.get() {
+            if !au05.running() {
+                return;
+            }
+            let ok = au05.store_offline(std::time::Duration::from_secs(4));
+            self.save_offline_pending(au05, !ok);
+            // Normally the process ends now. If it is still running a minute later, key changes may start
+            // again (the budget may have stopped new ones).
+            let weak = self.me.lock_or_recover().clone();
+            let _ = std::thread::Builder::new().name("uc-au05-session-end".into()).spawn(move || {
+                std::thread::sleep(Duration::from_secs(60));
+                if let Some(app) = weak.upgrade() {
+                    if let Some(au05) = app.au05.get() {
+                        au05.resume_after_session_end();
+                    }
+                }
+            });
+        }
     }
     /// Where Claude's settings are: `%USERPROFILE%\.claude`. Debug builds and fake or quiet (test) instances
     /// use only `UC_CLAUDE_HOME` and never the real folder.
@@ -1070,16 +1125,28 @@ impl App {
         }
     }
     /// Must run off the UI thread; active monitor recovery is allowed to finish.
+    /// Stop the Vibe Key: its offline layer goes back on the key (waiting for a key command already sent, up
+    /// to the quit budget). Runs before the exit watchdog is armed, so the watchdog does not cut it.
+    /// `budget` caps the wait (the exit event uses 3 s so Windows does not report the app as blocking
+    /// shutdown); `None` is the normal quit budget. A second call does nothing.
+    pub fn stop_au05(&self, budget: Option<Duration>) {
+        if let Some(au05) = self.au05.get() {
+            let _guard = self.dock_config_lock.lock_or_recover();
+            if let Some(stored) = au05.shutdown_within(budget) {
+                self.save_offline_pending(au05, !stored);
+            }
+        }
+    }
     pub fn stop_runtime(&self) {
+        // The cooler first: if it refuses, the app stays open with the Vibe Key still running.
         if let Some(cooler) = self.cooler.get() {
             if cooler.shutdown().is_err() {
                 return;
             }
         }
+        // Then the Vibe Key (see `stop_au05`); the tray Quit arms the exit watchdog only after this.
+        self.stop_au05(None);
         let _guard = self.dock_config_lock.lock_or_recover();
-        if let Some(au05) = self.au05.get() {
-            au05.shutdown();
-        }
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
         }

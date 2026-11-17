@@ -20,6 +20,8 @@ const server=http.createServer((req,res)=>{
     // A real key (fake:false): only checked settings may be sent; the knob press typing is not checked yet.
     window.__au05={enabled:false,fake:false,state:'disabled',message:'Vibe Key is disabled',battery:null,standbyS:null,sleepS:null,light:null,micNr:null,
       keys:[],events:[],actions:{k1:none,k2:none,k3:none,knobPress:none},hotkeysAvailable:true,
+      layer:{target:'live',offlineOnKey:true,offline:{k1:{factory:true,label:'Factory default (Win + H)'},k2:{factory:true,label:'Factory default (Enter)'},k3:{factory:true,label:'Factory default (Esc)'},
+        knobPress:{factory:true,label:'Factory default (Backspace)'},knobRight:{factory:true,label:'Factory default (scroll down)'},knobLeft:{factory:true,label:'Factory default (scroll up)'}}},
       catalogue:{apps:[{id:'claude',name:'Claude',verified:true},{id:'chatgpt',name:'ChatGPT',verified:false}],actions:[
         {id:'claudeDictation',group:'Claude',label:'Start dictation',keys:'Ctrl + D',status:'verified',note:'Checked on this PC'},
         {id:'chatgptNewChat',group:'ChatGPT',label:'New chat',keys:'Ctrl + Shift + O',status:'unverified',note:'Third-party report'},
@@ -44,6 +46,8 @@ const server=http.createServer((req,res)=>{
         window.__writes.push({command,...args});
         if('enabled' in args.patch){window.__au05.enabled=args.patch.enabled;if(args.patch.enabled)connected();else window.__au05.state='disabled';}
         if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value,app:args.patch.action.app||''};
+        if(args.patch.offline){const o=args.patch.offline;window.__au05.layer.offline[o.control]=o.mode==='keys'?{factory:false,keys:o.keys,label:o.keys}:{factory:true,label:'Factory default'};}
+        if(args.patch.layer)window.__au05.layer.target=args.patch.layer;
         hotkeys();return structuredClone(window.__au05);
       }
       if(command==='au05_change'){
@@ -51,7 +55,7 @@ const server=http.createServer((req,res)=>{
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
         if(c.setting==='lightRecord'){const f=['type','time','breatheLevel','breatheBrightness','alwaysOnBrightness'].indexOf(c.field);window.__au05.light.records[c.record][f]=c.value;}
-        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;k.job={state:'done',message:'Done',label:k.label};}
+        if(c.setting==='retryJob'){const k=window.__au05.keys.find(k=>k.key===c.key);if(k)k.job=null;window.__au05.keySync={blocked:false,pending:false,waiting:false};}
         return structuredClone(window.__au05);
       }
       if(command==='au05_read_all'){window.__writes.push({command});return structuredClone(window.__au05);}
@@ -121,7 +125,7 @@ const server=http.createServer((req,res)=>{
   await pick('k1');
   await page.locator('[data-au05-read="k1"]').click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_read_key'&&w.key==='k1'));
-  await page.waitForFunction(()=>document.querySelector('[data-au05-mode="k1"]')?.dataset.value==='factory');
+  await page.waitForFunction(()=>/On the key now: Win \+ H \(factory\)/.test(document.querySelector('.au05-editor')?.textContent||''));
   assert.match(await page.locator('[data-au05-read="k1"]').textContent(),/Read again/);
   // K3: a UC action. Choosing it saves the action; the hotkey shows as ready and the label updates.
   await pick('k3');
@@ -132,27 +136,42 @@ const server=http.createServer((req,res)=>{
   // K2: switch to a UC action (the key is set to type F21), then a custom key combination.
   await pick('k2');
   await choose('k2','uc:hotkey');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.key==='k2'&&w.change.mode==='uc'));
-  await page.waitForFunction(()=>/Key updated/.test(document.querySelector('.au05-job')?.textContent||''));
+  // Choosing only saves the action; the app's layer sync sets the key (never the page).
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k2'&&w.patch.action.kind==='hotkey'));
   const combo=page.locator('input[data-au05-action-value="k2"]');await combo.waitFor();
   await combo.fill('Ctrl + Enter');await combo.press('Tab');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.value==='Ctrl + Enter'));
-  // K1: keys typed by the key itself.
+  // The offline layer ("On its own"): K1 types Ctrl + D without Unified Control. The palette is not offered there.
+  await page.locator('[data-au05-layer-view="offline"]').click();
   await pick('k1');
-  await segment('k1','keys');
-  const keysInput=page.locator('input[data-au05-keys="k1"]');
+  assert.equal(await page.locator('.au05-palette').count(),0);
+  await page.locator('[data-au05-offline-mode="keys"][data-control="k1"]').click();
+  const keysInput=page.locator('input[data-au05-offline-keys="k1"]');
   assert.equal(await keysInput.isVisible(),true);
   await keysInput.fill('Ctrl + D');await keysInput.press('Tab');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.keys==='Ctrl + D'));
-  // Switching K3 to factory default clears its UC action (releases the hotkey).
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.offline?.control==='k1'&&w.patch.offline.keys==='Ctrl + D'));
+  await page.waitForFunction(()=>/Types Ctrl \+ D/.test(document.querySelector('.au05-callout[data-au05-zone="k1"]')?.textContent||''));
+  // Store the offline layer now, and back.
+  await page.locator('[data-au05-layer="offline"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.layer==='offline'));
+  await page.locator('[data-au05-layer="live"]').click();
+  await page.locator('[data-au05-layer-view="live"]').click();
+  // K3 back to "Same as on its own" (no UC action; its hotkey is released).
   await pick('k3');
-  await segment('k3','factory');
-  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k3'&&w.patch.action.kind==='none'));
+  await segment('k3','offline');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k3'&&w.patch.action.kind==='offline'));
   await page.locator('select[data-au05-set="standbyTime"]').selectOption('900');
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='standbyTime'));
   const changes=(await writes()).filter(w=>w.command==='au05_change').map(w=>w.change);
-  assert.deepEqual(changes,[{setting:'lightRecord',record:1,field:'time',value:12},{setting:'keyTyping',key:'k2',mode:'uc'},
-    {setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'},{setting:'keyTyping',key:'k3',mode:'factory'},{setting:'standbyTime',value:900}]);
+  assert.deepEqual(changes,[{setting:'lightRecord',record:1,field:'time',value:12},{setting:'standbyTime',value:900}],'the page writes device settings only; key typing comes from the layer sync');
+  // A control not checked on the real key waits for "Set up"; a failed key change pauses key changes.
+  await page.evaluate(()=>{window.__au05.keys.find(k=>k.key==='knobPress').job={state:'check',message:'Not checked on the real key yet: press Set up',label:'F19',read:false};window.__au05.keySync={blocked:true,pending:false,waiting:false};});
+  await pick('knobPress');
+  await page.waitForSelector('[data-au05-retry="knobPress"]',{timeout:5000});
+  assert.match(await page.locator('.au05-layerbar').textContent(),/Key changes paused: use Reconnect/);
+  assert.match(await page.locator('[data-au05-retry="knobPress"]').textContent(),/Set up/);
+  await page.locator('[data-au05-retry="knobPress"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='retryJob'&&w.change.key==='knobPress'));
   // Drag and drop: a card dropped on K2 gives K2 that action; Undo restores the previous one (Ctrl + Enter).
   await pick('k1');
   await card('uc:volumeUp').dragTo(page.locator('.au05-diagram .au05-zone[data-au05-zone="k2"]'));
@@ -174,7 +193,7 @@ const server=http.createServer((req,res)=>{
 
   const output=path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(output,{recursive:true});
   await pick('knobTurn');
-  assert.match(await page.locator('.au05-editor').textContent(),/Factory scroll/);
+  assert.match(await page.locator('.au05-editor').textContent(),/Same as on its own/,'the knob turn without UC codes types its offline layer');
   await pick('k3');
   await choose('k3','uc:volumeUp');
   await page.waitForFunction(()=>/Volume up/.test(document.querySelector('.au05-callout[data-au05-zone="k3"]')?.textContent||''));

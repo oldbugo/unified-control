@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.0 — 2026-11-17
+
+Two setups for the Vibe Key: "With Unified Control" (actions while the app
+runs) and "On its own" (what the key types by itself on any computer, or with
+Unified Control closed). Unified Control puts the "On its own" setup back on the
+key when you quit, switch the Vibe Key off, or sign out, and there is a button
+to store it now. The first time a key is read, its current keys become its
+"On its own" setup, so nothing you set before is lost. Writes to the key stay
+careful: one at a time, after a short pause following a key press, checked
+against what the key reports back, never repeated automatically after a
+problem, and never started while the app is closing. The knob press and the
+left knob turn need one "Set up" click before they are changed automatically.
+
 ## 0.23.0 — 2026-11-17
 
 New Input tester page (bottom of the sidebar). A keyboard drawing with F13 to
