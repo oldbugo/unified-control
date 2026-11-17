@@ -25,6 +25,7 @@ pub mod error;
 pub mod frame;
 pub mod hardware;
 pub mod hardware_bridge;
+pub mod input_tester;
 pub mod jobobject;
 pub mod js;
 pub mod key_render;

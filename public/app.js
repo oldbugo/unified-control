@@ -8,6 +8,7 @@ import {CoolerPanel} from './js/cooler-panel.js';
 import {Au05Panel,AU05_ICON} from './js/au05-panel.js';
 import {AgentEditorLease} from './js/agent-editor.js';
 import {installNavigationSearch} from './js/navigation-search.js';
+import {InputTesterPanel} from './js/input-tester.js';
 // Diagnostic only: a rejected promise nobody awaited is logged, never shown.
 window.addEventListener('unhandledrejection',event=>{console.warn('Unhandled promise rejection',event.reason);});
 const T = window.__TAURI_INTERNALS__;
@@ -15,9 +16,10 @@ const invoke = (cmd, args = {}) => T ? T.invoke(cmd, args) : Promise.reject(new 
 const coolerPanel=new CoolerPanel(invoke,!!T,()=>{syncDeviceVisibility();updateHomeDeviceStatus();});
 const au05Panel=new Au05Panel(invoke,!!T,()=>{syncDeviceVisibility();updateHomeDeviceStatus();});
 let refreshNavigationSearch=()=>{};
+const inputTester=new InputTesterPanel(invoke,!!T,()=>!!state?.fake);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORE = 'uc.interface-prototype.v1';
-const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', vibekey:'Vibe Key', dial:'Dial', general:'General', about:'About'};
+const NAV = {home:'Home', cooler:'Cooler screen', dock:'Stream dock', vibekey:'Vibe Key', dial:'Dial', general:'General', about:'About', inputtester:'Input tester'};
 const DEVICE_PAGES=['dock','cooler','vibekey','dial'];
 const FACES = {
   text:'Large text', icon:'Icon and label', picture:'Picture and label', clock:'Clock', date:'Date', claude:'Claude usage', codex:'Codex usage', reset:'Reset countdown', trend:'Quota trend', cpu:'CPU', gpu:'GPU', ram:'RAM'
@@ -313,11 +315,14 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   coolerPanel.unmount();
   if(draft.current==='vibekey'&&au05Panel.active(pane)){au05Panel.paint();showStorage();syncDeviceVisibility();return;}
   au05Panel.unmount();
+  if(draft.current==='inputtester'&&inputTester.active(pane)){showStorage();return;}
+  inputTester.unmount();
   let html = '';
   if (draft.current === 'dock') html = profilesReady && exitGuardReady ? dockPage() : '<div class="page-heading"><h1>Stream dock</h1></div><p>The editor is not ready. Existing layouts have been kept.</p><button class="btn" data-do="load-profiles">Try loading again</button>';
   else if (draft.current==='cooler') html=coolerPanel.markup();
   else if (draft.current==='vibekey') html=au05Panel.markup();
   else if (draft.current==='dial') html = plannedPage(draft.current);
+  else if (draft.current==='inputtester') html=inputTester.markup();
   else if (draft.current === 'home') html = `<div class="home-intro"><div><span class="eyebrow">YOUR WORKSPACE</span><h1>Your devices, together.</h1><p>Make the desk your own. Your enabled devices keep working as you move between them.</p><button class="btn" data-go="general">Manage devices ${icon('general')}</button></div><div class="workspace-art" aria-hidden="true"><span class="art-screen">${icon('cooler')}</span><span class="art-dock">${icon('dock')}</span><span class="art-orbit"></span></div></div><div class="section-heading"><div><span class="eyebrow">DEVICE WORKSPACE</span><h2>Devices</h2></div><span class="local-badge"><i></i>Runs locally</span></div><div class="device-list"></div><section id="devices-empty" class="empty-devices"><span class="device-icon">${icon('general')}</span><div><h3>Choose your devices</h3><p>Enable a device in General to add it to your workspace.</p></div><button class="btn primary" data-go="general">Open settings</button></section><p class="workspace-footnote">${T?'Closing the window keeps enabled devices running in the tray.':'Browser previews do not connect to hardware.'}</p>`;
   else if (draft.current === 'general') html = `
     <div class="page-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h1>General</h1><p>Your devices and the way Unified Control works.</p></div></div>
@@ -337,6 +342,7 @@ function render({preserveFocus=false,focusFallback=''}={}) {
   if(draft.current==='general')coolerPanel.mountSettings(pane.querySelector('#cooler-settings'));
   if(draft.current==='general')au05Panel.mountSettings(pane.querySelector('#au05-settings'));
   if(draft.current==='vibekey')au05Panel.mount(pane);
+  if(draft.current==='inputtester')inputTester.mount(pane);
   showStorage();
   updateNativePreviews();
   updatePictures();

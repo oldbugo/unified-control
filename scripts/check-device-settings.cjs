@@ -43,7 +43,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>document.getElementById('storage-status')?.textContent==='Changes saved in Unified Control');
   const nav=id=>page.locator(`.nav-item[data-page="${id}"]`);
   const visible=()=>page.locator('.nav-item:not([hidden])');
-  assert.equal(await visible().count(),3,'disabled/unimplemented devices are absent');
+  assert.equal(await visible().count(),4,'disabled/unimplemented devices are absent (Home, General, About, Input tester)');
   assert.equal(await page.locator('.device-card').count(),0);
   assert.equal(await page.locator('#devices-empty').isVisible(),true);
   assert.deepEqual(await page.evaluate(()=>window.__deviceWrites),[],'initial presentation enables nothing');
@@ -55,7 +55,7 @@ const server=http.createServer((req,res)=>{
   assert.equal(await nav('general').getAttribute('aria-current'),'page','enable keeps Settings open');
   await page.locator('#cooler-enabled').check();
   await page.waitForFunction(()=>!document.querySelector('[data-page="cooler"]').hidden);
-  assert.equal(await visible().count(),5);
+  assert.equal(await visible().count(),6);
   assert.equal(await page.locator('.device-advanced #dock-usage-status').count(),0,'dock usage must not appear in cooler diagnostics');
   assert.equal(await page.locator('#dock-usage-status').count(),0,'General does not create dock workspace usage status');
   await page.waitForTimeout(200); // Allow the switch's visual transition before screenshots.
@@ -82,7 +82,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>!document.getElementById('dock-enabled').checked);
   await page.locator('#cooler-enabled').click();
   await page.waitForFunction(()=>!document.getElementById('cooler-enabled').checked);
-  assert.equal(await visible().count(),3,'failed enable preserves hidden disabled devices');
+  assert.equal(await visible().count(),4,'failed enable preserves hidden disabled devices');
   await search.fill('themes');assert.equal(await visible().count(),0);
   await search.press('Escape');await nav('home').click();
   assert.equal(await page.locator('.device-card').count(),0);

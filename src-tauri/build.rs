@@ -85,6 +85,13 @@ fn main() {
         "agent_editor_present",
         "agent_editor_ready",
         "autostart_set",
+        // Input tester page (src/core/input_tester.rs)
+        "input_tester_start",
+        "input_tester_poll",
+        "input_tester_configure",
+        "input_tester_stop",
+        "input_tester_test_inject",
+        "input_tester_save_audio",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(cmds)),

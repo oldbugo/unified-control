@@ -154,7 +154,14 @@ fn main() {
             cc::monitor_list,
             cc::agent_editor_present,
             cc::agent_editor_ready,
-            cc::autostart_set
+            cc::autostart_set,
+            // Input tester page
+            uc_core::core::input_tester::input_tester_start,
+            uc_core::core::input_tester::input_tester_poll,
+            uc_core::core::input_tester::input_tester_configure,
+            uc_core::core::input_tester::input_tester_stop,
+            uc_core::core::input_tester::input_tester_test_inject,
+            uc_core::core::input_tester::input_tester_save_audio
         ])
         .setup(move |app| {
             uc_core::device::log(&uc_core::core::buildinfo::startup_line(env!(

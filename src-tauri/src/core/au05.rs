@@ -1134,6 +1134,10 @@ impl Au05 {
         tx.send(Cmd::Reconnect).map_err(|_| "The Vibe Key worker is unavailable".to_string())
     }
 
+    /// The hotkeys UC holds now (the Input tester marks these key presses: other apps never get them).
+    pub fn claimed_hotkeys(&self) -> Vec<u16> {
+        self.hotkeys.lock_or_recover().iter().filter(|(_, r)| r.is_ok()).map(|(vk, _)| *vk).collect()
+    }
     pub fn status(&self) -> Value {
         let s = self.status.lock_or_recover().clone();
         let k = &s.known;

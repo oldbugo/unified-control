@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.23.0 — 2026-11-17
+
+New Input tester page (bottom of the sidebar). A keyboard drawing with F13 to
+F24 lights up keys as you press them and shows the last combination; an event
+log names the device each key, button or wheel event came from (the Vibe Key,
+your keyboard, your mouse, any USB input), with counts per device and keys
+held by Unified Control marked. A microphone test shows a live level, records
+and plays back 5 seconds and shows the format; a speaker test plays a tone left,
+right or both. Nothing is saved or sent anywhere unless you press Save.
+
 ## 0.22.0 — 2026-11-17
 
 The Vibe Key page now says when the key has switched itself off: "The Vibe
