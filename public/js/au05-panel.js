@@ -284,6 +284,11 @@ export class Au05Panel{
       const press=keyOf('knobPress');
       const menuLine=a.kind==='quickMenu'&&press&&!press.uc&&k.key!=='knobPress'?'<p class="au05-line attention">Give the knob press a Unified Control action (Nothing is fine) to choose with it.</p>':'';
       const entry=cat.find(e=>e.id===a.kind);
+      // A plain keystroke can also be what the key types on its own.
+      const alsoKeys=view==='uc'?(a.kind==='hotkey'?(a.value||'').trim():entry?.offlineKeys||''):'';
+      const off=L.offline?.[k.key]||{};
+      const also=alsoKeys?(!off.factory&&off.keys===alsoKeys?`<p class="au05-line">On its own it types ${esc(alsoKeys)} too.</p>`
+        :`<button class="btn au05-also" type="button" data-au05-also="${esc(alsoKeys)}" data-control="${k.key}"${native}>Also use on its own (${esc(alsoKeys)})</button>`):'';
       const summary=view==='offline'?current(IC.keyboard,shortLabel(k.offline),'What it types on its own (change it under "On its own")')
         :!value.startsWith('uc:')?current(IC.dot,'No action yet','Pick one in the palette')
         :a.kind==='none'?current(actionIcon('none'),'Nothing','')
@@ -295,7 +300,7 @@ export class Au05Panel{
         <div class="au05-pills">${pills}</div></div>
         <div class="au05-seg au05-mode" data-au05-mode="${k.key}" data-value="${esc(value)}" role="group" aria-label="What ${esc(k.name)} does with Unified Control">${seg('uc','UC action')}${seg('offline','Same as on its own')}</div>
         <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
-        ${summary}${view==='uc'?custom+menuLine:''}`;
+        ${summary}${view==='uc'?custom+menuLine:''}${also}`;
     };
     // ---- the offline layer for one control (what the key types without Unified Control) ----
     const offlineRow=(name,label,factory,turn)=>{
@@ -313,8 +318,17 @@ export class Au05Panel{
           ${offlineRow('knobRight','Right','',true)}${offlineRow('knobLeft','Left','',true)}`;
       }
       const k=keyOf(this.selected);if(!k)return '<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+      // Actions the key can store as plain keys (they go to the app in front); the others need Unified Control.
+      const o=L.offline?.[k.key]||{};
+      const offCard=e=>{const keys=e.offlineKeys;const on=keys&&!o.factory&&o.keys===keys;
+        return keys?`<button type="button" class="au05-card au05-ocard${on?' is-selected':''}" data-au05-offline-pick="${esc(keys)}" data-control="${k.key}" aria-pressed="${on}" title="${esc(`${e.group}: ${e.label} · types ${keys} in the app in front`)}"${native}><span class="au05-card-icon">${actionIcon(e.id)}</span><span class="au05-card-name">${esc(shortName(e))}</span><span class="au05-kbd">${esc(keys)}</span></button>`
+          :`<span class="au05-card au05-ocard is-dim" aria-disabled="true" title="${esc(`${e.group}: ${e.label} · needs Unified Control`)}"><span class="au05-card-icon">${actionIcon(e.id)}</span><span class="au05-card-name">${esc(shortName(e))}</span><span class="au05-needs-uc">Needs Unified Control</span></span>`;};
+      const needUc=cat.filter(e=>!e.offlineKeys);
+      const offActions=`<div class="au05-set-label">Or take an action's keys</div><div class="au05-grid au05-offline-actions">${cat.filter(e=>e.offlineKeys).map(offCard).join('')}</div>
+        <details class="au05-needs-uc-list"><summary>Needs Unified Control (${needUc.length+1})</summary><div class="au05-grid au05-offline-actions">${needUc.map(offCard).join('')}
+        <span class="au05-card au05-ocard is-dim" aria-disabled="true" title="Quick menu, profiles and Claude sessions need Unified Control"><span class="au05-card-icon">${actionIcon('quickMenu')}</span><span class="au05-card-name">Quick menu</span><span class="au05-needs-uc">Needs Unified Control</span></span></div></details>`;
       return `<div class="au05-panel-head"><div><h2>${esc(ZONES[k.key])} · on its own</h2><span class="au05-types">On the key now: ${esc(onKey(k))} ${readLink(k)}</span></div><div class="au05-pills">${jobPill(k)}</div></div>
-        ${offlineRow(k.key,'',k.factory,false)}`;
+        ${offlineRow(k.key,'',k.factory,false)}${offActions}`;
     };
 
     // ---- the knob turn panel ----
@@ -349,7 +363,9 @@ export class Au05Panel{
     };
     const sel=id=>id===this.selected?' is-selected':'';
     const zone=(id,shape)=>shape.replace('<ZONE ','<').replace('/>',` data-au05-zone="${id}" class="au05-zone${sel(id)}${id==='knobTurn'?' au05-ring':''}" role="button" tabindex="0" aria-label="${ZONES[id]}: ${esc(assignment(id))}" aria-pressed="${id===this.selected}"/>`);
-    const callout=(id,y,anchorX,anchorY)=>`<g class="au05-callout${sel(id)}" data-au05-zone="${id}"><path d="M${anchorX} ${anchorY}H164V${y+17}H176" class="au05-leader"/><rect x="176" y="${y}" width="196" height="34" rx="8"/><text x="186" y="${y+14}" class="au05-name">${esc(ZONES[id])}</text><text x="186" y="${y+28}" class="au05-assign">${esc(clip(assignment(id)))}</text></g>`;
+    // A control waiting for "Set up" (not checked on the real key) is marked on the drawing.
+    const needsCheck=id=>{const ks=id==='knobTurn'?[...(s.turns||[])]:[...(s.keys||[])].filter(k=>k.key===id);return ks.some(k=>k.job?.state==='check');};
+    const callout=(id,y,anchorX,anchorY)=>`<g class="au05-callout${sel(id)}" data-au05-zone="${id}"><path d="M${anchorX} ${anchorY}H164V${y+17}H176" class="au05-leader"/><rect x="176" y="${y}" width="196" height="34" rx="8"/><text x="186" y="${y+14}" class="au05-name">${esc(ZONES[id])}</text><text x="186" y="${y+28}" class="au05-assign">${esc(clip(assignment(id)))}</text>${needsCheck(id)?`<g class="au05-needs-check"><title>Needs a check: choose it and press Set up</title><circle cx="360" cy="${y+10}" r="6"/><text x="360" y="${y+13.5}" text-anchor="middle">!</text></g>`:''}</g>`;
     const diagram=`<svg class="au05-diagram" viewBox="0 0 380 500" role="group" aria-label="Vibe Key layout. Choose a control.">
       <rect x="20" y="8" width="130" height="484" rx="22" class="au05-body"/>
       <text x="85" y="34" text-anchor="middle" class="au05-logo">Ulanzi</text>
@@ -636,6 +652,10 @@ export class Au05Panel{
     if(lv){this.layerView=lv.dataset.au05LayerView;this.paint(true);return true;}
     const ly=click('[data-au05-layer]');
     if(ly){this.configure({layer:ly.dataset.au05Layer});return true;}
+    const op=click('[data-au05-offline-pick]');
+    if(op){const c=op.dataset.control;this.offlineView[c]='keys';this.setOffline(c,'keys',op.dataset.au05OfflinePick);return true;}
+    const al=click('[data-au05-also]');
+    if(al){this.setOffline(al.dataset.control,'keys',al.dataset.au05Also);return true;}
     const om=click('[data-au05-offline-mode]');
     if(om){const c=om.dataset.control,v=om.dataset.au05OfflineMode;this.offlineView[c]=v;
       if(v==='factory')this.setOffline(c,'factory');else{this.paint(true);this.container.querySelector(`[data-au05-offline-keys="${c}"]`)?.focus();}

@@ -76,7 +76,8 @@ knob press never did. So UC does not use private events for actions. Instead:
    a message loop. Windows swallows the key press and sends WM_HOTKEY to UC, whatever app has focus.
 3. UC runs the chosen action on its own thread.
 
-Hotkeys are claimed only while the Vibe Key is enabled and a key has an action. They are released when the
+Hotkeys are claimed only while the Vibe Key is enabled and a key has an action (the "hotkey ... claimed" log
+lines appear only when the claimed set changes). They are released when the
 action is set to Nothing, when the key is switched to Types keys or Factory default, on disable and on quit.
 
 Real key, 2026-11-17: once a control types its own code, the key seems to stop reporting that control on the
@@ -221,7 +222,10 @@ Guards on key-typing commands (cmd 0x50; independent review 2026-11-17):
   key-typing commands until Reconnect or Try again (the page shows "Key changes paused: use Reconnect"); a
   queued newer choice is dropped, and the set's result is treated as unknown.
 - **Unchecked controls.** Knob press and knob left are not checked on the real key: UC never writes them by
-  itself; they show "Needs a check" with "Set up", which allows them. Once a set-up write's echo matched, the
+  itself; they show "Needs a check" with "Set up" (also while key changes are paused; marked "!" on the
+  drawing; logged once as "layer sync: knobPress needs Set up"), which allows them: one read, then one set.
+  Real-key bug on 0.24.0: a check skipped while key changes were paused never came back, so the knob press
+  with "Open quick menu" kept typing Backspace and the page showed nothing. Once a set-up write's echo matched, the
   control counts as checked on this key and is saved (`au05.setUp`).
 - **Keeping the user's keys (decision).** Until a control's offline typing is set by the user (or is not the
   factory default), nothing is written for it. When its list becomes known (read at start, or "Read from
@@ -247,6 +251,15 @@ still running a minute after a session end, key changes may start again, and Rec
 Stopping the worker forgets what the key holds. If the
 PC loses power while UC runs, the key keeps F19–F24 (harmless) until UC runs again; the page says so in one
 line.
+
+Actions on its own (user direction 2026-11-17: no more key-side fixes; the offline layer is not a priority):
+the "On its own" panel offers the catalogue actions the key can store as plain keystrokes
+(`au05_hotkey::offline_keys`: key combinations the key accepts, such as Claude dictation Ctrl + D or Send
+Enter; without UC they go to the app in front). The others (media keys, Dictate & send, Target-app actions,
+combinations with keys the key cannot store, the quick menu, profiles, Claude sessions) are listed greyed
+under "Needs Unified Control". In the live layer, a key with such an action (or a custom combination) shows
+"Also use on its own (keys)", which copies the keystroke into that control's offline layer. Every control,
+knob press and knob left included, is set up from the page (Set up); no scripts.
 
 Settings from before: a key action "none" (no UC action) became "offline" once (`au05.layers: 1`); the
 explicit UC "Nothing" stays "none" after that.
