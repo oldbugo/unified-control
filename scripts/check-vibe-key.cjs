@@ -82,7 +82,9 @@ const server=http.createServer((req,res)=>{
   // The panel: a mode switch (UC action, Types keys, Factory) and action cards grouped by app.
   const mode=key=>page.locator(`[data-au05-mode="${key}"]`);
   const segment=(key,v)=>page.locator(`[data-au05-mode="${key}"] [data-au05-segment="${v}"]`).click();
-  const choose=async(key,value)=>{await segment(key,'uc');await page.locator(`[data-au05-pick="${key}"][data-value="${value}"]`).click();};
+  // The action palette is always on the page: a click sets the selected part (picked on the drawing first).
+  const card=value=>page.locator(`[data-au05-palette][data-value="${value}"]`);
+  const choose=async(key,value)=>{await pick(key);await card(value).click();};
   await page.waitForSelector('.au05-diagram');
   for(const id of ['knobTurn','knobPress','k1','k2','k3'])
     assert.equal(await page.locator(`.au05-diagram .au05-zone[data-au05-zone="${id}"]`).count(),1,id);
@@ -92,11 +94,12 @@ const server=http.createServer((req,res)=>{
   await pick('k3');
   await page.waitForSelector('[data-au05-mode="k3"]');
   assert.equal(await mode('k3').getAttribute('data-value'),'uc:none','K3 types its own code: a UC action (Nothing)');
-  assert.equal(await page.locator('[data-au05-pick="k3"][data-value="uc:none"]').getAttribute('aria-pressed'),'true');
+  assert.equal(await card('uc:none').getAttribute('aria-pressed'),'true','the selected part\'s action is marked in the palette');
   // Grouped catalogue: one card section per app, unverified marked with a small badge.
-  assert.deepEqual(await page.locator('.au05-editor .au05-sec-title').allTextContents(),['Claude','ChatGPT','Windows & media','Unified Control']);
-  assert.equal(await page.locator('[data-au05-pick="k3"][data-value="uc:chatgptNewChat"] .au05-unv').count(),1);
-  assert.equal(await page.locator('[data-au05-pick="k3"][data-value="uc:claudeDictation"] .au05-unv').count(),0);
+  assert.deepEqual(await page.locator('.au05-palette .au05-sec-title').allTextContents(),['Claude','ChatGPT','Windows & media','Unified Control','Knob turn']);
+  assert.equal(await card('uc:chatgptNewChat').locator('.au05-unv').count(),1);
+  assert.equal(await card('uc:claudeDictation').locator('.au05-unv').count(),0);
+  assert.equal(await card('knob:scroll').getAttribute('aria-disabled'),'true','knob turn cards do not apply to a key');
   // A new key message lights up its zone.
   await page.evaluate(()=>window.__au05.events.unshift({at:Date.now()+1,control:'K1',pressed:true,code:'F20',action:null}));
   await page.waitForSelector('.au05-diagram .au05-flash[data-au05-zone="k1"]',{timeout:5000});
@@ -150,6 +153,22 @@ const server=http.createServer((req,res)=>{
   const changes=(await writes()).filter(w=>w.command==='au05_change').map(w=>w.change);
   assert.deepEqual(changes,[{setting:'lightRecord',record:1,field:'time',value:12},{setting:'keyTyping',key:'k2',mode:'uc'},
     {setting:'keyTyping',key:'k1',mode:'keys',keys:'Ctrl + D'},{setting:'keyTyping',key:'k3',mode:'factory'},{setting:'standbyTime',value:900}]);
+  // Drag and drop: a card dropped on K2 gives K2 that action; Undo restores the previous one (Ctrl + Enter).
+  await pick('k1');
+  await card('uc:volumeUp').dragTo(page.locator('.au05-diagram .au05-zone[data-au05-zone="k2"]'));
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k2'&&w.patch.action.kind==='volumeUp'));
+  await page.waitForFunction(()=>/K2 · confirm: Volume up/.test(document.querySelector('#au05-toast:not([hidden])')?.textContent||''));
+  assert.match(await page.locator('.au05-callout[data-au05-zone="k2"]').textContent(),/Volume up/);
+  await page.locator('[data-au05-undo]').click();
+  await page.waitForFunction(()=>{const w=window.__writes.filter(w=>w.patch?.action?.control==='k2');const last=w[w.length-1];return last.patch.action.kind==='hotkey'&&last.patch.action.value==='Ctrl + Enter';});
+  // A knob turn card is refused by a key and accepted by the knob ring.
+  const before=(await writes()).length;
+  await card('knob:volume').dragTo(page.locator('.au05-diagram .au05-zone[data-au05-zone="k1"]'));
+  await page.waitForTimeout(300);
+  assert.equal((await writes()).length,before,'nothing is written for a drop a key does not accept');
+  const ring=page.locator('.au05-diagram .au05-zone[data-au05-zone="knobTurn"]');const rb=await ring.boundingBox();
+  await card('knob:volume').dragTo(ring,{targetPosition:{x:4,y:rb.height/2}});
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.knobTurn==='uc'&&w.patch.knobTurnAction==='volume'));
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_reconnect'));
 

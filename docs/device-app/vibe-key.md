@@ -144,6 +144,25 @@ delivers a press to it only when the fake key types that key's own code, like Wi
 - Colours come from tokens only (`--hue-1..6`, `--hue-claude`, `--hue-chatgpt`, `--hue-system` added); UC is
   dark only, so a later light theme needs only new token values.
 
+## Action palette (user request 2026-11-17: drag an action onto the key)
+
+- The action cards are a persistent "Actions" palette beside the drawing (below it on narrow windows). It can
+  be folded; the choice is remembered on this PC (browser storage, `uc.au05.palette`).
+- **Drag** a card onto K1, K2, K3 or the knob press (the knob ring accepts only the "Knob turn" cards: Scroll,
+  Volume, Nothing). While dragging, every part that accepts the card is outlined, the one under the pointer
+  glows, and other places show a "not allowed" cursor. The drop gives that part the action at once, in the
+  active profile, and flashes it. A key in "Types keys" or "Factory" becomes a UC action, with the usual key
+  set-up and its status pill. Dragging uses pointer events (mouse or pen), not HTML drag and drop, which did
+  not start from buttons in the app's WebView; Escape cancels. On touch, cards are tapped.
+- **Click** (or Enter on a focused card) gives the card to the part selected on the drawing. The selected
+  part's current action is marked in the palette; cards that do not fit the selected part are dimmed.
+- **Undo:** each assignment shows "K2 · confirm: Send · Undo" for about 6 seconds; Undo restores the previous
+  action (and the previous key mode, or the previous knob turn choice).
+- A card dropped on a quick-menu entry replaces that entry; dropped on "Add entry" it adds one (catalogue
+  actions only).
+- The panel for the selected part keeps the mode switch, the status pills and a summary of the current
+  action; it no longer has its own card grid.
+
 ## Actions by application (2026-11-17)
 
 The action list is a data table (`CATALOGUE` and `APPS` in `src-tauri/src/core/au05_hotkey.rs`), grouped as

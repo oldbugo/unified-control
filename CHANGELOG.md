@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0 — 2026-11-17
+
+Drag actions onto the Vibe Key. The action cards are now an always-visible
+"Actions" palette beside the drawing (fold it away if you like). Drag a card
+onto K1, K2, K3 or the knob press and that key takes the action at once; the
+knob ring takes the knob-turn cards (Scroll, Volume, Nothing). Keys that can
+take the card light up while you drag. Clicking still works: select a key on
+the drawing, then click a card. Every change shows a short Undo. Cards can
+also be dropped onto the quick menu editor.
+
 ## 0.19.0 — 2026-11-17
 
 A clearer Vibe Key page. Profiles are cards along the top, with the Claude or

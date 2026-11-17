@@ -39,6 +39,9 @@ export class Au05Panel{
     this.selected='k1';this.lastFlashAt=null;this.lastChange={};
     // View-only state: which mode tab a panel shows, the menu card picker, profile renaming.
     this.modeView={};this.turnView=null;this.menuPick=null;this.renaming=false;this.dragPath=null;
+    // The palette: open or folded (remembered on this PC), the card being dragged, the last assignment to undo.
+    this.paletteOpen=true;try{this.paletteOpen=localStorage.getItem('uc.au05.palette')!=='closed';}catch{}
+    this.dragAction=null;this.undo=null;this.toastTimer=null;
     this.timer=setInterval(()=>this.refresh(),1000);
   }
   get enabled(){return this.state?.enabled===true;}
@@ -91,10 +94,52 @@ export class Au05Panel{
       container.addEventListener('focusout',e=>{if(e.target.matches?.('[data-au05-profile-name]')&&this.renaming){this.renaming=false;setTimeout(()=>this.paint(true),0);}});
       const parent=p=>String(p).split('.').slice(0,-1).join('.');
       const rowOf=e=>e.target.closest?.('[data-qm-row]');
+      // Palette cards are dragged with pointer events (mouse or pen; touch taps to assign), not HTML drag and drop: a copy of
+      // the card follows the pointer, the part under it lights up when it accepts the card, and the drop
+      // assigns it. Escape cancels.
+      const valid=(zone,v)=>zone==='knobTurn'?v.startsWith('knob:'):['k1','k2','k3','knobPress'].includes(zone)&&v.startsWith('uc:');
+      const menuOk=v=>/^uc:/.test(v)&&!['uc:quickMenu','uc:hotkey','uc:none'].includes(v);
+      const clear=()=>{for(const x of container.querySelectorAll('.drop-hover,.drop-target'))x.classList.remove('drop-hover','drop-target');};
+      const targetAt=(x,y,v)=>{
+        const el=document.elementFromPoint(x,y);if(!el||!container.contains(el))return null;
+        const z=el.closest('[data-au05-zone]');if(z)return {zone:z.dataset.au05Zone,ok:valid(z.dataset.au05Zone,v)};
+        const r=el.closest('[data-qm-row],[data-qm-op="add-top"]');if(r)return {row:r,ok:menuOk(v)};
+        return null;
+      };
+      let pd=null;
+      const end=()=>{if(pd?.ghost)pd.ghost.remove();pd=null;clear();document.body.classList.remove('au05-dragging');delete document.body.dataset.au05Drop;
+        this.container?.querySelector('#au05-page')?.classList.remove('drag-key','drag-knob');
+        if(this.dragAction!=null){this.dragAction=null;this.paint();}};
+      container.addEventListener('pointerdown',e=>{const c=e.target.closest?.('[data-au05-palette]');
+        if(!c||e.button!==0||c.disabled||!this.native||e.pointerType==='touch')return;pd={value:c.dataset.value,x:e.clientX,y:e.clientY,card:c,started:false};});
+      document.addEventListener('pointermove',e=>{
+        if(!pd)return;
+        if(!pd.started){if(Math.hypot(e.clientX-pd.x,e.clientY-pd.y)<6)return;
+          pd.started=true;this.dragAction=pd.value;
+          const g=pd.card.cloneNode(true);g.classList.add('au05-ghost');g.removeAttribute('data-au05-palette');g.style.width=`${pd.card.offsetWidth}px`;document.body.appendChild(g);pd.ghost=g;
+          document.body.classList.add('au05-dragging');
+          this.container?.querySelector('#au05-page')?.classList.add(pd.value.startsWith('knob:')?'drag-knob':'drag-key');}
+        e.preventDefault();
+        pd.ghost.style.transform=`translate(${e.clientX+10}px,${e.clientY+10}px)`;
+        pd.ghost.hidden=true;const t=targetAt(e.clientX,e.clientY,pd.value);pd.ghost.hidden=false;
+        clear();document.body.dataset.au05Drop=t?(t.ok?'ok':'no'):'';
+        if(t?.ok&&t.zone)for(const el of container.querySelectorAll(`.au05-diagram [data-au05-zone="${t.zone}"]`))el.classList.add('drop-hover');
+        if(t?.ok&&t.row)t.row.classList.add('drop-target');
+        pd.target=t;});
+      document.addEventListener('pointerup',e=>{
+        if(!pd)return;const {started,value,target}=pd;end();if(!started)return;
+        this.justDragged=true;setTimeout(()=>{this.justDragged=false;},0);
+        if(!target?.ok)return;
+        if(target.zone){this.assign(target.zone,value);return;}
+        const what=`a:${value.slice(3)}`,r=target.row;
+        if(r.dataset.qmRow!=null){const path=r.dataset.qmRow;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(what,l[i]);});}
+        else this.editMenu(en=>{en.push(this.entryFor(what));});});
+      document.addEventListener('pointercancel',()=>end());
+      document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pd?.started)end();});
       container.addEventListener('dragstart',e=>{const g=e.target.closest?.('[data-qm-drag]');if(!g)return;this.dragPath=g.dataset.qmDrag;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',this.dragPath);rowOf(e)?.classList.add('is-dragging');});
-      container.addEventListener('dragover',e=>{const r=rowOf(e);if(!r||this.dragPath==null||parent(r.dataset.qmRow)!==parent(this.dragPath))return;e.preventDefault();
+      container.addEventListener('dragover',e=>{if(this.dragAction!=null)return;const r=rowOf(e);if(!r||this.dragPath==null||parent(r.dataset.qmRow)!==parent(this.dragPath))return;e.preventDefault();
         for(const x of container.querySelectorAll('.au05-menu-row.drop-target'))if(x!==r)x.classList.remove('drop-target');r.classList.add('drop-target');});
-      container.addEventListener('drop',e=>{const r=rowOf(e);const from=this.dragPath;this.dragPath=null;if(!r||from==null||parent(r.dataset.qmRow)!==parent(from))return;e.preventDefault();
+      container.addEventListener('drop',e=>{if(this.dragAction!=null)return;const r=rowOf(e);const from=this.dragPath;this.dragPath=null;if(!r||from==null||parent(r.dataset.qmRow)!==parent(from))return;e.preventDefault();
         const to=Number(r.dataset.qmRow.split('.').pop());this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,from);if(i===to||!l[i])return;const [x]=l.splice(i,1);l.splice(to,0,x);});});
       container.addEventListener('dragend',()=>{this.dragPath=null;for(const x of container.querySelectorAll('.is-dragging,.drop-target'))x.classList.remove('is-dragging','drop-target');});
     }
@@ -145,9 +190,10 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue]);
+    const sig=JSON.stringify([s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
+    if(this.dragAction!=null&&!force)return this.flash();
     if(force||(sig!==this.lastSig&&!typing)){
       const refocus=controls.contains(active)&&active.id?active.id:null;
       this.lastSig=sig;controls.innerHTML=this.controlsMarkup();
@@ -160,6 +206,7 @@ export class Au05Panel{
     <p class="au05-status"><span id="au05-page-message"></span></p>
     <p id="au05-note" class="au05-note${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
     <div id="au05-controls"></div>
+    <div id="au05-toast" class="au05-toast" role="status" hidden><span class="au05-toast-text"></span><button type="button" class="au05-link" data-au05-undo>Undo</button></div>
     <details class="au05-box au05-events-box"><summary><span class="au05-box-title"><span class="au05-box-icon">${IC.keyboard}</span>Recent events</span></summary><ul id="au05-events" class="au05-events" aria-live="polite"></ul></details>`;
   }
   eventsMarkup(){
@@ -201,13 +248,18 @@ export class Au05Panel{
           unverified:e.status!=='verified',title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}${extra}</div>`;
     const pill=(text,kind='',cls='')=>`<span class="au05-pill ${kind} ${cls}">${esc(text)}</span>`;
 
-    // ---- the side panel for one key ----
+    // ---- the side panel for one key: mode, status and the current action (the palette assigns) ----
+    const current=(icon,name,sub)=>`<div class="au05-current"><span class="au05-card-icon">${icon}</span><div><strong>${esc(name)}</strong>${sub?`<span class="au05-muted">${esc(sub)}</span>`:''}</div></div>`;
+    const keyValue=k=>{
+      const a=s.actions?.[k.key]||{kind:'none'};const job=k.job;
+      const pendingMode=job&&job.state!=='done'&&job.state!=='failed'?(job.label===k.ownCode?'uc':job.label?.startsWith('Factory')?'factory':'keys'):null;
+      const effective=pendingMode||k.mode;
+      return (effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
+    };
     const keyEditor=k=>{
       const a=s.actions?.[k.key]||{kind:'none',value:'',app:''};
       const job=k.job;
-      const pendingMode=job&&job.state!=='done'&&job.state!=='failed'?(job.label===k.ownCode?'uc':job.label?.startsWith('Factory')?'factory':'keys'):null;
-      const effective=pendingMode||k.mode;
-      const value=(effective==='uc'||(effective==='unknown'&&a.kind!=='none'))?`uc:${a.kind}`:effective;
+      const value=keyValue(k);
       const view=this.modeView[k.key]||(value==='keys'?'keys':value==='factory'?'factory':'uc');
       const seg=(id,label)=>`<button type="button" data-au05-segment="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
       const pills=[
@@ -217,17 +269,19 @@ export class Au05Panel{
         job?(job.state==='done'?pill('Key updated','ok','au05-job'):job.state==='failed'?`<span class="au05-pill bad au05-job" title="${esc(job.message)}">Failed <button class="au05-link" type="button" data-au05-retry="${k.key}">Try again</button></span>`:pill(job.state==='sending'?'Sending…':'Waiting for key','warn','au05-job')):'',
         !job&&a.kind!=='none'&&k.mode!=='uc'&&k.mode!=='unknown'?`<span class="au05-pill warn">Not set up <button class="au05-link" type="button" data-au05-retry="${k.key}">Set up</button></span>`:'',
       ].join('');
-      const ucExtra=`<section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" style="--hue:var(--accent)">${IC.dot}</span><span class="au05-sec-title">Unified Control</span></h3><div class="au05-grid">
-        ${card(`data-au05-pick="${k.key}"`,'uc:quickMenu',actionIcon('quickMenu'),'Quick menu',value==='uc:quickMenu',{title:'Open the quick menu'})}
-        ${card(`data-au05-pick="${k.key}"`,'uc:hotkey',actionIcon('hotkey'),'Custom',value==='uc:hotkey',{title:'Any key combination'})}
-        ${card(`data-au05-pick="${k.key}"`,'uc:none',actionIcon('none'),'Nothing',value==='uc:none',{title:'The key does nothing'})}</div></section>`;
       const custom=value==='uc:hotkey'?`<div class="au05-inline"><input data-au05-action-value="${k.key}" maxlength="60" placeholder="Ctrl + Enter" aria-label="Key combination for ${esc(k.name)}" value="${esc(a.value)}">
         <select data-au05-action-app="${k.key}" aria-label="Send to">${opt('','To the focused app',a.app||'')}${(s.catalogue?.apps||[]).map(x=>opt(x.id,`To ${x.name}${x.verified?'':' (unverified)'}`,a.app||'')).join('')}</select></div>`:'';
       const press=keyOf('knobPress');
       const menuLine=a.kind==='quickMenu'&&press&&press.mode!=='uc'&&k.key!=='knobPress'?'<p class="au05-line attention">Set the knob press to a Unified Control action (Nothing is fine) to choose with it.</p>':'';
+      const entry=cat.find(e=>e.id===a.kind);
+      const summary=!value.startsWith('uc:')?current(IC.dot,'No action yet','Pick one in the palette')
+        :a.kind==='none'?current(actionIcon('none'),'Nothing','')
+        :a.kind==='quickMenu'?current(actionIcon('quickMenu'),'Quick menu','Unified Control')
+        :a.kind==='hotkey'?current(actionIcon('hotkey'),'Custom shortcut',a.value||'Type the keys')
+        :entry?current(actionIcon(entry.id),shortName(entry),`${entry.group}${entry.keys&&entry.keys!==entry.label?` · ${entry.keys}`:''}`):current(IC.dot,a.kind,'');
       const body=view==='keys'?`<div class="au05-inline"><input data-au05-keys="${k.key}" maxlength="60" placeholder="Ctrl + D" aria-label="Keys ${esc(k.name)} types" value="${esc(k.mode==='keys'?k.keys||'':'')}"></div>`
         :view==='factory'?`<p class="au05-line">${esc(k.name)} types ${esc(k.factory)}, stored on the key.</p>`
-        :`${custom}${menuLine}${catalogueSections(`data-au05-pick="${k.key}"`,'uc:',value,ucExtra)}`;
+        :`${summary}${custom}${menuLine}`;
       return `<div class="au05-panel-head"><div><h2>${esc(ZONES[k.key])}</h2>
           <span class="au05-types">Types ${esc(k.label?k.label.replace(/^Factory default \((.*)\)$/,'$1'):'—')} <button class="au05-link" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button></span></div>
         <div class="au05-pills">${pills}</div></div>
@@ -239,6 +293,7 @@ export class Au05Panel{
     // ---- the knob turn panel ----
     const anyMenu=Object.values(s.actions||{}).some(a=>a?.kind==='quickMenu');
     const turnAct=m.knobTurnAction||'scroll';
+    const TURN={scroll:['scroll','Scroll','One notch per click, under the mouse'],volume:['volume','Volume','Volume up and down'],none:['none','Nothing','Only moves the quick menu']};
     const knobEditor=()=>{
       const view=this.turnView||(m.knobTurn==='uc'?'uc':'factory');
       const seg=(id,label)=>`<button type="button" data-au05-turn-mode="${id}" aria-pressed="${view===id}"${live}>${esc(label)}</button>`;
@@ -246,11 +301,11 @@ export class Au05Panel{
         ${t.checked?'':'<span class="chip attention au05-untested">Untested</span>'}
         ${j?(j.state==='done'?pill('Key updated','ok'):j.state==='failed'?pill('Failed','bad'):pill(j.state==='sending'?'Sending…':'Waiting for key','warn')):''}
         <button class="au05-link" type="button" data-au05-read="${t.key}"${dis}>${t.mode==='unknown'?'Read':'Read again'}</button></div>`;};
-      const choice=(v,icon,name,title)=>`<button type="button" class="au05-card${m.knobTurn==='uc'&&turnAct===v?' is-selected':''}" data-au05-turn-pick="uc:${v}" aria-pressed="${m.knobTurn==='uc'&&turnAct===v}" title="${esc(title)}"${live}><span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span></button>`;
+      const [ic,name,sub]=TURN[turnAct]||TURN.scroll;
       return `<div class="au05-panel-head"><div><h2>Knob turn</h2><span class="au05-types">${m.knobTurn==='uc'?'Types F23 / F24':'Factory scroll'}${anyMenu?' · moves the quick menu':''}</span></div></div>
         <div class="au05-seg" data-au05-turn-seg role="group" aria-label="What turning the knob does">${seg('uc','UC action')}${seg('factory','Factory scroll')}</div>
         <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
-        ${view==='uc'?`<div class="au05-grid">${choice('scroll',actionIcon('scroll'),'Scroll','One notch per click, in the window under the mouse')}${choice('volume',actionIcon('volume'),'Volume','Volume up and down')}${choice('none',actionIcon('none'),'Nothing','Only moves the quick menu')}</div>`:''}
+        ${m.knobTurn==='uc'?current(actionIcon(ic),name,sub):''}
         <div class="au05-dirs">${(s.turns||[]).map(dir).join('')}</div>`;
     };
 
@@ -283,6 +338,29 @@ export class Au05Panel{
       ${callout('knobTurn',78,131,110)}${callout('knobPress',126,118,140)}${callout('k1',240,133,257)}${callout('k2',332,133,349)}${callout('k3',424,133,441)}
     </svg>`;
     const editor=this.selected==='knobTurn'?knobEditor():keyOf(this.selected)?keyEditor(keyOf(this.selected)):'<p class="au05-line">Wake the key (press any key) to read its controls.</p>';
+
+    // ---- the action palette: always on the page; drag a card onto the drawing, or click to set the selected part ----
+    const sel0=this.selected;const selKey=keyOf(sel0);
+    const selValue=sel0==='knobTurn'?(m.knobTurn==='uc'?`knob:${turnAct}`:''):selKey?keyValue(selKey):'';
+    const forKnob=sel0==='knobTurn';
+    const pcard=(value,icon,name,{keys='',unverified=false,title=''}={})=>{
+      const knob=value.startsWith('knob:');const dim=knob!==forKnob;
+      return `<button type="button" class="au05-card au05-pcard${selValue===value?' is-selected':''}${dim?' is-dim':''}" data-au05-palette="" data-value="${esc(value)}" aria-pressed="${selValue===value}"${dim?' aria-disabled="true"':''} title="${esc(title||name)}"${native}>
+        <span class="au05-card-icon">${icon}</span><span class="au05-card-name">${esc(name)}</span>${keys?`<span class="au05-kbd">${esc(keys)}</span>`:''}${unverified?'<span class="au05-unv" aria-label="unverified">?</span>':''}</button>`;
+    };
+    const paletteOpen=this.paletteOpen;
+    const paletteSections=`${SECTIONS.filter(sec=>cat.some(e=>e.group===sec.group)).map(sec=>
+      `<section class="au05-section"><h3 class="au05-sec">${mark(sec)}<span class="au05-sec-title">${esc(sec.title)}</span></h3><div class="au05-grid">${cat.filter(e=>e.group===sec.group).map(e=>
+        pcard(`uc:${e.id}`,actionIcon(e.id),shortName(e),{keys:e.keys&&e.keys!==e.label&&e.keys!==shortName(e)&&e.keys!=='Follows the target app'&&!/^(Play|Next|Previous|Volume|Mute)/.test(e.keys)?e.keys:'',
+          unverified:e.status!=='verified',title:`${e.group}: ${e.label}${e.keys&&e.keys!==e.label?` · ${e.keys}`:''}${e.status==='verified'?'':' · unverified'} · ${e.note}`})).join('')}</div></section>`).join('')}
+      <section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" aria-hidden="true" style="--hue:var(--accent)">${IC.dot}</span><span class="au05-sec-title">Unified Control</span></h3><div class="au05-grid">
+        ${pcard('uc:quickMenu',actionIcon('quickMenu'),'Quick menu',{title:'Open the quick menu'})}${pcard('uc:hotkey',actionIcon('hotkey'),'Custom',{title:'Any key combination'})}${pcard('uc:none',actionIcon('none'),'Nothing',{title:'The key does nothing'})}</div></section>
+      <section class="au05-section"><h3 class="au05-sec"><span class="au05-mark" aria-hidden="true" style="--hue:var(--hue-5)">${IC.scroll}</span><span class="au05-sec-title">Knob turn</span></h3><div class="au05-grid">
+        ${Object.entries(TURN).map(([v,[ic,name,title]])=>pcard(`knob:${v}`,actionIcon(ic),name,{title:`Knob turn: ${title}`})).join('')}</div></section>`;
+    const palette=`<section class="au05-box au05-palette${paletteOpen?'':' is-collapsed'}" aria-label="Actions">
+      <header class="au05-palette-head"><button type="button" class="au05-palette-toggle" data-au05-palette-toggle aria-expanded="${paletteOpen}">${paletteOpen?IC.down:IC.next}<span>Actions</span></button>
+        <span class="au05-muted au05-palette-hint">Drag onto a key, or click to set ${esc(ZONES[sel0]||'the selected part')}</span></header>
+      ${paletteOpen?`<div class="au05-sections">${paletteSections}</div>`:''}</section>`;
 
     // ---- profiles and target app ----
     const profiles=m.profiles||[];
@@ -372,7 +450,7 @@ export class Au05Panel{
       </div>`;
 
     return `${topBar}<div class="au05-workspace"><div class="au05-drawing">${diagram}</div>
-    <aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside></div>
+    <div class="au05-side"><aside class="au05-editor key-editor" aria-label="${esc(ZONES[this.selected])} settings">${editor}</aside>${palette}</div></div>
     <div class="au05-boxes">${menuBox}${claudeBox}</div>
     ${device}`;
   }
@@ -410,6 +488,38 @@ export class Au05Panel{
     try{this.state=await this.invoke('au05_change',{change:{setting:'knobTurn',mode:want}});this.setNote('');}
     catch(error){this.setNote(errorText(error),true);}
     this.paint(true);this.onState();
+  }
+  // What a part has now, so an assignment can be undone.
+  snapshot(part){
+    const s=this.state||{};
+    if(part==='knobTurn')return {part,knobTurn:s.menu?.knobTurn||'factory',act:s.menu?.knobTurnAction||'scroll'};
+    const k=(s.keys||[]).find(x=>x.key===part);
+    return {part,action:{...(s.actions?.[part]||{kind:'none',value:'',app:''})},mode:k?.mode,keys:k?.keys};
+  }
+  async restore(snap){
+    if(snap.part==='knobTurn'){await this.chooseTurn(snap.knobTurn==='uc'?`uc:${snap.act}`:'factory');return;}
+    const k=(this.state?.keys||[]).find(x=>x.key===snap.part);
+    if((snap.mode==='keys'||snap.mode==='factory')&&k?.mode!==snap.mode){this.modeView[snap.part]=snap.mode;await this.setMode(snap.part,snap.mode,snap.keys||'');}
+    await this.action(snap.part,snap.action.kind||'none',snap.action.value||'',snap.action.app||'');
+  }
+  // Give a part an action (a dropped or clicked palette card). A key in "Types keys" or "Factory" becomes a UC
+  // action (the usual key set-up runs, with its status pill). Shows Undo for about 6 seconds.
+  async assign(part,value,name){
+    if(part==='knobTurn'?!value.startsWith('knob:'):!value.startsWith('uc:'))return false;
+    const snap=this.snapshot(part);
+    const label=name||this.container?.querySelector(`[data-au05-palette][data-value="${CSS.escape(value)}"] .au05-card-name`)?.textContent||value;
+    this.selected=part;
+    if(part==='knobTurn'){this.turnView='uc';await this.chooseTurn(`uc:${value.slice(5)}`);}
+    else{this.modeView[part]='uc';await this.chooseAction(part,value.slice(3));}
+    this.paint(true);
+    for(const el of this.container?.querySelectorAll(`.au05-diagram [data-au05-zone="${part}"]`)||[]){el.classList.remove('au05-flash');void el.getBoundingClientRect();el.classList.add('au05-flash');setTimeout(()=>el.classList.remove('au05-flash'),900);}
+    this.toast(`${ZONES[part]}: ${label}`,()=>this.restore(snap));
+    return true;
+  }
+  toast(text,undo){
+    const t=this.container?.querySelector('#au05-toast');if(!t)return;
+    this.undo=undo;t.querySelector('.au05-toast-text').textContent=text;t.hidden=false;
+    clearTimeout(this.toastTimer);this.toastTimer=setTimeout(()=>{t.hidden=true;this.undo=null;},6000);
   }
   // Key typing is read only on request, one key at a time (the key can take up to 20 s to answer).
   async readKey(key){
@@ -472,6 +582,10 @@ export class Au05Panel{
     const cop=e.type==='click'&&t.closest?.('[data-claude-op]');
     if(cop){this.claudeOp(cop.dataset.claudeOp);return true;}
     const click=sel=>e.type==='click'&&t.closest?.(sel);
+    const pal=click('[data-au05-palette]');
+    if(pal){if(!this.justDragged&&pal.getAttribute('aria-disabled')!=='true')this.assign(this.selected,pal.dataset.value,pal.querySelector('.au05-card-name')?.textContent);return true;}
+    if(click('[data-au05-palette-toggle]')){this.paletteOpen=!this.paletteOpen;try{localStorage.setItem('uc.au05.palette',this.paletteOpen?'open':'closed');}catch{}this.paint(true);return true;}
+    if(click('[data-au05-undo]')){const u=this.undo;this.undo=null;const t=this.container?.querySelector('#au05-toast');if(t)t.hidden=true;clearTimeout(this.toastTimer);if(u)u();return true;}
     const qmPick=click('[data-qm-pick]');
     if(qmPick){this.menuPicked(qmPick.dataset.value);return true;}
     const cardPick=click('[data-au05-pick]');
@@ -482,7 +596,7 @@ export class Au05Panel{
       if(v==='factory')this.setMode(key,'factory');else{this.paint(true);if(v==='keys')this.container.querySelector(`[data-au05-keys="${key}"]`)?.focus();}
       return true;}
     const turnSeg=click('[data-au05-turn-mode]');
-    if(turnSeg){this.turnView=turnSeg.dataset.au05TurnMode;if(this.turnView==='factory')this.chooseTurn('factory');else this.paint(true);return true;}
+    if(turnSeg){this.turnView=turnSeg.dataset.au05TurnMode;this.chooseTurn(this.turnView==='factory'?'factory':`uc:${this.state?.menu?.knobTurnAction||'scroll'}`);return true;}
     const turnPick=click('[data-au05-turn-pick]');
     if(turnPick){this.chooseTurn(turnPick.dataset.au05TurnPick);return true;}
     const profPick=click('[data-au05-profile-pick]');
