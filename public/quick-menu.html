@@ -9,13 +9,13 @@
 <script type="module" src="js/quick-menu.js"></script>
 </head>
 <body>
-<main class="qm" aria-label="Vibe Key quick menu">
-  <header class="qm-head" data-tauri-drag-region>
-    <div class="qm-title" id="qm-title" data-tauri-drag-region>Quick menu</div>
-    <div class="qm-context" id="qm-context" data-tauri-drag-region></div>
-  </header>
-  <ul class="qm-rows" id="qm-rows" role="listbox" aria-labelledby="qm-title"></ul>
-  <footer class="qm-foot" id="qm-foot" role="status">Knob: move · press: choose · Esc: close</footer>
+<main class="qm" id="qm" aria-label="Vibe Key quick menu">
+  <div class="qm-wheel">
+    <svg class="qm-dial" id="qm-dial" role="listbox" aria-label="Quick menu" width="280" height="280" viewBox="-140 -140 280 280"></svg>
+    <div class="qm-handle" data-tauri-drag-region title="Drag to move the menu" aria-hidden="true"></div>
+  </div>
+  <div class="qm-caption" id="qm-caption" role="status"></div>
+  <div class="qm-foot" id="qm-foot">Turn: move</div>
 </main>
 </body>
 </html>

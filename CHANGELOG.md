@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.34.0 — 2026-11-17
+
+The quick menu is now a dial: a thick ring of pie segments instead of a list.
+Close (or Back, in a sub-menu) is always the top segment, and the other entries
+go round clockwise; turning the knob right moves clockwise, left goes back, and
+it stops at the ends instead of wrapping round. The highlighted segment lights
+up and moves out a little, and its full name (with the project and the working
+dot for Claude sessions) shows under the ring. When you go into an entry, it
+turns to the top and the next level appears as a bigger ring around it; up to
+three rings show at once. A level with more than 12 entries shows 12 at a time
+and moves along as you turn, with "8 / 31" under the ring. The middle of the
+ring is a handle for dragging the menu, and the dial keeps its place on each
+monitor. The window around it is see-through. Clicking a segment chooses it
+and the mouse wheel turns the dial.
+
 ## 0.33.0 — 2026-11-17
 
 The Vibe Key's settings no longer stay "Not read" after you wake the key. Unified

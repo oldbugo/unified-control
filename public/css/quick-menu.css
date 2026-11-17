@@ -1,20 +1,32 @@
-/* Vibe Key quick menu window (public/quick-menu.html). Colours and sizes from tokens.css. */
-html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(--text); font: var(--fs-body)/var(--lh-body) var(--font); overflow: hidden; user-select: none; }
-.qm { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--border-strong); box-sizing: border-box; }
-.qm-head { padding: var(--s2) var(--s3); background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: move; min-height: 41px; }
-.qm-title { font-size: var(--fs-h); line-height: var(--lh-h); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qm-context { display: flex; gap: var(--s2); margin-top: 2px; font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); }
-.qm-chip { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); }
-.qm-chip b { color: var(--text); font-weight: 600; }
-.qm-rows { list-style: none; margin: 0; padding: var(--s1); flex: 1; overflow-y: auto; }
-.qm-row { display: flex; align-items: center; gap: var(--s2); height: 42px; margin: 2px 0; padding: 0 var(--s3); border-radius: var(--r-sm); cursor: pointer; font-size: calc(var(--fs-body) + 1px); }
-.qm-row:hover { background: var(--accent-faint); }
-.qm-row[aria-selected="true"] { background: var(--accent-soft); outline: 2px solid var(--accent); font-weight: 600; }
-.qm-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qm-detail { font-size: var(--fs-tiny); color: var(--text-faint); }
-.qm-row[data-type="back"] .qm-label, .qm-row[data-type="close"] .qm-label { color: var(--text-muted); }
-.qm-row[data-current="true"] .qm-detail { color: var(--ok); }
-.qm-foot { padding: var(--s2) var(--s3); font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); border-top: 1px solid var(--border); }
+/* Vibe Key quick menu window (public/quick-menu.html), 0.34.0: a dial. The window is transparent: only the
+   rings, the caption and the hints show. Colours and sizes from tokens.css. */
+html, body { margin: 0; height: 100%; background: transparent; color: var(--text); font: var(--fs-body)/var(--lh-body) var(--font); overflow: hidden; user-select: none; }
+.qm { --dial: 280px; display: flex; flex-direction: column; align-items: center; margin: 0 auto; }
+.qm-wheel { position: relative; width: var(--dial); height: var(--dial); }
+.qm-dial { display: block; overflow: visible; }
+.qm-seg { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1; cursor: pointer; transition: fill .12s; }
+.qm-ring[data-active="true"] .qm-seg:hover { fill: var(--surface-3, var(--surface-2)); stroke: var(--accent); }
+.qm-seg[data-kind="nav"] { fill: var(--surface-1); }
+.qm-seg[data-current="true"] { stroke: var(--ok); }
+.qm-ring[data-active="true"] .qm-seg[data-hl="true"] { fill: var(--accent); stroke: var(--accent-hover); }
+.qm-ring[data-active="false"] .qm-seg { opacity: .45; cursor: default; }
+.qm-ring[data-active="false"] .qm-seg[data-hl="true"] { fill: var(--accent-soft); stroke: var(--accent); }
+.qm-labels { pointer-events: none; transition: opacity .12s; }
+.qm-label, .qm-plabel { fill: var(--text); font-size: var(--fs-small); text-anchor: middle; dominant-baseline: central; }
+.qm-label[data-kind="nav"] { fill: var(--text-muted); }
+.qm-label[data-hl="true"] { fill: var(--accent-ink); font-weight: 600; }
+.qm-plabel { fill: var(--text-muted); font-size: var(--fs-tiny); }
+.qm-wdot { fill: var(--ok); }
+.qm-label[data-hl="true"] .qm-wdot { fill: var(--accent-ink); }
+/* The hole in the middle: the drag handle (a grip of dots). */
+.qm-handle { position: absolute; left: 50%; top: 50%; width: 72px; height: 72px; margin: -36px 0 0 -36px; border-radius: 50%; cursor: move;
+  background: radial-gradient(circle, var(--text-faint) 1.6px, transparent 2.2px) 0 0 / 10px 10px content-box, color-mix(in srgb, var(--surface-1) 78%, transparent);
+  padding: 20px; box-sizing: border-box; border: 1px solid var(--border); }
+.qm-handle:hover { border-color: var(--border-strong); }
+.qm-caption { display: flex; align-items: center; gap: var(--s2); max-width: calc(100% - 24px); margin-top: 2px; padding: 6px 14px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border-strong); font-size: calc(var(--fs-body) + 1px); box-sizing: border-box; }
+.qm-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.qm-detail, .qm-pos { flex: none; font-size: var(--fs-tiny); color: var(--text-muted); white-space: nowrap; }
+.qm-pos { padding-left: var(--s2); border-left: 1px solid var(--border); }
+.qm-foot { margin-top: 6px; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); background: color-mix(in srgb, var(--surface-1) 80%, transparent); max-width: calc(100% - 24px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qm-foot.note { color: var(--warn); }
-.qm-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: middle; }
-.qm-empty { padding: var(--s3); color: var(--text-muted); }
+.qm-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }

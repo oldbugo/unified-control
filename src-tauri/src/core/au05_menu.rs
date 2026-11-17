@@ -582,17 +582,27 @@ impl MenuState {
             rows.push(json!({"label": e["label"], "type": t, "detail": detail, "current": current, "working": e["working"] == true}));
         }
         let mut title = vec!["Quick menu".to_string()];
+        // The levels above this one (the dial draws them as dimmed inner rings, at most the last two): their
+        // rows (Close or Back first, like `rows`) and the row that was chosen there.
+        let mut levels = Vec::new();
         let mut cur = menu.as_array().cloned().unwrap_or_default();
-        for &i in &self.path {
+        for (depth, &i) in self.path.iter().enumerate() {
             if let Some(e) = cur.get(i).cloned() {
+                let first = if depth == 0 { json!({"label": "Close", "type": "close"}) } else { json!({"label": "Back", "type": "back"}) };
+                let mut lr = vec![first];
+                lr.extend(cur.iter().map(|x| json!({"label": x["label"], "type": x["type"]})));
+                levels.push(json!({"rows": lr, "chosen": i + 1}));
                 title.push(e["label"].as_str().unwrap_or("").to_string());
                 cur = e["entries"].as_array().cloned().unwrap_or_default();
             }
         }
+        let levels: Vec<Value> = levels.split_off(levels.len().saturating_sub(2));
         json!({
             "open": self.open,
             "title": title,
             "rows": rows,
+            "depth": self.path.len(),
+            "levels": levels,
             "highlight": self.highlight,
             "profile": profile_name,
             "target": target_name(target),
@@ -762,6 +772,11 @@ mod tests {
                               "profiles": [{"id": "claude", "name": "Claude"}]});
         let v = m.view(&settings, &menu);
         assert_eq!(v["title"], json!(["Quick menu", "Switch profile"]));
+        // The dial's inner ring: the top level, with the chosen row.
+        assert_eq!(v["depth"], 1);
+        assert_eq!(v["levels"].as_array().unwrap().len(), 1);
+        assert_eq!(v["levels"][0]["rows"][0]["type"], "close");
+        assert_eq!(v["levels"][0]["rows"][v["levels"][0]["chosen"].as_u64().unwrap() as usize]["label"], "Switch profile");
         assert_eq!(v["rows"][0]["type"], "back");
         assert_eq!(v["rows"][1]["current"], true, "the current profile is marked");
         assert_eq!(v["profile"], "Claude");
