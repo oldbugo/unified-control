@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.0 — 2026-11-17
+
+Quick menu: each profile has its own menu, and switching profile switches the
+menu. "Close" is always the first entry ("Back" inside sub-menus). While the
+menu is open, K2 selects, K3 goes back (or closes at the top), the knob press
+closes without doing anything, and the knob turns move; K2 and K3 return to
+their normal jobs when the menu closes (changeable under Menu controls). The
+menu shows the profile and target app at the top and a short hint line.
+Claude sessions now show their real titles: the hook reads only the title
+line from the end of each session's file and nothing else.
+
 ## 0.27.0 — 2026-11-17
 
 Every Vibe Key control can now be fully set up from the Vibe Key page: when a
