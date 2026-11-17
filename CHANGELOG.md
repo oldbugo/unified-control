@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.21.0 — 2026-11-17
+
+Fix: the real Vibe Key's messages never reached Unified Control (key presses,
+knob turns and battery), so the key stayed "waiting" and key set-ups never
+ran. Unified Control now keeps one read always waiting on the receiver instead
+of starting and cancelling a read 40 times a second, and the Vibe Key log now
+shows what the receiver delivers (a summary at connect and a heartbeat).
+New: "Dictate & send" for Claude. The first press starts dictation; the next
+press stops it and sends, but only after checking that Claude really is
+recording and that Claude is in front, so a missed press never sends by
+mistake. New: a clear battery indicator above the drawing (percentage, low
+warning, last known level while the key sleeps); the Home card shows it too.
+
 ## 0.20.0 — 2026-11-17
 
 Drag actions onto the Vibe Key. The action cards are now an always-visible

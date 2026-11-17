@@ -1,6 +1,6 @@
 [package]
 name = "unified-control"
-version = "0.20.0"
+version = "0.21.0"
 description = "Unified Control: one tray app for the user's devices"
 edition = "2021"
 default-run = "unified-control"
@@ -22,9 +22,8 @@ ab_glyph = "0.2"
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
-# AU05 Vibe Key driver (uc-ulanzi PRs 3, 4 and 5, merged).
-# Local driver branch claude/au05-continuous-read (keep one read pending; diagnostics); the orchestrator switches this to GitHub.
-ulanzi_au05 = { git = "file:///C:/Users/pc/Documents/uc-worktrees/uc-ulanzi-au05", rev = "bdd2a3d5b29f2d18009ac3b3ee315a4c698f86e0" }
+# AU05 Vibe Key driver (uc-ulanzi PRs 3 to 6, merged).
+ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "63aa167cf0cf2879fa7341bcef14996309bdafdc" }
 
 [dev-dependencies]
 tempfile = "3"
