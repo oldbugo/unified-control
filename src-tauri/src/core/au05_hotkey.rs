@@ -141,12 +141,23 @@ pub const QUICK_MENU: &str = "quickMenu";
 /// "Same as on its own": no UC action; the key types its offline layer even while UC runs.
 pub const OFFLINE: &str = "offline";
 
+/// The keys this action can leave on the key itself for its offline layer ("On its own"), if any: plain
+/// keystrokes the key can store (user direction 2026-11-17). Media keys, the quick menu, Dictate & send,
+/// Target-app actions, sessions and profiles need Unified Control. Without UC the keys go to the app in front.
+pub fn offline_keys(e: &Entry) -> Option<&'static str> {
+    match e.effect {
+        Keys(k) if ulanzi_au05::protocol::KeyTyping::parse(k).is_ok() => Some(k),
+        _ => None,
+    }
+}
+
 /// The catalogue for the page, grouped in order.
 pub fn catalogue_json() -> serde_json::Value {
     serde_json::json!({
         "actions": CATALOGUE.iter().map(|e| serde_json::json!({
             "id": e.id, "group": e.group, "label": e.label, "status": e.status, "note": e.note,
             "keys": match e.effect { Keys(k) => k, Media(m) => m, Target(..) => "Follows the target app", DictateSend => "Ctrl + D, then Enter" },
+            "offlineKeys": offline_keys(e),
         })).collect::<Vec<_>>(),
         "apps": APPS.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "verified": a.verified})).collect::<Vec<_>>(),
     })
@@ -888,6 +899,21 @@ mod tests {
             assert!(super::super::actions::plan_action(&send).is_ok(), "{}", e.id);
             assert!(e.app.is_none_or(|a| app(a).is_some()), "{}", e.id);
         }
+    }
+    /// The offline layer offers only plain keystrokes the key can store.
+    #[test]
+    fn only_storable_keystrokes_are_offered_for_the_offline_layer() {
+        assert_eq!(offline_keys(entry("claudeDictation").unwrap()), Some("Ctrl + D"));
+        assert_eq!(offline_keys(entry("claudeSend").unwrap()), Some("Enter"));
+        for id in ["claudeDictateSend", "targetDictation", "playPause", "volumeUp"] {
+            assert_eq!(offline_keys(entry(id).unwrap()), None, "{id}");
+        }
+        for e in CATALOGUE {
+            if let Some(k) = offline_keys(e) {
+                assert!(ulanzi_au05::protocol::KeyTyping::parse(k).is_ok(), "{}", e.id);
+            }
+        }
+        assert!(catalogue_json()["actions"].as_array().unwrap().iter().any(|a| a["offlineKeys"] == "Ctrl + D"));
     }
     /// Dictate & send decides from the capture state: start, stop and send, a missed start (no second Ctrl + D),
     /// a stop that does not end the capture, and Claude losing the front: no Enter in the last three.

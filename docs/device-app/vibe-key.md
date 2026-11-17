@@ -252,6 +252,15 @@ Stopping the worker forgets what the key holds. If the
 PC loses power while UC runs, the key keeps F19–F24 (harmless) until UC runs again; the page says so in one
 line.
 
+Actions on its own (user direction 2026-11-17: no more key-side fixes; the offline layer is not a priority):
+the "On its own" panel offers the catalogue actions the key can store as plain keystrokes
+(`au05_hotkey::offline_keys`: key combinations the key accepts, such as Claude dictation Ctrl + D or Send
+Enter; without UC they go to the app in front). The others (media keys, Dictate & send, Target-app actions,
+combinations with keys the key cannot store, the quick menu, profiles, Claude sessions) are listed greyed
+under "Needs Unified Control". In the live layer, a key with such an action (or a custom combination) shows
+"Also use on its own (keys)", which copies the keystroke into that control's offline layer. Every control,
+knob press and knob left included, is set up from the page (Set up); no scripts.
+
 Settings from before: a key action "none" (no UC action) became "offline" once (`au05.layers: 1`); the
 explicit UC "Nothing" stays "none" after that.
 

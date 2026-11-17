@@ -23,8 +23,9 @@ const server=http.createServer((req,res)=>{
       layer:{target:'live',offlineOnKey:true,offline:{k1:{factory:true,label:'Factory default (Win + H)'},k2:{factory:true,label:'Factory default (Enter)'},k3:{factory:true,label:'Factory default (Esc)'},
         knobPress:{factory:true,label:'Factory default (Backspace)'},knobRight:{factory:true,label:'Factory default (scroll down)'},knobLeft:{factory:true,label:'Factory default (scroll up)'}}},
       catalogue:{apps:[{id:'claude',name:'Claude',verified:true},{id:'chatgpt',name:'ChatGPT',verified:false}],actions:[
-        {id:'claudeDictation',group:'Claude',label:'Start dictation',keys:'Ctrl + D',status:'verified',note:'Checked on this PC'},
-        {id:'chatgptNewChat',group:'ChatGPT',label:'New chat',keys:'Ctrl + Shift + O',status:'unverified',note:'Third-party report'},
+        {id:'claudeDictation',group:'Claude',label:'Start dictation',keys:'Ctrl + D',status:'verified',note:'Checked on this PC',offlineKeys:'Ctrl + D'},
+        {id:'claudeDictateSend',group:'Claude',label:'Dictate & send',keys:'Ctrl + D, then Enter',status:'unverified',note:'New: first press starts dictation',offlineKeys:null},
+        {id:'chatgptNewChat',group:'ChatGPT',label:'New chat',keys:'Ctrl + Shift + O',status:'unverified',note:'Third-party report',offlineKeys:'Ctrl + Shift + O'},
         {id:'volumeUp',group:'Windows / media',label:'Volume up',keys:'Volume up',status:'verified',note:'Standard media key'}]},
       checked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,lightRecord:false,hooksMode:false,micNr:false},
       lightRange:{modeMax:3,brightnessMax:10},micNrMax:3};
@@ -151,11 +152,24 @@ const server=http.createServer((req,res)=>{
   await keysInput.fill('Ctrl + D');await keysInput.press('Tab');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.offline?.control==='k1'&&w.patch.offline.keys==='Ctrl + D'));
   await page.waitForFunction(()=>/Types Ctrl \+ D/.test(document.querySelector('.au05-callout[data-au05-zone="k1"]')?.textContent||''));
+  // Only actions the key can store are offered; UC-only ones are greyed with "Needs Unified Control".
+  assert.equal(await page.locator('[data-au05-offline-pick][data-control="k1"]').count(),2,'Ctrl + D and Ctrl + Shift + O');
+  assert.match(await page.locator('.au05-needs-uc-list').textContent(),/Dictate & send[\s\S]*Needs Unified Control/);
+  assert.equal(await page.locator('.au05-needs-uc-list [data-au05-offline-pick]').count(),0,'nothing UC-only can be picked');
+  await page.locator('[data-au05-offline-pick="Ctrl + Shift + O"][data-control="k1"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.offline?.control==='k1'&&w.patch.offline.keys==='Ctrl + Shift + O'));
   // Store the offline layer now, and back.
   await page.locator('[data-au05-layer="offline"]').click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.layer==='offline'));
   await page.locator('[data-au05-layer="live"]').click();
   await page.locator('[data-au05-layer-view="live"]').click();
+  // Live layer: a plain-keystroke action offers "Also use on its own" (K1 has Start dictation, Ctrl + D).
+  await pick('k1');
+  await page.locator('[data-au05-palette][data-value="uc:claudeDictation"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.action?.control==='k1'&&w.patch.action.kind==='claudeDictation'));
+  await page.locator('[data-au05-also="Ctrl + D"][data-control="k1"]').click();
+  await page.waitForFunction(()=>window.__writes.filter(w=>w.patch?.offline?.control==='k1'&&w.patch.offline.keys==='Ctrl + D').length>=2);
+  await page.waitForFunction(()=>/On its own it types Ctrl \+ D too/.test(document.querySelector('.au05-editor')?.textContent||''));
   // K3 back to "Same as on its own" (no UC action; its hotkey is released).
   await pick('k3');
   await segment('k3','offline');
