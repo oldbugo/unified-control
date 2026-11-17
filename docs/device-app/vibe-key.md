@@ -457,6 +457,35 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### The dial (0.34.0, user request 2026-11-17)
+
+User: "let's make it a dial, like a round thing ... make a full circle ... like pieces of a pie ... the top one
+obviously is going to be the back or close ... every layer we sort of stagger the size ... make a donut ... in
+the middle ... a handlebar that we can drag it around."
+
+- The window (`quick_menu.rs`) is frameless and transparent (no shadow); only the rings, the caption pill and
+  the hints show. Its size follows the rings shown (`dial_size`: 340 x 376, 340 x 436, 416 x 512 logical),
+  kept around the same centre and clamped to the monitor's work area. The dial's centre per monitor is saved
+  (`quick-menu.json` `center`; an older top-left place is still read). It still takes focus when it opens, as
+  before (keyboard, and a click elsewhere closes it).
+- Geometry (`public/js/quick-menu-dial.js`, pure): equal segments, slot 0 centred at 12 o'clock and always
+  row 0 (Close at the top, Back in a sub-menu), the rest clockwise; no wrap-around (the core's clamp). At most
+  12 segments: longer levels become a window whose 11 slots after row 0 move only when the highlight reaches
+  an edge; the caption shows "n / total". Ring radii (inner, outer) for 1, 2, 3 rings: [44,120];
+  [44,88],[92,150]; [44,76],[80,118],[122,188]: the active ring is the outer one and grows about 1.25 x per
+  level; the dimmed parents fit inside it. The highlight is accent-filled and pushed out 8 px.
+- The core view (`MenuState::view`) carries `depth` and `levels`: the last two levels above, each with its
+  rows (Close/Back first) and the chosen row, so a parent ring is drawn turned with its chosen segment at the
+  top and only that segment's name.
+- Animation (about 200 ms, `quick-menu.js`): only when the level changes while open. Each ring goes from its
+  last turn and size to the new ones; a new ring grows in, a ring no longer shown fades out; Back reverses
+  it. A render after the menu was closed (the 0.32.0 "reopen where I left off") draws the rings in place.
+- Mouse: a click on a segment of the current ring chooses it; the wheel over the ring moves the highlight. The
+  hole is the drag handle (`data-tauri-drag-region`, move cursor); clicking it does nothing else.
+- Checks: `scripts/check-quick-menu.cjs` (headless, never a window: geometry, render, animation end states,
+  restore without animation, mouse, the 31-entry window, screenshots to `UC_QM_SHOTS`);
+  `quick_menu::tests::the_dial_window_fits_its_rings_and_the_work_area`.
+
 ### Awake, asleep, probably off: the shown state (0.32.0, user report 2026-11-17)
 
 - The page said "asleep" while the key was in use (log: K1 hotkey 06:13:13, "state asleep" 06:13:26, K1
