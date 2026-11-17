@@ -273,6 +273,23 @@ also on the Home card) when nothing has arrived since the connection opened for 
 + 2 minutes, or nothing for longer than the power-off time. Any message from the key clears it. The power-off
 setting has a short note that "Never" avoids this at some battery cost; UC does not change it.
 
+### The settings reads after a wake (0.33.0, user report 2026-11-17)
+
+- Real key log: the key woke after about 50 min off (07:23:33.240 connected, first status after 200 ms), get
+  battery was sent at once and got no reply (07:23:35.278 NoReply); standby, power-off, light, hooks and mic
+  ended "Paused", the session paused 30 s, and at 07:24:05 it was awake again but the reads were never sent
+  again: every device setting stayed "Not read".
+- Now (`au05::ConnectReads`): the reads (`read_all()`, never key typing) wait until the key has been awake for
+  2 × the settle time (3 s) and quiet for the settle time (1.5 s) since its last control event. A read that
+  ends without an answer stays to do (nothing outstanding is ever resent). After a stall (no reply, a write
+  timeout, a pause) the rest are sent once more when the pause has cleared and the key has settled, one at a
+  time, under the usual 2 s reply limit and send gate: at most one extra cycle per wake. A second stall leaves
+  them "Not read"; the page shows "Couldn't read the settings: Read again" with a Read again button (the
+  page's read-all), and nothing more is sent automatically.
+- A wake from "probably switched off" (the shown state was `off`) and Reconnect start the reads again.
+- Log lines: "settings reads again after a stall: get ...", "settings reads stalled again: left not read",
+  "woke from switched off: reading the settings again".
+
 ## Battery (user request 2026-11-17)
 
 - Above the drawing: a battery icon with its fill level and the percentage; warning colour at 15 % or less;
@@ -563,7 +580,9 @@ changes, and menu edits (entry count only); knob turn changes; Claude sessions c
 
 1. Enable in General. Confirm that UC opens only the private channel and shows "Connected" after a key
    press, with the battery value.
-2. Confirm the connect reads: standby 600 s, power-off 3600 s, light, mic (no cmd 0x50). Then press
+2. Confirm the connect reads: standby 600 s, power-off 3600 s, light, mic (no cmd 0x50). 0.33.0: let the key
+   switch itself off, wake it with the power button and check the values come back without Read all
+   (about 3 s after the wake; a "settings reads again after a stall" line if the first read stalled). Then press
    "Read from key" for K1, K2 and K3 one at a time. Watch for the 15 s key-typing read seen once on
    2026-11-16 (UC now waits up to 20 s and sends nothing else meanwhile).
 3. Set K3 to Unified Control action, Start dictation in Claude, from the page. From another app press K3:

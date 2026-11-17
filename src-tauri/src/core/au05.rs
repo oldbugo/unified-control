@@ -721,6 +721,8 @@ struct Status {
     generation: u64,
     jobs: [Option<KeyJob>; 6],
     sync: SyncState,
+    /// The settings reads after a wake stalled twice: left "Not read" (the page offers Read again).
+    reads_failed: bool,
 }
 
 /// Guards on key-typing commands (cmd 0x50; the 2026-11-16 incident and the 2026-11-17 review).
@@ -1272,6 +1274,7 @@ impl Au05 {
             generation: 0,
             jobs: Default::default(),
             sync: SyncState::default(),
+            reads_failed: false,
         }));
         let log = Arc::new(Log::default());
         let menu = Arc::new(MenuCtl {
@@ -1896,6 +1899,7 @@ impl Au05 {
                 "micNr": Request::SetMicNr(MicNr { level: 0, a: 0, b: 0 }).verified_on_hardware(),
             },
             "diagnostics": {"sent": s.sent, "stalls": s.stalls, "generation": s.generation},
+            "readsFailed": s.reads_failed.then_some(READS_FAILED_MESSAGE),
         })
     }
 
@@ -2278,8 +2282,11 @@ impl Worker {
         // The observed status interval (gaps of 2 to 60 s between messages; control events come faster).
         let mut interval: Option<Duration> = None;
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
-        let mut read_done = false;
+        let mut reads = ConnectReads::default();
+        reads.restart();
         let mut read_burst: Option<(Instant, Vec<u64>)> = None;
+        // When the key last became awake (after asleep, a pause, or at connect).
+        let mut awake_since: Option<Instant> = None;
         let mut last_state = None;
         // A "Read from key" waiting for the settle time (one at a time).
         let mut deferred_read: Option<(KeyId, Sender<Result<(), String>>, Instant)> = None;
@@ -2300,9 +2307,10 @@ impl Worker {
                     Ok(Cmd::Reconnect) => {
                         self.log.line("page reconnect");
                         session.resume();
-                        read_done = false;
+                        reads.restart();
                         let mut s = self.status.lock_or_recover();
                         s.last_error = None;
+                        s.reads_failed = false;
                         // Reconnect also lifts the guard after a failed key change (one more attempt each).
                         s.sync.blocked = false;
                         s.sync.no_new = false;
@@ -2313,17 +2321,25 @@ impl Worker {
                     Ok(Cmd::ReadAll(reply)) => {
                         self.log.line("page read all");
                         let mut result = Ok(());
+                        let mut sent = Vec::new();
                         for r in read_all_settings() {
                             let t = TICKETS.fetch_add(1, Ordering::Relaxed);
-                            match session.submit(t, r) {
+                            match session.submit(t, r.clone()) {
                                 Ok(()) => {
                                     tickets.insert(t, Purpose::Read);
+                                    if read_all().contains(&r) {
+                                        sent.push((t, r));
+                                    }
                                 }
                                 Err(f) => {
                                     result = Err(f.message());
                                     break;
                                 }
                             }
+                        }
+                        if !sent.is_empty() {
+                            reads.manual(sent);
+                            self.status.lock_or_recover().reads_failed = false;
                         }
                         let _ = reply.send(result);
                     }
@@ -2350,6 +2366,7 @@ impl Worker {
             ticks += 1;
             outputs_seen += outputs.len() as u64;
             for o in outputs {
+                self.track_read(&o, &mut reads);
                 self.handle(o, &mut tickets);
             }
             if Instant::now() >= next_beat {
@@ -2365,6 +2382,16 @@ impl Worker {
             let awake = session.state() == SessionState::Awake;
             if awake && !was_awake {
                 *self.quiet_from.lock_or_recover() = Some(Instant::now());
+                awake_since = Some(Instant::now());
+                // Woke from "probably switched off": its values may have changed while it was off.
+                if last_state.is_some_and(|(s, _)| s == "off") {
+                    self.log.line("woke from switched off: reading the settings again");
+                    reads.restart();
+                    self.status.lock_or_recover().reads_failed = false;
+                }
+            }
+            if !awake {
+                awake_since = None;
             }
             was_awake = awake;
             if deferred_read.is_some() && !session.has_pending(Request::slow_reply) {
@@ -2393,26 +2420,44 @@ impl Worker {
             self.sync_layers();
             self.start_jobs(&mut session, &mut tickets);
             let state = session.state();
-            if state == SessionState::Awake && !read_done {
-                read_done = true;
+            // The settings reads: awake for twice the settle time and settled since the last control event.
+            let ready = state == SessionState::Awake
+                && awake_since.is_some_and(|t| t.elapsed() >= self.config.settle * 2)
+                && self.settled();
+            let cycle = reads.cycle;
+            let batch = reads.next(ready);
+            if !batch.is_empty() {
+                if cycle >= 1 {
+                    self.log.line(&format!("settings reads again after a stall: {}", describe(&batch[0])));
+                }
                 let mut burst = Vec::new();
-                for r in read_all() {
+                for r in batch {
                     let t = TICKETS.fetch_add(1, Ordering::Relaxed);
-                    if session.submit(t, r).is_ok() {
-                        tickets.insert(t, Purpose::Read);
-                        burst.push(t);
+                    match session.submit(t, r.clone()) {
+                        Ok(()) => {
+                            tickets.insert(t, Purpose::Read);
+                            reads.out.insert(t, r);
+                            burst.push(t);
+                        }
+                        Err(_) => reads.todo.push(r),
                     }
                 }
-                read_burst = Some((Instant::now(), burst));
+                if cycle == 0 {
+                    read_burst = Some((Instant::now(), burst));
+                }
             }
             // Cap the read burst by total time: reads still queued after the limit are dropped.
             if let Some((started, burst)) = &read_burst {
                 if started.elapsed() >= READ_BURST_LIMIT {
                     for o in session.cancel_queued(|t, _| burst.contains(&t)) {
+                        self.track_read(&o, &mut reads);
                         self.handle(o, &mut tickets);
                     }
                     read_burst = None;
                 }
+            }
+            if reads.done() {
+                read_burst = None;
             }
             if outputs_seen > seen_before {
                 if let Some(gap) = last_msg.map(|t| t.elapsed()).filter(|g| *g >= Duration::from_secs(2) && *g <= Duration::from_secs(60)) {
@@ -2446,6 +2491,16 @@ impl Worker {
             }
         }
         self.finish(&mut session, &mut tickets);
+    }
+
+    /// Follow the settings reads' results (see `ConnectReads`).
+    fn track_read(&self, o: &Output, reads: &mut ConnectReads) {
+        if let Output::Done { ticket, result, .. } = o {
+            if reads.result(*ticket, result) {
+                self.log.line("settings reads stalled again: left not read (Read again on the page)");
+                self.status.lock_or_recover().reads_failed = true;
+            }
+        }
     }
 
     fn finish(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
@@ -2723,6 +2778,81 @@ impl Transport for MangleEcho {
             return Ok(Some(protocol::encode_frame(&p)));
         }
         Ok(Some(report))
+    }
+}
+
+pub const READS_FAILED_MESSAGE: &str = "Couldn't read the settings: Read again";
+
+/// The settings reads after a wake (0.33.0; real key 2026-11-17: sent the moment the key woke from a long
+/// quiet, the first read got no reply, the others ended "Paused" and they were never sent again, so the page
+/// kept "Not read"). They wait until the key has been awake for twice the settle time (3 s) and quiet for the
+/// settle time (1.5 s) since its last control event. Reads that ended without an answer stay to do; after a
+/// stall (no reply, a pause) they are sent once more when the pause has cleared and the key has settled
+/// again, one at a time: at most one extra cycle per wake. A second stall leaves them not read. Never key
+/// typing (cmd 0x50), and nothing still outstanding is ever resent.
+#[derive(Debug, Default)]
+struct ConnectReads {
+    /// Still to read (not answered yet, not outstanding).
+    todo: Vec<Request>,
+    /// Sent or queued, not answered yet.
+    out: HashMap<u64, Request>,
+    /// 0: not sent yet; 1: the first burst was sent; 2: the one extra cycle (one at a time).
+    cycle: u8,
+    /// The extra cycle stalled too: nothing more is sent automatically until the next wake or Read again.
+    failed: bool,
+}
+
+impl ConnectReads {
+    /// Read everything again (connected, Reconnect, a wake from "probably switched off"). What is still
+    /// outstanding is not sent again.
+    fn restart(&mut self) {
+        let out: Vec<Request> = self.out.values().cloned().collect();
+        self.todo = read_all().into_iter().filter(|r| !out.contains(r)).collect();
+        self.cycle = 0;
+        self.failed = false;
+    }
+    /// The page's Read again: these tickets cover the reads; no automatic cycle follows a stall.
+    fn manual(&mut self, sent: impl IntoIterator<Item = (u64, Request)>) {
+        for (t, r) in sent {
+            self.todo.retain(|x| *x != r);
+            self.out.insert(t, r);
+        }
+        self.cycle = 2;
+        self.failed = false;
+    }
+    /// A read's result. Returns true when it gave up just now.
+    fn result(&mut self, ticket: u64, result: &Result<protocol::Reply, Failure>) -> bool {
+        let Some(request) = self.out.remove(&ticket) else { return false };
+        let Err(f) = result else { return false };
+        if !self.todo.contains(&request) {
+            self.todo.push(request);
+        }
+        let stalled = matches!(f, Failure::NoReply | Failure::WriteTimeout | Failure::Paused | Failure::Suspended);
+        if stalled && self.cycle >= 2 && !self.failed {
+            self.failed = true;
+            return true;
+        }
+        false
+    }
+    /// What to send now (`ready`: the key is awake and settled). The first cycle sends every read (the
+    /// driver queues them, one at a time); the extra cycle sends one read at a time.
+    fn next(&mut self, ready: bool) -> Vec<Request> {
+        if !ready || self.failed || self.todo.is_empty() || !self.out.is_empty() {
+            return Vec::new();
+        }
+        match self.cycle {
+            0 => {
+                self.cycle = 1;
+                std::mem::take(&mut self.todo)
+            }
+            _ => {
+                self.cycle = 2;
+                vec![self.todo.remove(0)]
+            }
+        }
+    }
+    fn done(&self) -> bool {
+        self.todo.is_empty() && self.out.is_empty()
     }
 }
 
@@ -3072,6 +3202,86 @@ mod tests {
         au.reconnect().unwrap();
         au.change(Change::StandbyTime(700)).unwrap();
         assert_eq!(wait_for(&au, |s| s["standbyS"] == 700)["standbyS"], 700);
+        au.shutdown();
+    }
+
+    /// 0.33.0 (real key 2026-11-17): the settings reads wait for the key to settle after it wakes (twice the
+    /// settle time awake), not the moment it wakes.
+    #[test]
+    fn the_settings_reads_wait_for_the_key_to_settle_after_a_wake() {
+        let settle = Duration::from_millis(500);
+        let au = Au05::with_config(true, None, SessionConfig { settle, ..quick() });
+        au.fake_handle().unwrap().lock().status_period = Some(Duration::from_millis(200));
+        let start = Instant::now();
+        au.configure(&json!({"enabled": true}));
+        let s = wait_for(&au, |s| s["standbyS"].is_number());
+        assert!(start.elapsed() >= Duration::from_millis(900), "read after 2 × settle, not at once: {:?}", start.elapsed());
+        assert!(s["micNr"].is_object() || wait_for(&au, |s| s["micNr"].is_object())["micNr"].is_object());
+        au.shutdown();
+    }
+
+    /// 0.33.0: the first read gets no reply right after the wake, the others end "Paused": once the pause has
+    /// cleared and the key has settled, they are read again, one at a time, and the page shows the values.
+    #[test]
+    fn settings_reads_that_stalled_are_read_again_after_the_pause() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().drop_replies = 1;
+        au.configure(&json!({"enabled": true}));
+        assert_eq!(wait_for(&au, |s| s["state"] == "paused")["state"], "paused");
+        let s = wait_for(&au, |s| s["micNr"].is_object() && s["standbyS"].is_number() && s["sleepS"].is_number());
+        assert!(s["micNr"].is_object(), "read after the pause: {s}");
+        assert_eq!(s["standbyS"], fake.lock().standby_s);
+        assert!(s["hooksMode"].is_number() && s["light"].is_object(), "{s}");
+        assert!(s["readsFailed"].is_null());
+        assert!(fake.lock().forbidden.is_empty());
+        au.shutdown();
+    }
+
+    /// 0.33.0: the extra cycle stalls too: the reads stay "Not read", the page says so with Read again, and no
+    /// third attempt is made. Read again reads them.
+    #[test]
+    fn a_second_stall_leaves_the_settings_not_read_with_read_again() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().drop_replies = 2;
+        au.configure(&json!({"enabled": true}));
+        let s = wait_for(&au, |s| s["readsFailed"].is_string());
+        assert_eq!(s["readsFailed"], READS_FAILED_MESSAGE);
+        assert!(s["standbyS"].is_null() && s["micNr"].is_null(), "left not read: {s}");
+        // No third attempt (the pause is 200 ms here; wait well past it).
+        let sent = fake.lock().received.len();
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(fake.lock().received.len(), sent, "nothing more is sent automatically");
+        assert!(au.status()["standbyS"].is_null());
+        // Read again (the page's button) once the pause has cleared.
+        wait_for(&au, |s| s["state"] == "connected");
+        au.read_all().unwrap();
+        let s = wait_for(&au, |s| s["standbyS"].is_number() && s["micNr"].is_object());
+        assert!(s["standbyS"].is_number(), "{s}");
+        assert!(s["readsFailed"].is_null());
+        au.shutdown();
+    }
+
+    /// 0.33.0: a wake from "probably switched off" reads the settings again (they may have changed).
+    #[test]
+    fn a_wake_from_switched_off_reads_the_settings_again() {
+        // A 1 s awake window: shown as asleep after about 2.3 s, off past the key's power-off time (1 s here).
+        let au = Au05::with_config(true, None, SessionConfig { awake_window: Duration::from_secs(1), ..quick() });
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().status_period = Some(Duration::from_millis(200));
+        fake.lock().sleep_s = 1;
+        au.configure(&json!({"enabled": true}));
+        assert!(wait_for(&au, |s| s["sleepS"] == 1)["standbyS"].is_number());
+        fake.sleep();
+        let s = wait_for(&au, |s| s["state"] == "off");
+        assert_eq!(s["state"], "off", "{}", s["message"]);
+        // Changed while it was off (on the key itself).
+        fake.lock().standby_s = 900;
+        fake.wake();
+        let s = wait_for(&au, |s| s["standbyS"] == 900);
+        assert_eq!(s["standbyS"], 900, "read again after the wake");
+        assert_eq!(s["state"], "connected");
         au.shutdown();
     }
 

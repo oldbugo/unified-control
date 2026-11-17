@@ -226,6 +226,15 @@ const server=http.createServer((req,res)=>{
   await page.evaluate(()=>{window.__au05.menu.sessions={source:'desktop',open:3,groups:null,groupsNote:"Claude's sidebar groups were not found"};});
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>/groups the sessions by folder/.test(document.querySelector('.au05-claude')?.textContent||''));
+  // 0.33.0: the settings reads stalled twice: the page says so and offers Read again.
+  assert.equal(await page.locator('.au05-reads-failed').count(),0,'no note while the reads are fine');
+  await page.evaluate(()=>{window.__au05.readsFailed="Couldn't read the settings: Read again";});
+  await page.getByRole('button',{name:'Reconnect'}).click();
+  const again=page.locator('.au05-reads-failed').getByRole('button',{name:'Read again'});
+  await again.waitFor();
+  await page.evaluate(()=>{window.__au05.readsFailed=null;});
+  await again.click();
+  await page.waitForFunction(()=>window.__writes.filter(w=>w.command==='au05_read_all').length>0&&!document.querySelector('.au05-reads-failed'));
 
   const output=path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(output,{recursive:true});
   await pick('knobTurn');
