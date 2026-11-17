@@ -19,13 +19,14 @@ use uc_core::core::sync::MutexExt;
 
 const LABEL: &str = "quickmenu";
 const MARGIN: f64 = 24.0;
-/// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (170, 210,
-/// 260; 0.35.0), the push-out of the highlighted segment (10) and a margin (14) each side, at least 380 wide,
-/// plus the caption and hints (96). Matches `dialSize` in public/js/quick-menu-dial.js. On a smaller work area
-/// the window is clamped and the page draws the dial smaller.
+/// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (225, 254,
+/// 305; 0.37.0: a thicker band), Close/Back's taper (12), the push-out of the highlighted segment (10) and a
+/// margin (14) each side, at least 380 wide, plus the caption and hints (96). Matches `dialSize` in
+/// public/js/quick-menu-dial.js. On a smaller work area the window is clamped and the page draws the dial
+/// smaller.
 pub fn dial_size(rings: usize) -> (f64, f64) {
-    let outer = [170.0, 210.0, 260.0][rings.clamp(1, 3) - 1];
-    let d = 2.0 * (outer + 10.0 + 14.0);
+    let outer = [225.0, 254.0, 305.0][rings.clamp(1, 3) - 1];
+    let d = 2.0 * (outer + 12.0 + 10.0 + 14.0);
     (f64::max(d, 380.0), d + 96.0)
 }
 /// The caption and hints under the dial take 96 logical pixels: the window's centre is half of that below the
@@ -258,15 +259,15 @@ mod tests {
     /// by scripts/check-quick-menu.cjs) and stays inside the work area.
     #[test]
     fn the_dial_window_fits_its_rings_and_the_work_area() {
-        assert_eq!(dial_size(1), (388.0, 484.0));
-        assert_eq!(dial_size(2), (468.0, 564.0));
-        assert_eq!(dial_size(3), (568.0, 664.0));
+        assert_eq!(dial_size(1), (522.0, 618.0));
+        assert_eq!(dial_size(2), (580.0, 676.0));
+        assert_eq!(dial_size(3), (682.0, 778.0));
         assert_eq!(dial_size(9), dial_size(3), "at most 3 rings");
         assert_eq!(rings(&serde_json::json!({"levels": [{}, {}]})), 3);
         assert_eq!(rings(&serde_json::json!({})), 1);
         let wa = (0, 0, 1920, 1040);
-        assert_eq!(fit((960, 520), 568, 664, wa), (676, 188));
-        assert_eq!(fit((1900, 20), 568, 664, wa), (1352, 0), "clamped into the work area");
-        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 600)), (568.0, 600.0), "never taller than the work area");
+        assert_eq!(fit((960, 520), 682, 778, wa), (619, 131));
+        assert_eq!(fit((1900, 20), 682, 778, wa), (1238, 0), "clamped into the work area");
+        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 600)), (682.0, 600.0), "never taller than the work area");
     }
 }

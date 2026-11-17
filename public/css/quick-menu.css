@@ -5,7 +5,7 @@ html, body { margin: 0; height: 100%; background: transparent; color: var(--text
 .qm { --dial: 380px; --k: 1; display: flex; flex-direction: column; align-items: center; margin: 0 auto; }
 .qm-wheel { position: relative; width: var(--dial); height: var(--dial); }
 .qm-dial { display: block; overflow: visible; }
-.qm-seg { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1; cursor: pointer; transition: fill .12s; }
+.qm-seg { --shade: 0; fill: color-mix(in srgb, var(--surface-2), #000 calc(var(--shade) * 28%)); stroke: var(--border-strong); stroke-width: 1; cursor: pointer; transition: fill .12s; }
 .qm-ring[data-active="true"] .qm-seg:hover { fill: var(--surface-3); stroke: var(--accent); }
 .qm-seg[data-kind="nav"] { fill: var(--surface-1); }
 .qm-seg[data-current="true"] { stroke: var(--ok); stroke-width: 1.5; }
@@ -17,10 +17,9 @@ html, body { margin: 0; height: 100%; background: transparent; color: var(--text
 .qm-fade0 { stop-color: var(--surface-2); stop-opacity: 1; }
 .qm-fade1 { stop-color: var(--surface-2); stop-opacity: .15; }
 .qm-seg.qm-more { stroke-dasharray: 3 3; }
-/* The end stop: a wall across the ring where the list ends (anticlockwise of Close/Back). */
-.qm-stop { stroke: var(--text-muted); stroke-width: 5; stroke-linecap: round; pointer-events: none; }
 .qm-labels { pointer-events: none; transition: opacity .12s; }
 .qm-label, .qm-plabel { fill: var(--text); font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.qm-lab { pointer-events: none; }
 .qm-label[data-kind="nav"] { fill: var(--text-muted); }
 .qm-label[data-hl="true"] { fill: var(--accent-ink); }
 .qm-plabel { fill: var(--text-muted); }

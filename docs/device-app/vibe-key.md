@@ -486,6 +486,22 @@ the middle ... a handlebar that we can drag it around."
   restore without animation, mouse, the 31-entry window, screenshots to `UC_QM_SHOTS`);
   `quick_menu::tests::the_dial_window_fits_its_rings_and_the_work_area`.
 
+### The dial, 0.37.0 (user feedback on the real screen 2026-11-17)
+
+- "Only taking up like 50% ... you can go all the way": the visible rows share the whole ring (360 / rows
+  each, Close/Back counted; at most 8, the moving window beyond). The active band is about 1.5 times as thick
+  (radii [60,225]; [60,118],[126,254]; [60,100],[106,156],[164,305]); windows 522 x 618, 580 x 676,
+  682 x 778 logical, clamped to the work area (the page scales the dial down if needed).
+- "I can't be reading text upside down": labels are upright text centred on the segment (no textPath, no
+  turning: they are drawn outside the ring group that turns), up to 3 lines of whole words, 15 down to 11 px,
+  fitted to the segment (`boxFits`: every corner inside the band and the wedge, 6 px margin), clipped to it.
+  Then the short form (shared prefix, filler, least distinctive words dropped); one long word is split with a
+  hyphen at a normal size, else smaller (8 px). Never an ellipsis; the caption keeps the full name.
+- The end cue is a taper instead of the stick ("something a bit more integrated"): Close/Back's outer edge
+  is 12 px past the band, the next ones step down to the band, the last one is 9 px inside it (`taper`); in
+  long lists the taper is on the visible window, with the "more" fades. Subtle shading: up to 28 % darker
+  toward the last segment. The 120 ms bump at both ends stays.
+
 ### Sending to a quiet key, 0.37.0 (real key 2026-11-17: a brightness change ended "Asleep" while the key was awake)
 
 - The driver only sends while a message from the key arrived within its `awake_window` (11 s), but the key is

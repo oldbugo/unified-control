@@ -19,8 +19,18 @@ with the lit parts glowing, as checked on the real key. Brightness is a slider
 that sends when you let go. The mode records are folded under "Advanced", the
 Controls card appears once the codes are read, and Recent events shows only
 when there are some. The note under the title no longer repeats in the key
-card. On the quick menu dial, a very long single word is now shown whole
-(smaller, or split with a hyphen) instead of cut off.
+card.
+
+The quick menu dial uses the whole circle now: the entries share the ring
+equally (four entries are a quarter each), the ring is about half as thick
+again and the dial is bigger, so names have room. Names are always level and
+readable, never turned or upside down, on up to three lines; a name that still
+doesn't fit shows its most telling words, and a very long single word is split
+with a hyphen instead of cut off. The stick that marked the end of the list is
+gone: Close or Back is now the largest segment, each next one is a little
+smaller and the last one a notch smaller, so the step back up to Close or Back
+shows where the list starts and ends. The segments also get slightly darker
+toward the end of the list.
 
 ## 0.36.0 — 2026-11-17
 
