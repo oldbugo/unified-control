@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.0 — 2026-11-17
+
+Cooler engine 4.24.0: the screen's keep-display-on setting (0x15) is sent only
+once, at the first Live start after it is installed; every recorded screen hang
+began right after that setting was sent again at an update hand-over (one even
+after the 30 s wait). Approved by the user. Not yet verified on the screen:
+power-cycle the PC after installing, then leave Live on.
+
 ## 0.25.0 — 2026-11-17
 
 Claude and ChatGPT key actions now put the cursor in the app's message box
