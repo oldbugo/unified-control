@@ -236,6 +236,22 @@ impl App {
                 app.au05_session_end();
             }
         }));
+        // One-time settings migrations (saved, so they run once).
+        let mut au05_saved = settings.0["au05"].clone();
+        let was_close = au05_saved["menuControls"]["knobPress"] == "close";
+        let settings = if super::au05::migrate_menu_controls(&mut au05_saved) {
+            match self.settings.update(|s| s["au05"] = au05_saved.clone()) {
+                Ok(saved) => {
+                    if was_close {
+                        au05.log_line("settings: the knob press in the quick menu now selects (once; it can be changed on the Vibe Key page)");
+                    }
+                    saved
+                }
+                Err(_) => settings,
+            }
+        } else {
+            settings
+        };
         au05.configure(&settings.0["au05"]);
         let _ = self.au05.set(au05);
         let hardware = super::hardware::Service::new(fake);

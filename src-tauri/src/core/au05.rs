@@ -291,7 +291,12 @@ pub fn sanitize(v: &Value) -> Value {
         "target": v["target"].as_str().filter(|t| TARGETS.contains(t)).unwrap_or("claude"),
         "menu": entries,
         // While the quick menu is open (user request 2026-11-17): what K2, K3 and the knob press do there.
-        "menuControls": menu::sanitize_controls(&v["menuControls"]),
+        "menuControls": menu::sanitize_controls(&{
+            let mut m = v.clone();
+            migrate_menu_controls(&mut m);
+            m["menuControls"].clone()
+        }),
+        "menuControlsVersion": MENU_CONTROLS_VERSION,
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -363,6 +368,23 @@ fn profile_id(name: &str, profiles: &[Value]) -> String {
 /// Apply a page patch to the saved `au05` settings. Returns log lines (names only, no typed text).
 /// `{enabled?, action?: {control, kind, value, app}, profile?, target?, menu?, knobTurn?, knobTurnAction?,
 ///   profileEdit?: {op: add|rename|remove, id?, name?}}`
+/// The menu controls' settings version. 2 (0.31.0): a knob press "close" saved from the old default becomes
+/// "select", once (user feedback 2026-11-17); after that a user who picks "close" keeps it.
+pub const MENU_CONTROLS_VERSION: u64 = 2;
+
+/// The one-time menu controls migration on the raw Vibe Key settings. True when it changed anything (the
+/// marker included), so the caller saves it.
+pub fn migrate_menu_controls(au: &mut Value) -> bool {
+    if !au.is_object() || au["menuControlsVersion"].as_u64().unwrap_or(0) >= MENU_CONTROLS_VERSION {
+        return false;
+    }
+    if au["menuControls"]["knobPress"] == "close" {
+        au["menuControls"]["knobPress"] = json!("select");
+    }
+    au["menuControlsVersion"] = json!(MENU_CONTROLS_VERSION);
+    true
+}
+
 pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String> {
     *au = sanitize(au);
     let mut lines = Vec::new();
@@ -813,10 +835,12 @@ impl MenuCtl {
             None => Err("Claude's session files were not found".to_string()),
         };
         *self.session_source.lock_or_recover() = match &desktop {
-            Ok(all) => json!({"source": "desktop", "open": all.iter().filter(|s| !s.archived).count()}),
+            Ok(d) => json!({"source": "desktop", "open": d.sessions.iter().filter(|s| !s.archived).count(),
+                            "groups": d.groups.as_ref().ok().map(|g| g.scopes.values().map(|s| s.groups.len()).sum::<usize>()),
+                            "groupsNote": d.groups.as_ref().err()}),
             Err(e) => json!({"source": "hooks", "note": e}),
         };
-        menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_deref().ok())
+        menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok())
     }
 
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
@@ -1319,7 +1343,7 @@ impl Au05 {
             Vec::new()
         };
         let any_menu = ACTION_KEYS.iter().any(|(k, _)| saved_action(&actions, k) == Action::QuickMenu);
-        // Keys with a menu role (default: K2 select, K3 back, knob press close) are claimed while a key opens
+        // Keys with a menu role (default: K2 select, K3 back, knob press select) are claimed while a key opens
         // the menu, even with no action of their own: their own code reaches UC, which restores their normal
         // typing while the menu is closed.
         if enabled && any_menu {
@@ -3524,6 +3548,7 @@ mod tests {
         let s = au.status();
         assert_eq!(s["menu"]["sessions"]["source"], "desktop", "{}", s["menu"]["sessions"]);
         assert_eq!(s["menu"]["sessions"]["open"], 1);
+        assert!(s["menu"]["sessions"]["groupsNote"].as_str().unwrap().contains("sidebar groups were not found"), "no config file: by folder");
         au.set_claude_data(Some(base.join("missing")));
         std::thread::sleep(super::super::claude_tree::CACHE);
         let s = au.status();
@@ -3533,8 +3558,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// While the menu is open: K2 selects, K3 goes back (closes at the top), the knob press closes without
-    /// doing anything. While it is closed they do their normal thing again; K2 / K3 with "Same as on its own"
+    /// 0.31.0: a knob press "close" saved from the old default becomes "select", once (with a marker); after
+    /// that a user who picks "close" keeps it. New settings get the marker without a change.
+    #[test]
+    fn a_saved_knob_press_close_becomes_select_once() {
+        let mut old = json!({"enabled": true, "menuControls": {"k2": "select", "k3": "back", "knobPress": "close"}});
+        assert_eq!(sanitize(&old)["menuControls"]["knobPress"], "select", "applies before it is saved too");
+        assert!(migrate_menu_controls(&mut old));
+        assert_eq!(old["menuControls"], json!({"k2": "select", "k3": "back", "knobPress": "select"}));
+        assert_eq!(old["menuControlsVersion"], MENU_CONTROLS_VERSION);
+        assert!(!migrate_menu_controls(&mut old), "only once");
+        // The user picks Close again: kept, through sanitising and further patches.
+        let mut au = old.clone();
+        apply_patch(&mut au, &json!({"menuControls": {"knobPress": "close"}})).unwrap();
+        assert_eq!(au["menuControls"]["knobPress"], "close");
+        assert!(!migrate_menu_controls(&mut au));
+        apply_patch(&mut au, &json!({"enabled": false})).unwrap();
+        assert_eq!(sanitize(&au)["menuControls"]["knobPress"], "close", "a chosen Close stays");
+        // Another role saved before is left alone; settings without any get only the marker.
+        let mut back = json!({"menuControls": {"knobPress": "back"}});
+        assert!(migrate_menu_controls(&mut back));
+        assert_eq!(back["menuControls"]["knobPress"], "back");
+        let mut none = json!({"enabled": true});
+        assert!(migrate_menu_controls(&mut none));
+        assert_eq!(sanitize(&none)["menuControls"]["knobPress"], "select");
+        // A worker configured from old settings: the knob press selects in the open menu.
+        let au = worker();
+        au.configure(&json!({"enabled": true, "menuControls": {"knobPress": "close"}}));
+        assert_eq!(au.status()["menu"]["controls"]["knobPress"], "select", "{}", au.status()["menu"]["controls"]);
+        au.shutdown();
+    }
+
+    /// While the menu is open: K2 selects, K3 goes back (closes at the top), the knob press set to Close closes
+    /// without doing anything (its default is Select). While it is closed they do their normal thing again; K2 / K3 with "Same as on its own"
     /// type their own codes for UC, which types their offline keys for them (K3: Esc).
     #[test]
     fn menu_controls_while_open_and_normal_keys_after_close() {

@@ -386,8 +386,8 @@ one key opens a menu.
 - **Close and Back.** "Close" is always the first row at the top level and "Back" the first row inside a
   sub-menu (fixed, not stored, not removable). The menu opens on the first entry after Close.
 - **Menu controls** (`au05.menuControls`, the page's "Menu controls"): while the menu is open the knob turn
-  moves; K2 selects, K3 goes back (at the top: closes), the knob press closes without doing anything
-  (defaults; each can be Select, Back, Close or "Its own action"). Their normal actions wait while the menu is
+  moves; K2 selects, K3 goes back (at the top: closes), the knob press selects (defaults since 0.30.0; each
+  can be Select, Back, Close or "Its own action"; 0.31.0 moved a saved "close" to "select" once, see below). Their normal actions wait while the menu is
   open and work again once it closes. This replaces the earlier "knob press chooses".
 - **Own codes for K2 and K3.** While any key opens the menu, K2 and K3 with a menu role type their own codes
   (F21, F22) in the live layer and UC claims them, even when their action is "Same as on its own" (otherwise
@@ -439,6 +439,26 @@ one key opens a menu.
   working or Claude recorded activity in the last 2 minutes (and on every node above it).
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
+
+### Sidebar groups as projects, knob press migration (0.31.0, user feedback 2026-11-17)
+
+- **Projects are the sidebar groups** of the Claude Code tab ("Unified Control", "Project Nocturne", ...), not
+  folder names. Read-only from `%LOCALAPPDATA%\Claude-Data\claude_<suffix>\claude_desktop_config.json`, only
+  `preferences.epitaxyPrefs["dframe-group-scopes"]["<account>/<org>"].groups` (`{id, name, mode}` in sidebar
+  order) and `.assignments` (`"code:local_<uuid>": "<group id>"`). The scope matches the session file's
+  `claude-code-sessions\<account>\<org>` folder. The file also holds connector (MCP) settings and other
+  preferences: parsing skips every other key, and nothing else is kept, logged or shown. Files over 2 MB are
+  skipped; it is re-read with the session files (5 s cache, when the menu opens).
+- **The tree**: the groups at the top in sidebar order (empty groups left out). A session goes under its
+  assigned group; a sub-session without its own assignment goes under its parent's group, still as its
+  parent's child (a sub-session assigned to another group starts a tree there). Sessions in no group go in a
+  last "Other sessions" entry, by folder as before. Inside a group the parent/child tree is kept.
+- **Fallback**: if the file or the key is missing or unreadable, the projects are the folders (as in 0.30.0)
+  and the Claude sessions card says the sidebar groups were not found.
+- **Knob press migration**: 0.30.0 changed only the default, so a "close" saved from the old default kept
+  closing the menu on the real key. At start, settings without `au05.menuControlsVersion` 2 get a knob press
+  "close" changed to "select", and the marker is saved: it runs once, and a user who picks "close" afterwards
+  keeps it. The log says so when it changed the role.
 
 ## Claude sessions (2026-11-17)
 

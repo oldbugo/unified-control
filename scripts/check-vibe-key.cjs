@@ -49,6 +49,7 @@ const server=http.createServer((req,res)=>{
         if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value,app:args.patch.action.app||''};
         if(args.patch.offline){const o=args.patch.offline;window.__au05.layer.offline[o.control]=o.mode==='keys'?{factory:false,keys:o.keys,label:o.keys}:{factory:true,label:'Factory default'};}
         if(args.patch.layer)window.__au05.layer.target=args.patch.layer;
+        if(args.patch.menuControls){window.__au05.menu=window.__au05.menu||{};window.__au05.menu.controls={...window.__au05.menu.controls,...args.patch.menuControls};}
         hotkeys();return structuredClone(window.__au05);
       }
       if(command==='au05_change'){
@@ -205,6 +206,20 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.knobTurn==='uc'&&w.patch.knobTurnAction==='volume'));
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_reconnect'));
+
+  // The knob press menu role is shown (Select after the 0.31.0 migration) and can be changed.
+  await page.evaluate(()=>{window.__au05.menu={controls:{k2:'select',k3:'back',knobPress:'select'},sessions:{source:'desktop',open:3,groups:2,groupsNote:null}};});
+  await page.getByRole('button',{name:'Reconnect'}).click();
+  const press=page.locator('select[data-qm-role="knobPress"]');
+  await press.waitFor();
+  assert.equal(await press.inputValue(),'select','the knob press selects by default');
+  assert.match(await page.locator('.au05-claude').textContent(),/grouped by your Claude sidebar projects/);
+  await press.selectOption('close');
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.menuControls?.knobPress==='close'));
+  await page.waitForFunction(()=>document.querySelector('select[data-qm-role="knobPress"]')?.value==='close');
+  await page.evaluate(()=>{window.__au05.menu.sessions={source:'desktop',open:3,groups:null,groupsNote:"Claude's sidebar groups were not found"};});
+  await page.getByRole('button',{name:'Reconnect'}).click();
+  await page.waitForFunction(()=>/groups the sessions by folder/.test(document.querySelector('.au05-claude')?.textContent||''));
 
   const output=path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(output,{recursive:true});
   await pick('knobTurn');

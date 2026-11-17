@@ -107,7 +107,7 @@ fn age(ms: u64) -> String {
 /// project: the sessions directly), most recent first, at most 30. `sessions` from `claude_sessions`.
 /// `desktop`: the Claude desktop app's own session list (`claude_tree`), used when it could be read; else the
 /// hook list.
-pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, desktop: Option<&[super::claude_tree::DesktopSession]>) -> Value {
+pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, desktop: Option<&super::claude_tree::Desktop>) -> Value {
     let Some(list) = menu.as_array() else { return json!([]) };
     Value::Array(
         list.iter()
@@ -118,7 +118,8 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, de
                         .filter(|s| s["state"] == "working")
                         .filter_map(|s| s["desktopId"].as_str().map(str::to_string))
                         .collect();
-                    let mut entries = super::claude_tree::tree(desktop.unwrap_or_default(), &working, &e["then"], now_ms);
+                    let d = desktop.expect("checked");
+                    let mut entries = super::claude_tree::tree(&d.sessions, d.groups.as_ref().ok(), &working, &e["then"], now_ms);
                     if entries.is_empty() {
                         entries.push(json!({"type": "note", "label": "No open Claude sessions"}));
                     }
@@ -259,7 +260,7 @@ fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) 
 pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "select"), ("k3", "back"), ("knobPress", "select")];
 pub const ROLES: [&str; 4] = ["select", "back", "close", "none"];
 
-/// The menu roles, defaults filled in: K2 select, K3 back, knob press close.
+/// The menu roles, defaults filled in: K2 select, K3 back, knob press select.
 pub fn sanitize_controls(v: &Value) -> Value {
     Value::Object(
         CONTROL_KEYS
@@ -513,7 +514,7 @@ impl MenuState {
     }
 }
 
-/// "K2 select · K3 back · knob press close" (from the roles), with the knob turn first.
+/// "K2 select · K3 back · Knob press select" (from the roles), with the knob turn first.
 pub fn hints(controls: &Value) -> String {
     let mut parts = vec!["Turn: move".to_string()];
     for (k, _) in CONTROL_KEYS {
@@ -614,7 +615,7 @@ mod tests {
         let clean = sanitize_menu(&bad, &profiles);
         assert_eq!(clean.as_array().unwrap().len(), 1, "only the sub-menu is kept");
         assert!(clean[0]["entries"][0]["entries"].as_array().unwrap().is_empty(), "at most three levels");
-        // Menu controls: defaults K2 select, K3 back, knob press close; invalid values fall back.
+        // Menu controls: defaults K2 select, K3 back, knob press select; invalid values fall back.
         let c = sanitize_controls(&json!({"k2": "close", "k3": "explode"}));
         assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "select"}));
         assert_eq!(role(&json!({}), "k1"), "none");

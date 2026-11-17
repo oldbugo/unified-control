@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.31.0 — 2026-11-17
+
+The quick menu's Claude sessions now use your own projects from the Claude
+sidebar ("Unified Control", "Project Nocturne" and so on), in sidebar order,
+instead of folder names. Each session sits under its project with its
+sub-sessions below it; a sub-session you have not moved goes with the session
+that started it. Sessions in no project are under "Other sessions", by folder.
+Unified Control reads only the project names and which session is in which
+project from the Claude app's settings file, and never writes there. If that
+changes in a Claude update, the menu groups by folder again and the Claude
+sessions card says so. Pressing the knob in the menu now selects for everyone:
+a "Close" saved from the old default is changed to "Select" once; you can still
+choose Close on the Vibe Key page and it stays.
+
 ## 0.30.0 — 2026-11-17
 
 The quick menu's Claude sessions now list every session you have not archived,
