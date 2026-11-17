@@ -9,6 +9,7 @@
 //! [`MenuView`]; tests and quiet instances have no view, so nothing ever appears on the desktop.
 use super::au05_hotkey::{self as hotkey, TARGETS};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// The menu closes after this long without input.
@@ -307,6 +308,31 @@ pub enum Outcome {
     Unavailable(String),
 }
 
+/// A stable id for a menu entry (the list changes between opens, so rows are not enough): a sidebar group, a
+/// Claude session (a session's sub-menu and the session itself share it), a project folder, a profile...
+pub fn entry_key(e: &Value) -> String {
+    let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
+    match e["type"].as_str().unwrap_or("") {
+        "claudeSession" => format!("s:{}", s("session")),
+        "submenu" if e["group"].is_string() => format!("g:{}", s("group")),
+        "submenu" if e["project"] == true => format!("p:{}", s("label").to_lowercase()),
+        "submenu" if e["session"].is_string() => format!("s:{}", s("session")),
+        "profile" => format!("profile:{}", s("profile")),
+        "target" => format!("target:{}", s("target")),
+        "action" => format!("a:{}:{}", e["action"]["kind"].as_str().unwrap_or(""), e["action"]["value"].as_str().unwrap_or("")),
+        t => format!("{t}:{}", s("label")),
+    }
+}
+
+/// Where the menu was when it closed (user request 2026-11-17, "remember where we were standing"): the
+/// sub-menus by id (and row, for when one is gone), and the highlighted entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Spot {
+    path: Vec<(String, usize)>,
+    row: usize,
+    key: Option<String>,
+}
+
 /// The menu's state machine. Rows: row 0 is "Close" at the top level and "Back" in a sub-menu (fixed, user
 /// request 2026-11-17); row i is entry i-1.
 #[derive(Clone, Debug, Default)]
@@ -316,6 +342,13 @@ pub struct MenuState {
     pub highlight: usize,
     last_input: Option<Instant>,
     pub note: Option<String>,
+    /// "Reopen where I left off" (setting `reopenWhereLeft`, default on).
+    pub remember: bool,
+    /// Whose menu this is (the profile): the memory is per profile menu.
+    pub scope: String,
+    /// The last spot per profile menu, in memory only (not kept over an app restart).
+    memory: HashMap<String, Spot>,
+    closing: bool,
 }
 
 impl MenuState {
@@ -341,27 +374,84 @@ impl MenuState {
     fn rows(&mut self, menu: &Value) -> usize {
         self.level(menu).len() + self.offset()
     }
+    /// The path and highlight are kept until `step` has remembered them.
     fn close(&mut self) -> Outcome {
         self.open = false;
-        self.path.clear();
-        self.highlight = 0;
+        self.closing = true;
         self.note = None;
         Outcome::Closed
+    }
+    /// Remember where the menu closed (Close highlighted at the top: nothing to come back to).
+    fn remember_spot(&mut self, menu: &Value) {
+        if !self.remember || (self.path.is_empty() && self.highlight == 0) {
+            self.memory.remove(&self.scope);
+            return;
+        }
+        let mut cur = menu.as_array().cloned().unwrap_or_default();
+        let mut path = Vec::new();
+        for &i in &self.path {
+            let Some(e) = cur.get(i).cloned() else { break };
+            path.push((entry_key(&e), i));
+            cur = e["entries"].as_array().cloned().unwrap_or_default();
+        }
+        let key = self.highlight.checked_sub(1).and_then(|i| cur.get(i)).map(entry_key);
+        self.memory.insert(self.scope.clone(), Spot { path, row: self.highlight, key });
+    }
+    /// Open at the remembered spot: each sub-menu found by its id; where one is gone (or no longer a
+    /// sub-menu), the nearest surviving level with that row (clamped); the highlighted entry by its id, else
+    /// its row (clamped). Nothing remembered: the first entry at the top.
+    fn restore(&mut self, menu: &Value) {
+        self.path.clear();
+        self.highlight = usize::from(menu.as_array().is_some_and(|a| !a.is_empty()));
+        let Some(spot) = self.memory.get(&self.scope).cloned().filter(|_| self.remember) else { return };
+        let mut cur = menu.as_array().cloned().unwrap_or_default();
+        let clamp = |row: usize, len: usize| row.min(len);
+        for (key, i) in &spot.path {
+            match cur.iter().position(|e| entry_key(e) == *key) {
+                Some(at) if cur[at]["type"] == "submenu" => {
+                    self.path.push(at);
+                    cur = cur[at]["entries"].as_array().cloned().unwrap_or_default();
+                }
+                Some(at) => {
+                    // A session that had sub-sessions and has none now: highlight it.
+                    self.highlight = at + 1;
+                    return;
+                }
+                None => {
+                    self.highlight = clamp(i + 1, cur.len());
+                    return;
+                }
+            }
+        }
+        self.highlight = match spot.key.and_then(|k| cur.iter().position(|e| entry_key(e) == k)) {
+            Some(at) => at + 1,
+            None => clamp(spot.row, cur.len()),
+        };
+    }
+
+    pub fn step(&mut self, menu: &Value, input: Input, now: Instant) -> Outcome {
+        let o = self.step_inner(menu, input, now);
+        if self.closing {
+            self.closing = false;
+            self.remember_spot(menu);
+            self.path.clear();
+            self.highlight = 0;
+        }
+        o
     }
     /// True when the menu has been open without input for `CLOSE_AFTER`.
     pub fn expired(&self, now: Instant) -> bool {
         self.open && self.last_input.is_some_and(|t| now.duration_since(t) >= CLOSE_AFTER)
     }
 
-    pub fn step(&mut self, menu: &Value, input: Input, now: Instant) -> Outcome {
+    fn step_inner(&mut self, menu: &Value, input: Input, now: Instant) -> Outcome {
         if !self.open {
             if input != Input::Toggle {
                 return Outcome::Nothing;
             }
             self.open = true;
-            self.path.clear();
-            // The first entry (after Close) is highlighted.
-            self.highlight = usize::from(menu.as_array().is_some_and(|a| !a.is_empty()));
+            // Where it was left (setting on), else the first entry (after Close).
+            self.restore(menu);
             self.note = None;
             self.last_input = Some(now);
             return Outcome::Opened;
@@ -402,12 +492,12 @@ impl MenuState {
                     return Outcome::Nothing;
                 }
                 self.highlight = i;
-                self.step(menu, Input::Choose, now)
+                self.step_inner(menu, Input::Choose, now)
             }
             Input::Choose => {
                 // Row 0: Close (top level) or Back (sub-menu).
                 if self.highlight == 0 {
-                    return self.step(menu, Input::Back, now);
+                    return self.step_inner(menu, Input::Back, now);
                 }
                 let level = self.level(menu);
                 let Some(e) = level.get(self.highlight - self.offset()).cloned() else {
@@ -533,6 +623,118 @@ mod tests {
 
     /// The menu's state machine (the one test the brief asks for): open, move with wrap-around, into a
     /// sub-menu and back, choose, toggle closed, time out, and the reserved session entry.
+    /// "Reopen where I left off" on the fake session tree: the menu opens at the sub-menu path and entry it
+    /// was closed on, found by id though the list changed; a gone entry falls back to its nearest surviving
+    /// level with the row clamped; per profile menu; off: the top.
+    #[test]
+    fn the_menu_reopens_where_it_was_left() {
+        use super::super::claude_tree::{tree, DesktopSession, Groups, Scope};
+        let id = |n: u32| format!("local_0123abcd-0000-4000-8000-{n:012}");
+        let s = |n: u32, parent: Option<u32>, last: u64| DesktopSession {
+            id: id(n), title: format!("S{n}"), parent: parent.map(id), first: None, depth: None, cwd: "C:/x/UC".into(),
+            origin_cwd: "C:/x/UC".into(), worktree: None, archived: false, last_activity: last, last_turn: None, scope: "a/o".into(),
+        };
+        let groups = |assign: &[(u32, &str)]| Groups {
+            scopes: [("a/o".to_string(), Scope {
+                groups: vec![("cg-1".into(), "Unified Control".into()), ("cg-2".into(), "Nocturne".into())],
+                assignments: assign.iter().map(|(n, g)| (id(*n), g.to_string())).collect(),
+            })].into_iter().collect(),
+        };
+        let menu_of = |sessions: &[DesktopSession], g: &Groups| {
+            json!([{"type": "action", "label": "Dictation", "action": {"kind": "claudeDictation"}},
+                   {"type": "submenu", "label": "Claude sessions", "entries": tree(sessions, Some(g), &[], &json!("none"), 1_000_000_000)}])
+        };
+        // Unified Control: S1 (S2, S3 below it); Nocturne: S4.
+        let mut all = vec![s(1, None, 100), s(2, Some(1), 300), s(3, Some(1), 200), s(4, None, 50)];
+        let g = groups(&[(1, "cg-1"), (4, "cg-2")]);
+        let menu = menu_of(&all, &g);
+        let t0 = Instant::now();
+        let mut m = MenuState { remember: true, scope: "p1".into(), ..Default::default() };
+        let walk = |m: &mut MenuState, menu: &Value| {
+            m.step(menu, Input::Toggle, t0);
+            m.step(menu, Input::Next, t0); // Claude sessions
+            m.step(menu, Input::Choose, t0); // > Claude sessions: Unified Control highlighted
+            m.step(menu, Input::Choose, t0); // > Unified Control: S1 highlighted
+            m.step(menu, Input::Choose, t0); // > S1: row 1 is "Open: S1"
+            m.step(menu, Input::Next, t0); // S2
+        };
+        walk(&mut m, &menu);
+        let title = |m: &mut MenuState, menu: &Value| m.view(&json!({}), menu)["title"].clone();
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions", "Unified Control", "S1"]));
+        assert_eq!(m.highlighted_session(&menu), Some(id(2)));
+        m.step(&menu, Input::Toggle, t0);
+        // Reopen: same path and session, though a new session is now listed first there.
+        all.push(s(5, Some(1), 900));
+        let menu = menu_of(&all, &g);
+        assert_eq!(m.step(&menu, Input::Toggle, t0), Outcome::Opened);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions", "Unified Control", "S1"]));
+        assert_eq!(m.highlighted_session(&menu), Some(id(2)), "by id, not by row");
+        assert_eq!(m.highlight, 3);
+        // Back still walks up; Close is row 0 at the top.
+        m.step(&menu, Input::Back, t0);
+        m.step(&menu, Input::Back, t0);
+        m.step(&menu, Input::Back, t0);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu"]));
+        assert_eq!(m.view(&json!({}), &menu)["rows"][0]["type"], "close");
+        assert_eq!(m.highlight, 2, "on Claude sessions");
+        // Dictating into a session closes the menu; the next open returns to it.
+        m.step(&menu, Input::Choose, t0);
+        m.step(&menu, Input::Choose, t0);
+        m.step(&menu, Input::Choose, t0);
+        m.step(&menu, Input::Next, t0);
+        m.step(&menu, Input::Next, t0); // S2 (after Open: S1 and S5)
+        assert_eq!(m.step(&menu, Input::Dictate("claudeDictation".into()), t0), Outcome::Session(id(2), "claudeDictation".into()));
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(m.highlighted_session(&menu), Some(id(2)));
+        m.step(&menu, Input::Toggle, t0);
+        // S2 is gone: inside S1, the same row clamped to the list.
+        all.retain(|x| x.id != id(2));
+        let menu = menu_of(&all, &g);
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions", "Unified Control", "S1"]));
+        assert_eq!(m.highlight, 3, "rows: Back, Open: S1, S5, S3: row 3 is S3");
+        m.step(&menu, Input::Toggle, t0);
+        // S1 lost its sub-sessions: it is a single session now, highlighted in its group.
+        all.retain(|x| x.parent.is_none());
+        let menu = menu_of(&all, &g);
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions", "Unified Control"]));
+        assert_eq!(m.highlighted_session(&menu), Some(id(1)));
+        m.step(&menu, Input::Choose, t0); // opens S1: closes, remembered
+        // The group is gone (S1 moved to Nocturne): the nearest surviving level, its row clamped.
+        let g2 = groups(&[(1, "cg-2"), (4, "cg-2")]);
+        let menu = menu_of(&all, &g2);
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions"]));
+        assert_eq!(m.highlight, 1, "Unified Control was row 1; Nocturne is there now");
+        // Another profile menu has its own memory (none yet: the top).
+        m.step(&menu, Input::Toggle, t0);
+        m.scope = "p2".into();
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!((title(&mut m, &menu), m.highlight), (json!(["Quick menu"]), 1));
+        m.step(&menu, Input::Next, t0);
+        m.step(&menu, Input::Toggle, t0);
+        m.scope = "p1".into();
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(title(&mut m, &menu), json!(["Quick menu", "Claude sessions"]), "profile 1's spot is kept");
+        m.step(&menu, Input::Toggle, t0);
+        m.scope = "p2".into();
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!((title(&mut m, &menu), m.highlight), (json!(["Quick menu"]), 2), "profile 2's spot");
+        m.step(&menu, Input::Toggle, t0);
+        // Setting off: the top, first entry.
+        m.remember = false;
+        m.scope = "p1".into();
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!((title(&mut m, &menu), m.highlight), (json!(["Quick menu"]), 1));
+        // Closed on Close at the top: nothing to come back to.
+        m.remember = true;
+        m.step(&menu, Input::Prev, t0);
+        m.step(&menu, Input::Choose, t0);
+        m.step(&menu, Input::Toggle, t0);
+        assert_eq!(m.highlight, 1);
+    }
+
     #[test]
     fn the_quick_menu_opens_moves_chooses_and_closes() {
         let profiles = vec!["claude".to_string(), "chatgpt".to_string(), "media".to_string()];

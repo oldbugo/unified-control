@@ -285,7 +285,9 @@ pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[Str
             let mine: Vec<&DesktopSession> =
                 tagged.iter().filter(|(_, g)| g.as_ref().is_some_and(|(sc, id)| sc == scope && id == gid)).map(|(s, _)| *s).collect();
             if !mine.is_empty() {
-                out.push(project(name, &mine, &row));
+                let mut p = project(name, &mine, &row);
+                p["group"] = json!(gid); // a stable id for the menu's memory
+                out.push(p);
             }
         }
     }

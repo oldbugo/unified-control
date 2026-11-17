@@ -297,6 +297,8 @@ pub fn sanitize(v: &Value) -> Value {
             m["menuControls"].clone()
         }),
         "menuControlsVersion": MENU_CONTROLS_VERSION,
+        // "Reopen where I left off" (user request 2026-11-17): the menu opens where it was closed.
+        "reopenWhereLeft": v["reopenWhereLeft"].as_bool().unwrap_or(true),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -535,6 +537,11 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             }
         }
         au["menuControls"] = next;
+    }
+    if let Some(v) = patch.get("reopenWhereLeft") {
+        let v = v.as_bool().ok_or("Invalid Vibe Key setting")?;
+        au["reopenWhereLeft"] = json!(v);
+        lines.push(format!("page menu reopen where left = {v}"));
     }
     if let Some(k) = patch.get("knobTurn") {
         let k = k.as_str().filter(|k| *k == "factory" || *k == "uc").ok_or("Choose what the knob turn does")?;
@@ -858,6 +865,11 @@ impl MenuCtl {
         let (outcome, was_open, view) = {
             let mut st = self.state.lock_or_recover();
             let was = st.open;
+            st.remember = settings["reopenWhereLeft"] != false;
+            if !was {
+                // The memory is per profile menu.
+                st.scope = settings["profile"].as_str().unwrap_or("").to_string();
+            }
             let o = st.step(&shown, input, Instant::now());
             (o, was, st.view(&settings, &shown))
         };
@@ -1136,6 +1148,7 @@ impl MenuCtl {
             "knobTurn": settings["knobTurn"],
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
+            "reopenWhereLeft": settings["reopenWhereLeft"] != false,
             "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
@@ -3556,6 +3569,33 @@ mod tests {
         assert!(s["menu"]["sessions"]["note"].as_str().unwrap().contains("not found"));
         au.shutdown();
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// "Reopen where I left off" (default on) through the worker: the menu opens where it was closed; with the
+    /// setting off it opens at the top; the setting is saved and shown.
+    #[test]
+    fn the_menu_reopens_where_it_was_left_unless_turned_off() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        assert_eq!(au.status()["menu"]["reopenWhereLeft"], true, "on by default");
+        let hl = |au: &Au05| au.status()["menu"]["view"]["highlight"].as_u64();
+        desk.press(hotkey::VK_F20); // open
+        au.menu_input("next", None).unwrap();
+        au.menu_input("next", None).unwrap();
+        desk.press(hotkey::VK_F20); // close
+        assert_eq!(au.status()["menu"]["view"]["open"], false);
+        desk.press(hotkey::VK_F20);
+        assert_eq!(hl(&au), Some(3), "reopened on the same entry");
+        desk.press(hotkey::VK_F20);
+        let mut s = sanitize(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        apply_patch(&mut s, &json!({"reopenWhereLeft": false})).unwrap();
+        assert_eq!(s["reopenWhereLeft"], false);
+        au.configure(&s);
+        desk.press(hotkey::VK_F20);
+        assert_eq!(hl(&au), Some(1), "setting off: the first entry");
+        assert_eq!(au.status()["menu"]["reopenWhereLeft"], false);
+        au.shutdown();
     }
 
     /// 0.31.0: a knob press "close" saved from the old default becomes "select", once (with a marker); after

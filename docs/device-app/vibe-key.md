@@ -440,6 +440,21 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Reopen where I left off (0.32.0, user request 2026-11-17)
+
+- The quick menu opens where it was last closed: the same sub-menu path and highlighted entry (for example
+  Claude sessions > Unified Control > a session > a sub-session). Back still walks up from there; Close stays
+  row 0 at the top. Choosing or dictating into a session closes the menu, and the next open is on that
+  session. Closing with Close highlighted at the top leaves nothing to come back to.
+- Remembered by stable ids (`au05_menu::entry_key`: sidebar group id, Claude session id, project folder,
+  profile, target, action, or the label for other entries), not by row, for every sub-menu. When an entry
+  on the path is gone, the menu opens at the nearest surviving level with that entry's row clamped to the
+  list; a session that lost its sub-sessions (now a single row) is highlighted itself; the highlighted entry,
+  if gone, gives its row clamped.
+- One memory per profile menu, in memory only (an app restart opens at the top).
+- Setting "Reopen where I left off" (`au05.reopenWhereLeft`, default on) under the menu controls on the Vibe
+  Key page; off, the menu opens at the first entry at the top.
+
 ### Sidebar groups as projects, knob press migration (0.31.0, user feedback 2026-11-17)
 
 - **Projects are the sidebar groups** of the Claude Code tab ("Unified Control", "Project Nocturne", ...), not
