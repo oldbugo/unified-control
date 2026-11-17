@@ -675,19 +675,30 @@ impl App {
         au05.configure(&saved.0["au05"]);
         // Disabling wrote the offline layer back (or could not): remember it for the page.
         if let Some(ok) = au05.take_offline_result() {
-            self.save_offline_pending(!ok);
+            self.save_offline_pending(au05, !ok);
         }
         Ok(self.au05_state())
     }
     /// The offline layer is not on the key yet (key asleep, or no time at quit / disable / session end).
-    fn save_offline_pending(&self, pending: bool) {
-        let _ = self.settings.update(|s| s["au05"]["offlinePending"] = serde_json::json!(pending));
+    /// Also saved: when a key-typing command was left unanswered (the next run waits before its first one).
+    fn save_offline_pending(&self, au05: &super::au05::Au05, pending: bool) {
+        let abandoned = au05.take_abandoned();
+        let _ = self.settings.update(|s| {
+            s["au05"]["offlinePending"] = serde_json::json!(pending);
+            if let Some(at) = abandoned {
+                s["au05"]["slowAbandonedAt"] = serde_json::json!(at);
+            }
+        });
     }
-    /// Windows is ending the session: store the offline layer within the time Windows allows.
+    /// Windows is ending the session: store the offline layer within the time Windows allows. Nothing to do
+    /// when the Vibe Key is disabled (its offline layer was stored, or recorded as pending, at disable).
     pub fn au05_session_end(&self) {
         if let Some(au05) = self.au05.get() {
+            if !au05.running() {
+                return;
+            }
             let ok = au05.store_offline(std::time::Duration::from_secs(4));
-            self.save_offline_pending(!ok);
+            self.save_offline_pending(au05, !ok);
         }
     }
     /// Where Claude's settings are: `%USERPROFILE%\.claude`. Debug builds and fake or quiet (test) instances
@@ -1103,18 +1114,25 @@ impl App {
         }
     }
     /// Must run off the UI thread; active monitor recovery is allowed to finish.
+    /// Stop the Vibe Key: its offline layer goes back on the key (waiting for a key command already sent, up
+    /// to the quit budget). Runs before the exit watchdog is armed, so the watchdog does not cut it.
+    pub fn stop_au05(&self) {
+        if let Some(au05) = self.au05.get() {
+            let _guard = self.dock_config_lock.lock_or_recover();
+            if let Some(stored) = au05.shutdown() {
+                self.save_offline_pending(au05, !stored);
+            }
+        }
+    }
     pub fn stop_runtime(&self) {
+        // The Vibe Key first (see `stop_au05`); a second call does nothing.
+        self.stop_au05();
         if let Some(cooler) = self.cooler.get() {
             if cooler.shutdown().is_err() {
                 return;
             }
         }
         let _guard = self.dock_config_lock.lock_or_recover();
-        if let Some(au05) = self.au05.get() {
-            if let Some(stored) = au05.shutdown() {
-                self.save_offline_pending(!stored);
-            }
-        }
         if let Some(dock) = self.dock.get() {
             dock.shutdown();
         }

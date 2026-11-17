@@ -279,6 +279,9 @@ fn main() {
             }
         }
         RunEvent::Exit => {
+            // The Vibe Key's offline layer first: a key command already sent is waited for, not cut by the
+            // watchdog (bounded by its own quit budget).
+            app.state::<Core>().0.stop_au05();
             live_app::arm_exit_watchdog("exit");
             if let Some(server) = app.try_state::<std::sync::Mutex<Option<agent_transport::Server>>>() {
                 if let Some(mut server) = server.lock_or_recover().take() { server.shutdown(); }

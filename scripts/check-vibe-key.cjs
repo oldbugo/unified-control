@@ -55,7 +55,7 @@ const server=http.createServer((req,res)=>{
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
         if(c.setting==='lightRecord'){const f=['type','time','breatheLevel','breatheBrightness','alwaysOnBrightness'].indexOf(c.field);window.__au05.light.records[c.record][f]=c.value;}
-        if(c.setting==='keyTyping'){const k=window.__au05.keys.find(k=>k.key===c.key);k.mode=c.mode;k.label=c.mode==='keys'?c.keys:c.mode==='uc'?k.ownCode:`Factory default (${k.factory})`;k.keys=c.mode==='keys'?c.keys:null;k.job={state:'done',message:'Done',label:k.label};}
+        if(c.setting==='retryJob'){const k=window.__au05.keys.find(k=>k.key===c.key);if(k)k.job=null;window.__au05.keySync={blocked:false,pending:false,waiting:false};}
         return structuredClone(window.__au05);
       }
       if(command==='au05_read_all'){window.__writes.push({command});return structuredClone(window.__au05);}
@@ -164,6 +164,14 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='standbyTime'));
   const changes=(await writes()).filter(w=>w.command==='au05_change').map(w=>w.change);
   assert.deepEqual(changes,[{setting:'lightRecord',record:1,field:'time',value:12},{setting:'standbyTime',value:900}],'the page writes device settings only; key typing comes from the layer sync');
+  // A control not checked on the real key waits for "Set up"; a failed key change pauses key changes.
+  await page.evaluate(()=>{window.__au05.keys.find(k=>k.key==='knobPress').job={state:'check',message:'Not checked on the real key yet: press Set up',label:'F19',read:false};window.__au05.keySync={blocked:true,pending:false,waiting:false};});
+  await pick('knobPress');
+  await page.waitForSelector('[data-au05-retry="knobPress"]',{timeout:5000});
+  assert.match(await page.locator('.au05-layerbar').textContent(),/Key changes paused: use Reconnect/);
+  assert.match(await page.locator('[data-au05-retry="knobPress"]').textContent(),/Set up/);
+  await page.locator('[data-au05-retry="knobPress"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='retryJob'&&w.change.key==='knobPress'));
   // Drag and drop: a card dropped on K2 gives K2 that action; Undo restores the previous one (Ctrl + Enter).
   await pick('k1');
   await card('uc:volumeUp').dragTo(page.locator('.au05-diagram .au05-zone[data-au05-zone="k2"]'));

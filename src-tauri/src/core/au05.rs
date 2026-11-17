@@ -123,26 +123,65 @@ pub struct Layers {
     pub uc: Vec<bool>,
     /// Write the offline layer (quit, disable, session end, or "Store offline layer on the key now").
     pub target_offline: bool,
-    /// Controls whose layer changed in this run: written even if what the key holds is not known.
+    /// Controls whose layer changed in this run: their unknown stored list is read (then written if it
+    /// differs).
     pub dirty: Vec<bool>,
+    /// The offline typing was set by the user or seeded from the key. Until then nothing is written for this
+    /// control: its stored list (the user's keys) seeds the offline layer when it becomes known.
+    pub seeded: Vec<bool>,
+    /// Key typing for this control was checked on the real key. The others (knob press, knob left) are
+    /// written only after the user's "Set up".
+    pub verified: Vec<bool>,
+    /// Seeds learned in this run that are not in the settings yet (kept across `configure`).
+    pub seeds: Vec<Option<KeyTyping>>,
+    /// The last list the key confirmed per control (saved, `au05.keyEcho`): at start a control whose saved
+    /// list is what UC wants is neither read nor written again.
+    pub echo: Vec<Option<KeyTyping>>,
 }
 impl Layers {
     pub fn from_settings(au: &Value) -> Self {
         let offline_cfg = &au["offline"];
+        // A key that opens the quick menu needs the knob press on its own code (F19) to choose, as the
+        // hotkeys do (`apply_hotkeys`).
+        let any_menu = ACTION_KEYS.iter().any(|(k, _)| au["actions"][k]["kind"] == QUICK_MENU);
         let mut live = Vec::new();
         let mut offline = Vec::new();
         let mut uc = Vec::new();
+        let mut seeded = Vec::new();
+        let mut verified = Vec::new();
         for (name, id) in LAYER_CONTROLS {
             let off = offline_typing(offline_cfg, name);
             let is_uc = match id {
                 KeyId::KnobRight | KeyId::KnobLeft => au["knobTurn"] == "uc",
+                KeyId::KnobPress if any_menu => true,
                 _ => au["actions"][name]["kind"].as_str().unwrap_or(hotkey::OFFLINE) != hotkey::OFFLINE,
             };
             live.push(if is_uc { KeyTyping::own_code(id) } else { off.clone() });
+            seeded.push(au["offlineSet"][name] == true || !off.is_factory());
+            verified.push(Request::SetKeyTyping(id, KeyTyping::own_code(id)).verified_on_hardware());
             offline.push(off);
             uc.push(is_uc);
         }
-        Self { live, offline, uc, target_offline: false, dirty: vec![false; 6] }
+        let echo = LAYER_CONTROLS
+            .iter()
+            .map(|(name, _)| match au["keyEcho"][name].as_str() {
+                Some("factory") => Some(KeyTyping::factory()),
+                Some(keys) => KeyTyping::parse(keys).ok(),
+                None => None,
+            })
+            .collect();
+        Self { live, offline, uc, target_offline: false, dirty: vec![false; 6], seeded, verified, seeds: vec![None; 6], echo }
+    }
+    /// Take what the key holds as this control's offline typing (UC's own codes count as factory).
+    pub fn seed(&mut self, i: usize, held: &KeyTyping) {
+        let own = held.0.len() == 1 && (0x6e..=0x73).any(|c| *held == KeyTyping(vec![protocol::KeyEntry::Usage(c)]));
+        let typing = if own || held.validate().is_err() { KeyTyping::factory() } else { held.clone() };
+        if !self.uc[i] {
+            self.live[i] = typing.clone();
+        }
+        self.offline[i] = typing.clone();
+        self.seeded[i] = true;
+        self.seeds[i] = Some(typing);
     }
     pub fn want(&self, i: usize) -> &KeyTyping {
         if self.target_offline { &self.offline[i] } else { &self.live[i] }
@@ -239,6 +278,14 @@ pub fn sanitize(v: &Value) -> Value {
         "knobTurn": if v["knobTurn"] == "uc" { "uc" } else { "factory" },
         "layers": 1,
         "offline": sanitize_offline(&v["offline"]),
+        // Controls whose offline typing the user set or that were seeded from the key.
+        "offlineSet": LAYER_CONTROLS.iter().map(|(n, _)| (n.to_string(), json!(v["offlineSet"][n] == true))).collect::<serde_json::Map<_, _>>(),
+        // When an earlier run gave up waiting for a key-typing command (ms since 1970): the next run waits.
+        "slowAbandonedAt": v["slowAbandonedAt"].as_u64(),
+        // The last list the key confirmed per control ("factory", keys, or absent).
+        "keyEcho": LAYER_CONTROLS.iter().filter_map(|(n, _)| {
+            v["keyEcho"][n].as_str().filter(|k| *k == "factory" || KeyTyping::parse(k).is_ok()).map(|k| (n.to_string(), json!(k)))
+        }).collect::<serde_json::Map<_, _>>(),
         // The offline layer could not be stored at the last quit or disable (key asleep or no time).
         "offlinePending": v["offlinePending"].as_bool().unwrap_or(false),
         "knobTurnAction": v["knobTurnAction"].as_str().filter(|a| TURN_ACTIONS.contains(a)).unwrap_or("scroll"),
@@ -382,8 +429,29 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             }
             _ => return Err("Choose what the key types on its own".into()),
         };
-        au["offline"][name] = entry;
-        lines.push(format!("page offline layer {name} = {}", o["mode"].as_str().unwrap_or("")));
+        let seeding = o["seed"] == true;
+        if seeding && au["offlineSet"][name] == true {
+            // The user set it meanwhile: a seed never overwrites a choice.
+        } else {
+            au["offline"][name] = entry;
+            au["offlineSet"][name] = json!(true);
+            lines.push(format!("{} offline layer {name} = {}", if seeding { "seeded from the key:" } else { "page" }, o["mode"].as_str().unwrap_or("")));
+        }
+    }
+    if let Some(e) = patch.get("keyEcho") {
+        // Saved by the worker when the key confirms a list (no log line: it is not a user change).
+        let name = e["control"].as_str().unwrap_or("");
+        if !LAYER_CONTROLS.iter().any(|(n, _)| *n == name) {
+            return Err("Unknown Vibe Key control".into());
+        }
+        match e["keys"].as_str() {
+            Some(k) if k == "factory" || KeyTyping::parse(k).is_ok() => au["keyEcho"][name] = json!(k),
+            _ => {
+                if let Some(m) = au["keyEcho"].as_object_mut() {
+                    m.remove(name);
+                }
+            }
+        }
     }
     if let Some(m) = patch.get("menu") {
         let m = if m == "default" { menu::default_menu() } else { m.clone() };
@@ -430,9 +498,6 @@ pub enum Change {
     LightMode(u8),
     LightBrightness(u8),
     MicNrLevel(u8),
-    KeyTyping(KeyId, KeyTyping),
-    /// Both knob turn directions: their own codes F23/F24 (true) or the factory scroll (false).
-    KnobTurn(bool),
     /// Clear a failed key job so the layer sync tries once more (the page's "Try again").
     Retry(KeyId),
     LightRecord { record: u8, field: LightField, value: u8 },
@@ -475,11 +540,7 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
                 .ok_or("Choose a light field")?;
             Ok(Change::LightRecord { record, field, value: byte()? })
         }
-        "knobTurn" => match v["mode"].as_str().unwrap_or("") {
-            "factory" => Ok(Change::KnobTurn(false)),
-            "uc" => Ok(Change::KnobTurn(true)),
-            _ => Err("Choose what the knob turn does".into()),
-        },
+        // "Try again" on a failed key job, or "Set up" on a control not checked on the real key.
         "retryJob" => {
             let key = LAYER_CONTROLS
                 .iter()
@@ -487,21 +548,6 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
                 .map(|(_, id)| *id)
                 .ok_or("Choose a control")?;
             Ok(Change::Retry(key))
-        }
-        "keyTyping" => {
-            let key = ACTION_KEYS
-                .iter()
-                .find(|(k, _)| Some(*k) == v["key"].as_str())
-                .map(|(_, id)| *id)
-                .ok_or("Choose K1, K2, K3 or the knob press")?;
-            let typing = match v["mode"].as_str().unwrap_or("") {
-                "factory" => KeyTyping::factory(),
-                // "Unified Control action": the key types its own unused code, which UC claims as a hotkey.
-                "uc" => KeyTyping::own_code(key),
-                "keys" => KeyTyping::parse(v["keys"].as_str().unwrap_or(""))?,
-                _ => return Err("Choose what the key does".into()),
-            };
-            Ok(Change::KeyTyping(key, typing))
         }
         _ => Err("Unknown Vibe Key setting".into()),
     }
@@ -550,6 +596,30 @@ struct Status {
     sent: u64,
     generation: u64,
     jobs: [Option<KeyJob>; 6],
+    sync: SyncState,
+}
+
+/// Guards on key-typing commands (cmd 0x50; the 2026-11-16 incident and the 2026-11-17 review).
+#[derive(Clone, Debug, Default)]
+struct SyncState {
+    /// The typing tried automatically per control: one automatic attempt per wanted typing.
+    attempted: [Option<KeyTyping>; 6],
+    /// An automatic read was tried for this control in this run.
+    read_tried: [bool; 6],
+    /// The last key-typing write for this control failed in a way that may have reached the key.
+    uncertain: [bool; 6],
+    /// Not checked on the real key: the user allowed writing it with "Set up".
+    allowed: [bool; 6],
+    /// A key-typing command failed (no reply, write timeout...): no automatic one until Reconnect or Try again.
+    blocked: bool,
+    /// Quit or disable ran out of time: start no new key-typing command.
+    no_new: bool,
+    /// A key-typing command is queued or waiting for its answer.
+    pending: bool,
+    /// Send no key-typing command before this (an earlier run abandoned one).
+    not_before: Option<Instant>,
+    /// This run gave up waiting for a key-typing command at this time (ms since 1970).
+    abandoned_at: Option<u64>,
 }
 
 fn push_event(status: &Mutex<Status>, control: Control, pressed: bool, code: u8, action: Option<String>) {
@@ -594,6 +664,13 @@ pub struct Au05 {
     layers: Arc<Mutex<Layers>>,
     /// The result of the last offline store at disable (taken by the app to save `offlinePending`).
     offline_result: Mutex<Option<bool>>,
+    /// How long quit / disable wait for the offline layer, and how long a run waits after an abandoned
+    /// key-typing command (tests shorten them).
+    timing: Mutex<(Duration, Duration)>,
+    /// The first `configure` builds the layers without marking anything changed.
+    configured: AtomicBool,
+    /// Fake key only (tests): change every key-typing echo, as a firmware that stores something else would.
+    mangle_echo: Arc<AtomicBool>,
 }
 
 /// `devices/au05/device.log` (rotated at about 1 MB, like the other device logs). Command names and results
@@ -927,6 +1004,8 @@ struct KeyJob {
     message: String,
     /// A newer choice made while this one was being sent: it is sent next (still one at a time).
     next: Option<KeyTyping>,
+    /// Read what the key holds (before writing a list that is not known).
+    read: bool,
 }
 
 fn now_ms() -> u64 {
@@ -959,6 +1038,7 @@ impl Au05 {
             sent: 0,
             generation: 0,
             jobs: Default::default(),
+            sync: SyncState::default(),
         }));
         let log = Arc::new(Log::default());
         let menu = Arc::new(MenuCtl {
@@ -991,6 +1071,9 @@ impl Au05 {
             menu: menu.clone(),
             layers: Arc::new(Mutex::new(Layers::from_settings(&default_settings()))),
             offline_result: Mutex::new(None),
+            timing: Mutex::new((Duration::from_secs(8), Duration::from_secs(20))),
+            configured: AtomicBool::new(false),
+            mangle_echo: Arc::new(AtomicBool::new(false)),
         });
         if let Some(d) = &au.desktop {
             // Actions never run on the hotkey thread (MenuCtl::run spawns one per action).
@@ -1121,14 +1204,36 @@ impl Au05 {
             self.menu.input(Input::Close, "disabled");
         }
         {
-            // New layers; a control whose layer changed is written even if its stored list is not known.
+            // New layers. A control whose layer changed in this run is marked (its unknown list is read, then
+            // written if it differs); the first configure of a run marks nothing.
+            let first = !self.configured.swap(true, Ordering::SeqCst);
             let mut l = self.layers.lock_or_recover();
             let mut next = Layers::from_settings(&settings);
             next.target_offline = l.target_offline;
             for i in 0..6 {
-                next.dirty[i] = l.dirty[i] || next.live[i] != l.live[i] || next.offline[i] != l.offline[i];
+                // A seed learned in this run but not saved yet stays.
+                if !next.seeded[i] {
+                    if let Some(seed) = l.seeds[i].clone() {
+                        next.seed(i, &seed);
+                    }
+                }
+                next.dirty[i] = !first && (l.dirty[i] || next.live[i] != l.live[i] || next.offline[i] != l.offline[i]);
             }
             *l = next;
+        }
+        // An earlier run gave up waiting for a key-typing command: wait before sending the next one.
+        if let Some(at) = settings["slowAbandonedAt"].as_u64() {
+            let wait = self.timing.lock_or_recover().1;
+            let since = Duration::from_millis(now_ms().saturating_sub(at));
+            if since < wait {
+                let mut s = self.status.lock_or_recover();
+                let until = Instant::now() + (wait - since);
+                if s.sync.not_before.is_none_or(|t| t < until) {
+                    s.sync.not_before = Some(until);
+                    drop(s);
+                    self.log.line(&format!("key typing waits {} ms after a command an earlier run left unanswered", (wait - since).as_millis()));
+                }
+            }
         }
         let running = self.tx.lock_or_recover().is_some();
         if enabled && !running {
@@ -1136,7 +1241,8 @@ impl Au05 {
             self.start();
         } else if !enabled && running {
             // Disabling: the key gets its offline layer back first (if it is awake), then the worker stops.
-            let ok = self.store_offline(Duration::from_secs(8));
+            let budget = self.timing.lock_or_recover().0;
+            let ok = self.store_offline(budget);
             *self.offline_result.lock_or_recover() = Some(ok);
             self.stop_worker();
         }
@@ -1162,6 +1268,7 @@ impl Au05 {
             log: self.log.clone(),
             menu: self.menu.clone(),
             layers: self.layers.clone(),
+            mangle_echo: self.mangle_echo.clone(),
         };
         let rx = Arc::new(Mutex::new(rx));
         let handle = std::thread::Builder::new().name("uc-au05".into()).spawn(move || {
@@ -1182,6 +1289,14 @@ impl Au05 {
     }
 
     fn stop_worker(&self) {
+        {
+            let mut s = self.status.lock_or_recover();
+            if s.sync.pending && s.sync.abandoned_at.is_none() {
+                s.sync.abandoned_at = Some(now_ms());
+                drop(s);
+                self.log.line("key typing: a command was still waiting for its answer when the worker stopped");
+            }
+        }
         self.stop.store(true, Ordering::SeqCst);
         if let Some(tx) = self.tx.lock_or_recover().take() {
             let _ = tx.send(Cmd::Stop);
@@ -1199,6 +1314,25 @@ impl Au05 {
         s.message = "Vibe Key is disabled".into();
         s.pending_sets = 0;
         s.jobs = Default::default();
+        // What the key holds is unknown once the worker stops (it may change while UC is not listening).
+        s.known.keys = Default::default();
+        let abandoned = s.sync.abandoned_at;
+        s.sync = SyncState { abandoned_at: abandoned, ..Default::default() };
+    }
+
+    /// Is the worker running (the Vibe Key enabled)?
+    pub fn running(&self) -> bool {
+        self.tx.lock_or_recover().is_some()
+    }
+
+    /// When this run abandoned a key-typing command, once (the app saves `slowAbandonedAt`).
+    pub fn take_abandoned(&self) -> Option<u64> {
+        self.status.lock_or_recover().sync.abandoned_at.take()
+    }
+
+    /// Tests: the quit/disable budget and the wait after an abandoned key-typing command.
+    pub fn set_timing(&self, store: Duration, abandoned_wait: Duration) {
+        *self.timing.lock_or_recover() = (store, abandoned_wait);
     }
 
     /// Write the offline layer back, then stop the worker and release every hotkey (quit). Returns whether
@@ -1209,7 +1343,8 @@ impl Au05 {
             self.menu.input(Input::Close, "quit");
         }
         let running = self.tx.lock_or_recover().is_some();
-        let stored = running.then(|| self.store_offline(Duration::from_secs(8)));
+        let budget = self.timing.lock_or_recover().0;
+        let stored = running.then(|| self.store_offline(budget));
         self.stop_worker();
         self.apply_hotkeys(false);
         stored
@@ -1227,18 +1362,24 @@ impl Au05 {
         self.log.line(if offline { "layer: storing the offline layer on the key" } else { "layer: back to the live layer" });
     }
 
-    /// Does the key hold the offline layer for every control whose stored list is known? Unknown controls
-    /// count as stored (UC never changed them in this run).
+    /// Does the key hold the offline layer? Every known list equals its offline typing, no key job waits or is
+    /// being sent, no key-typing command is pending, and no earlier write is in doubt. Unknown lists count as
+    /// stored (UC did not change them in this run).
     fn offline_on_key(&self) -> bool {
         let s = self.status.lock_or_recover();
         let l = self.layers.lock_or_recover();
-        LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| {
-            s.known.keys[id.index() as usize].as_ref().is_none_or(|k| *k == l.offline[i])
-        })
+        !s.sync.pending
+            && !s.sync.uncertain.iter().any(|u| *u)
+            && !s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending")
+            && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| {
+                s.known.keys[id.index() as usize].as_ref().is_none_or(|k| *k == l.offline[i])
+            })
     }
 
     /// Switch the key to its offline layer and wait (at most `budget`) until it is stored. Only an awake key
-    /// is written (a write to a sleeping key blocks); returns `false` when it could not be stored.
+    /// is written. A key-typing command already sent is always waited for within the budget; when the budget
+    /// runs out no new one is started, and one still unanswered is recorded (the next run waits before its
+    /// first key-typing command). Returns `false` when the offline layer is not (known to be) on the key.
     pub fn store_offline(&self, budget: Duration) -> bool {
         self.layers.lock_or_recover().target_offline = true;
         let end = Instant::now() + budget;
@@ -1247,9 +1388,22 @@ impl Au05 {
                 self.log.line("layer: offline layer is on the key");
                 return true;
             }
-            let state = self.status.lock_or_recover().state;
-            if state != "connected" || Instant::now() >= end {
-                self.log.line(&format!("layer: offline layer not stored ({})", if state != "connected" { "key not awake" } else { "no time left" }));
+            let (state, pending, blocked) = {
+                let s = self.status.lock_or_recover();
+                (s.state, s.sync.pending, s.sync.blocked)
+            };
+            if !pending && (state != "connected" || blocked) {
+                self.log.line(&format!("layer: offline layer not stored ({})", if blocked { "a key change failed" } else { "key not awake" }));
+                return false;
+            }
+            if Instant::now() >= end {
+                let mut s = self.status.lock_or_recover();
+                s.sync.no_new = true;
+                if s.sync.pending {
+                    s.sync.abandoned_at = Some(now_ms());
+                }
+                drop(s);
+                self.log.line(&format!("layer: offline layer not stored (no time left{})", if pending { "; a key command is still unanswered" } else { "" }));
                 return false;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -1264,23 +1418,23 @@ impl Au05 {
     /// Send one change to the key and wait for its answer (at most `SET_WAIT`).
     pub fn change(&self, change: Change) -> Result<(), String> {
         if let Change::Retry(key) = change {
+            // "Try again" / "Set up": one more automatic attempt for this control (and the guard after a failed
+            // key change is lifted); "Set up" also allows a control not checked on the real key.
+            let i = key.index() as usize;
             let mut s = self.status.lock_or_recover();
-            if s.jobs[key.index() as usize].as_ref().is_some_and(|j| j.state == "failed") {
-                s.jobs[key.index() as usize] = None;
+            if s.jobs[i].as_ref().is_some_and(|j| j.state == "check") {
+                s.sync.allowed[i] = true;
             }
-            self.layers.lock_or_recover().dirty[key.index() as usize] = true;
-            return Ok(());
-        }
-        if let Change::KnobTurn(own) = change {
-            self.log.line(&format!("page change knob turn {}", if own { "F23/F24" } else { "factory scroll" }));
-            for k in KeyId::TURNS {
-                self.set_key(k, if own { KeyTyping::own_code(k) } else { KeyTyping::factory() })?;
+            if s.jobs[i].as_ref().is_some_and(|j| j.state == "failed" || j.state == "check") {
+                s.jobs[i] = None;
             }
+            s.sync.blocked = false;
+            s.sync.attempted[i] = None;
+            s.sync.read_tried[i] = false;
+            drop(s);
+            self.layers.lock_or_recover().dirty[i] = true;
+            self.log.line(&format!("page try again {}", key.control().name()));
             return Ok(());
-        }
-        if let Change::KeyTyping(key, typing) = change {
-            self.log.line(&format!("page change key typing {} ({} entries)", key.control().name(), typing.0.len()));
-            return self.set_key(key, typing);
         }
         self.log.line(&format!("page change {change:?}"));
         let tx = self.tx.lock_or_recover().clone().ok_or("Enable the Vibe Key first")?;
@@ -1288,32 +1442,6 @@ impl Au05 {
         tx.send(Cmd::Change(change, rtx)).map_err(|_| "The Vibe Key worker is unavailable")?;
         rrx.recv_timeout(SET_WAIT + Duration::from_secs(5))
             .map_err(|_| "The Vibe Key did not answer in time".to_string())?
-    }
-
-    /// Ask for a key to type `typing`. Returns at once: the worker sends it when the key is awake, and the
-    /// page follows the job's state ("Waiting for the key", "Sending", "Done" or the error).
-    pub fn set_key(&self, key: KeyId, typing: KeyTyping) -> Result<(), String> {
-        typing.validate()?;
-        let mut s = self.status.lock_or_recover();
-        if !s.enabled {
-            return Err("Enable the Vibe Key first".into());
-        }
-        if let Some(j) = s.jobs[key.index() as usize].as_mut().filter(|j| j.state == "sending") {
-            // Never a second command for this key while one is pending: send it after this one.
-            j.next = Some(typing);
-            drop(s);
-            self.log.line(&format!("key job for {} follows the one being sent", key.control().name()));
-            return Ok(());
-        }
-        s.jobs[key.index() as usize] = Some(KeyJob {
-            typing,
-            state: "waiting",
-            message: String::new(),
-            next: None,
-        });
-        drop(s);
-        self.log.line(&format!("key job queued for {}", key.control().name()));
-        Ok(())
     }
 
     /// Queue every get except key typing, one at a time with the usual pacing. Returns once queued.
@@ -1381,6 +1509,7 @@ impl Au05 {
                     "hotkey": hotkey,
                     "job": s.jobs[id.index() as usize].as_ref().map(|j| {
                         let message = match (j.state, s.state) {
+                            ("waiting", "connected") if j.read => "Waiting to read what the key holds".to_string(),
                             ("waiting", "not_found") => "Waiting for the receiver: plug it in".to_string(),
                             ("waiting", "paused") => "Waiting: sending is paused after a slow reply".to_string(),
                             ("waiting", "suspended") => "Stopped after slow replies: use Reconnect".to_string(),
@@ -1390,7 +1519,7 @@ impl Au05 {
                             ("done", _) => "Done".to_string(),
                             _ => j.message.clone(),
                         };
-                        json!({"state": j.state, "message": message, "label": j.typing.label(id)})
+                        json!({"state": j.state, "message": message, "label": j.typing.label(id), "read": j.read})
                     }),
                     // Every key can be set; the knob press typing is not checked on the real key yet.
                     "canSet": true,
@@ -1442,16 +1571,19 @@ impl Au05 {
                     "label": t.map(|t| t.label(id)),
                     "ownCode": protocol::usage_name(id.control().own_code().unwrap_or(0)),
                     "job": s.jobs[id.index() as usize].as_ref().map(|j| json!({"state": j.state,
-                        "message": if j.state == "failed" { j.message.clone() } else if j.state == "done" { "Done".into() }
+                        "message": if j.state == "failed" || j.state == "check" { j.message.clone() } else if j.state == "done" { "Done".into() }
                                    else if j.state == "sending" { "Sending to the key".into() }
                                    else { "Waiting for the key: press any key to wake it".to_string() }})),
                     "checked": Request::SetKeyTyping(id, KeyTyping::own_code(id)).verified_on_hardware(),
                 })
             }).collect::<Vec<_>>(),
             "events": events,
+            // Key-typing guard: paused after a failed key change (until Reconnect or Try again), or stopped at quit.
+            "keySync": {"blocked": s.sync.blocked, "pending": s.sync.pending, "waiting": s.sync.not_before.is_some_and(|t| t > Instant::now())},
             // Two layers: what the key should hold now, and whether the offline layer is on it.
             "layer": {"target": if layers.target_offline { "offline" } else { "live" },
-                      "offlineOnKey": LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| k.keys[id.index() as usize].as_ref().is_none_or(|t| *t == layers.offline[i])),
+                      "offlineOnKey": !s.sync.pending && !s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending")
+                          && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| k.keys[id.index() as usize].as_ref().is_none_or(|t| *t == layers.offline[i])),
                       "offline": LAYER_CONTROLS.iter().enumerate().map(|(i, (n, id))| (n.to_string(), json!({"label": layers.offline[i].label(*id), "factory": layers.offline[i].is_factory(),
                           "keys": (!layers.offline[i].is_factory()).then(|| layers.offline[i].label(*id))}))).collect::<serde_json::Map<_, _>>()},
             "actions": self.actions.lock_or_recover().clone(),
@@ -1498,6 +1630,7 @@ impl Au05 {
             }
             "wake" => fake.wake(),
             "sleep" => fake.sleep(),
+            "mangleEcho" => self.mangle_echo.store(v["value"].as_bool().unwrap_or(false), Ordering::SeqCst),
             "stallWrites" => fake.lock().stall_writes = v["value"].as_bool().unwrap_or(false),
             "dropReplies" => fake.lock().drop_replies = v["value"].as_u64().unwrap_or(0).min(10) as u32,
             "battery" => fake.lock().percent = v["value"].as_u64().unwrap_or(30).min(100) as u8,
@@ -1547,6 +1680,7 @@ pub fn uc_session_config() -> SessionConfig {
 
 struct Worker {
     layers: Arc<Mutex<Layers>>,
+    mangle_echo: Arc<AtomicBool>,
     fake: Option<FakeHandle>,
     status: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
@@ -1560,6 +1694,8 @@ enum Purpose {
     Set(Sender<Result<(), String>>),
     /// A key-typing job (see `KeyJob`).
     Key(KeyId),
+    /// A key-typing read job (before writing a list that is not known).
+    KeyRead(KeyId),
 }
 
 static TICKETS: AtomicU64 = AtomicU64::new(1);
@@ -1576,11 +1712,70 @@ impl Worker {
         }
     }
 
-    /// Keep the key holding the wanted layer: for each control whose stored list differs from what it should
-    /// type, queue (or update) a key job. Unknown lists are written only for controls with a UC action in the
-    /// live layer, or whose layer changed in this run. A failed job is not repeated (no retry) until the
-    /// page's "Try again".
+    /// Take what the key holds as the offline typing of controls whose offline typing was never set (the
+    /// user's own keys are kept), and save that. Nothing is written for such a control before this.
+    fn seed_known(&self) {
+        let mut seeds = Vec::new();
+        {
+            let s = self.status.lock_or_recover();
+            let mut l = self.layers.lock_or_recover();
+            for (i, (name, id)) in LAYER_CONTROLS.iter().enumerate() {
+                if l.seeded[i] {
+                    continue;
+                }
+                if let Some(held) = s.known.keys[id.index() as usize].clone() {
+                    l.seed(i, &held);
+                    let typing = l.offline[i].clone();
+                    seeds.push((name.to_string(), typing.is_factory(), typing.label(*id)));
+                }
+            }
+        }
+        for (name, factory, label) in seeds {
+            self.log.line(&format!("layer: {name} offline typing taken from the key ({})", if factory { "factory" } else { "keys" }));
+            let patch = if factory {
+                json!({"offline": {"control": name, "mode": "factory", "seed": true}})
+            } else {
+                json!({"offline": {"control": name, "mode": "keys", "keys": label, "seed": true}})
+            };
+            let persist = self.menu.persist.lock_or_recover().clone();
+            if let Some(p) = persist {
+                // Not on the worker thread: saving re-runs configure.
+                let _ = std::thread::Builder::new().name("uc-au05-seed".into()).spawn(move || {
+                    let _ = p(patch);
+                });
+            }
+        }
+    }
+
+    /// Save the list the key just confirmed for a control (read, or a set whose echo matched).
+    fn save_echo(&self, key: KeyId, typing: Option<KeyTyping>) {
+        let Some(i) = LAYER_CONTROLS.iter().position(|(_, id)| *id == key) else { return };
+        let name = LAYER_CONTROLS[i].0;
+        let text = typing.as_ref().map(|t| if t.is_factory() { "factory".to_string() } else { t.label(key) });
+        {
+            let mut l = self.layers.lock_or_recover();
+            if l.echo[i] == typing {
+                return;
+            }
+            l.echo[i] = typing;
+        }
+        let patch = json!({"keyEcho": {"control": name, "keys": text}});
+        let persist = self.menu.persist.lock_or_recover().clone();
+        if let Some(p) = persist {
+            let _ = std::thread::Builder::new().name("uc-au05-echo".into()).spawn(move || {
+                let _ = p(patch);
+            });
+        }
+    }
+
+    /// Keep the key holding the wanted layer, with the review's guards (2026-11-17):
+    /// - a control whose list is not known is READ first (if UC would write it), one at a time;
+    /// - nothing is written for a control whose offline typing is not set or seeded yet;
+    /// - one automatic attempt per wanted typing; after a failed key-typing command nothing more is queued
+    ///   until Reconnect or Try again; after quit / disable ran out of time, nothing new at all;
+    /// - controls not checked on the real key (knob press, knob left) wait for the user's "Set up".
     fn sync_layers(&self) {
+        self.seed_known();
         let l = self.layers.lock_or_recover().clone();
         let mut s = self.status.lock_or_recover();
         for (i, (name, id)) in LAYER_CONTROLS.iter().enumerate() {
@@ -1590,49 +1785,88 @@ impl Worker {
             if let Some(j) = s.jobs[idx].as_mut() {
                 match j.state {
                     "waiting" => {
-                        if j.typing != want {
+                        if !j.read && j.typing != want {
                             j.typing = want;
                         }
                         continue;
                     }
                     "sending" => {
-                        if j.typing != want {
-                            j.next = Some(want);
+                        if !j.read {
+                            j.next = (j.typing != want).then_some(want);
                         }
                         continue;
                     }
-                    "failed" if j.typing == want => continue,
+                    // A failed job stays until Try again, or until the wanted typing changes (one automatic
+                    // attempt for the new one, below).
+                    "failed" if j.read || j.typing == want => continue,
+                    // Recomputed every time: it goes away when the control no longer needs writing.
+                    "failed" | "check" => s.jobs[idx] = None,
                     _ => {}
                 }
             }
-            let needs = match &known {
-                Some(k) => *k != want,
-                None => l.dirty[i] || (!l.target_offline && l.uc[i]),
+            if s.sync.blocked || s.sync.no_new {
+                continue;
+            }
+            let check = !l.verified[i] && !s.sync.allowed[i];
+            let job = |read: bool, typing: KeyTyping, state: &'static str, message: String| {
+                Some(KeyJob { typing, state, message, next: None, read })
             };
-            if needs {
-                self.log.line(&format!("layer sync: {name} -> {} ({})", want.label(*id), if l.target_offline { "offline" } else { "live" }));
-                s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None });
+            match known {
+                None => {
+                    // The key confirmed this very list before (saved): no read, no write.
+                    if s.sync.read_tried[idx] || l.echo[i].as_ref() == Some(&want) {
+                        continue;
+                    }
+                    // Only what UC would write is read: a control with a UC action in the live layer, one whose
+                    // layer changed in this run, or one whose saved list differs from what UC wants.
+                    if !(l.dirty[i] || (!l.target_offline && l.uc[i]) || l.echo[i].is_some()) {
+                        continue;
+                    }
+                    if check {
+                        s.jobs[idx] = job(false, want, "check", "Not checked on the real key yet: press Set up".into());
+                        continue;
+                    }
+                    s.sync.read_tried[idx] = true;
+                    self.log.line(&format!("layer sync: read {name} first"));
+                    s.jobs[idx] = job(true, want, "waiting", String::new());
+                }
+                Some(held) => {
+                    if !l.seeded[i] || held == want || s.sync.attempted[idx].as_ref() == Some(&want) {
+                        continue;
+                    }
+                    if check {
+                        s.jobs[idx] = job(false, want, "check", "Not checked on the real key yet: press Set up".into());
+                        continue;
+                    }
+                    self.log.line(&format!("layer sync: {name} -> {} ({})", want.label(*id), if l.target_offline { "offline" } else { "live" }));
+                    s.sync.attempted[idx] = Some(want.clone());
+                    s.jobs[idx] = job(false, want, "waiting", String::new());
+                }
             }
         }
     }
 
-    /// Send the next waiting key job when the key is awake and no other key-typing command is pending.
+    /// Send the next waiting key job when the key is awake, no other key-typing command is pending, and no
+    /// guard holds key typing back.
     fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>) {
         if session.state() != SessionState::Awake || session.has_pending(Request::slow_reply) {
             return;
         }
         let next = {
             let s = self.status.lock_or_recover();
+            if s.sync.blocked || s.sync.no_new || s.sync.not_before.is_some_and(|t| Instant::now() < t) {
+                return;
+            }
             KeyId::EVERY.into_iter().find_map(|k| {
                 s.jobs[k.index() as usize]
                     .as_ref()
                     .filter(|j| j.state == "waiting")
-                    .map(|j| (k, j.typing.clone()))
+                    .map(|j| (k, j.typing.clone(), j.read))
             })
         };
-        let Some((key, typing)) = next else { return };
+        let Some((key, typing, read)) = next else { return };
         let t = TICKETS.fetch_add(1, Ordering::Relaxed);
-        let request = Request::SetKeyTyping(key, typing);
+        let request = if read { Request::GetKeyTyping(key) } else { Request::SetKeyTyping(key, typing) };
         let name = describe(&request);
         let result = session.submit(t, request);
         let mut s = self.status.lock_or_recover();
@@ -1640,7 +1874,7 @@ impl Worker {
         match result {
             Ok(()) => {
                 job.state = "sending";
-                tickets.insert(t, Purpose::Key(key));
+                tickets.insert(t, if read { Purpose::KeyRead(key) } else { Purpose::Key(key) });
                 self.log.line(&format!("queued {name}"));
             }
             Err(f) => {
@@ -1655,7 +1889,7 @@ impl Worker {
         if let Some(f) = &self.fake {
             // The fake key is touched at start-up, so the page has something to show.
             f.wake();
-            return Ok(Box::new(f.transport()));
+            return Ok(Box::new(MangleEcho { inner: Box::new(f.transport()), on: self.mangle_echo.clone() }));
         }
         #[cfg(windows)]
         {
@@ -1740,7 +1974,12 @@ impl Worker {
                         self.log.line("page reconnect");
                         session.resume();
                         read_done = false;
-                        self.status.lock_or_recover().last_error = None;
+                        let mut s = self.status.lock_or_recover();
+                        s.last_error = None;
+                        // Reconnect also lifts the guard after a failed key change (one more attempt each).
+                        s.sync.blocked = false;
+                        s.sync.attempted = Default::default();
+                        s.sync.read_tried = Default::default();
                     }
                     Ok(Cmd::Change(c, reply)) => self.submit_change(&mut session, &mut tickets, c, reply),
                     Ok(Cmd::ReadAll(reply)) => {
@@ -1864,6 +2103,7 @@ impl Worker {
                 s.sent = session.sent;
                 s.stalls = session.stalled;
                 s.pending_sets = tickets.values().filter(|p| !matches!(p, Purpose::Read)).count();
+                s.sync.pending = session.has_pending(Request::slow_reply);
             }
         }
         self.finish(&mut session, &mut tickets);
@@ -1909,8 +2149,7 @@ impl Worker {
                     return;
                 }
             },
-            Change::KeyTyping(k, t) => Request::SetKeyTyping(k, t),
-            Change::KnobTurn(_) | Change::Retry(_) => {
+            Change::Retry(_) => {
                 let _ = reply.send(Err("The knob turn is set as a background job".into()));
                 return;
             }
@@ -1996,32 +2235,95 @@ impl Worker {
                         }
                     }
                 }
+                // Any key-typing command that failed after it may have reached the key: no automatic key-typing
+                // command until Reconnect or Try again, and a write's result is in doubt.
+                let not_sent = |f: &Failure| matches!(f, Failure::Asleep | Failure::Closed | Failure::Cancelled);
+                if let (true, Err(f)) = (request.slow_reply(), &result) {
+                    if !not_sent(f) {
+                        let mut s = self.status.lock_or_recover();
+                        s.sync.blocked = true;
+                        if let Request::SetKeyTyping(id, _) = &request {
+                            s.sync.uncertain[id.index() as usize] = true;
+                            s.known.keys[id.index() as usize] = None;
+                        }
+                        drop(s);
+                        self.log.line("key typing paused after a failed key change: use Reconnect or Try again");
+                    }
+                }
                 match purpose {
                     Some(Purpose::Set(reply)) => {
                         let _ = reply.send(result.map(|_| ()).map_err(|f| f.message()));
                     }
+                    Some(Purpose::KeyRead(key)) => {
+                        let mut s = self.status.lock_or_recover();
+                        let i = key.index() as usize;
+                        match &result {
+                            Ok(_) => {
+                                s.jobs[i] = None;
+                                let held = s.known.keys[i].clone();
+                                drop(s);
+                                self.save_echo(key, held);
+                                return;
+                            }
+                            Err(f) if not_sent(f) => {
+                                if let Some(j) = s.jobs[i].as_mut() {
+                                    j.state = "waiting";
+                                }
+                            }
+                            Err(f) => {
+                                if let Some(j) = s.jobs[i].as_mut() {
+                                    j.state = "failed";
+                                    j.message = f.message();
+                                }
+                            }
+                        }
+                    }
                     Some(Purpose::Key(key)) => {
                         let mut s = self.status.lock_or_recover();
-                        if let Some(job) = s.jobs[key.index() as usize].as_mut() {
+                        let i = key.index() as usize;
+                        let held = s.known.keys[i].clone();
+                        if let Some(job) = s.jobs[i].as_mut() {
                             match &result {
-                                Ok(_) => job.state = "done",
-                                // Never written (the key went to sleep first): wait for it again.
-                                Err(Failure::Asleep) | Err(Failure::Closed) | Err(Failure::Cancelled) => {
-                                    job.state = "waiting"
+                                // The echo is what the key stored: anything else than what was written is a
+                                // failure, never repeated automatically.
+                                Ok(_) if held.as_ref() == Some(&job.typing) => job.state = "done",
+                                Ok(_) => {
+                                    job.state = "failed";
+                                    job.next = None;
+                                    job.message = format!(
+                                        "The key stored something else ({})",
+                                        held.map(|h| h.label(key)).unwrap_or_else(|| "unknown".into())
+                                    );
                                 }
+                                // Never written (the key went to sleep first): wait for it again.
+                                Err(f) if not_sent(f) => job.state = "waiting",
                                 Err(f) => {
                                     job.state = "failed";
+                                    job.next = None;
                                     job.message = f.message();
                                 }
                             }
                             // A newer choice was made meanwhile: it becomes the waiting job.
-                            if job.state != "waiting" {
+                            if job.state == "done" {
                                 if let Some(next) = job.next.take() {
                                     job.typing = next;
                                     job.state = "waiting";
                                     job.message.clear();
                                 }
                             }
+                        }
+                        if matches!(result, Ok(_)) {
+                            s.sync.uncertain[i] = false;
+                        }
+                        // Saved only when confirmed; a failed or different result forgets the saved list.
+                        let confirmed = s.jobs[i].as_ref().is_some_and(|j| j.state == "done" || (j.state == "waiting" && result.is_ok()));
+                        let held = s.known.keys[i].clone();
+                        let gone = !matches!(&result, Err(f) if not_sent(f));
+                        drop(s);
+                        if confirmed {
+                            self.save_echo(key, held);
+                        } else if gone {
+                            self.save_echo(key, None);
                         }
                     }
                     _ => {}
@@ -2051,6 +2353,35 @@ impl Worker {
             }
             _ => {}
         }
+    }
+}
+
+/// Fake key only (tests): when switched on, every key-typing set reply echoes one extra key, as a firmware
+/// that stores something else would.
+struct MangleEcho {
+    inner: Box<dyn Transport>,
+    on: Arc<AtomicBool>,
+}
+impl Transport for MangleEcho {
+    fn write(&mut self, report: &protocol::Report, timeout: Duration) -> std::io::Result<()> {
+        self.inner.write(report, timeout)
+    }
+    fn read(&mut self, timeout: Duration) -> std::io::Result<Option<protocol::Report>> {
+        let r = self.inner.read(timeout)?;
+        let Some(report) = r else { return Ok(None) };
+        if !self.on.load(Ordering::SeqCst) {
+            return Ok(Some(report));
+        }
+        let Some(mut p) = protocol::decode_frame(&report) else { return Ok(Some(report)) };
+        // A set reply: 81 06 50 10 <btn> 01 <n> <entries>.
+        if p[0] == 0x81 && p[1] == 0x06 && p[2] == 0x50 && p[3] == 0x10 && (p[6] as usize) < 4 {
+            let n = p[6] as usize;
+            p[7 + 2 * n] = 2;
+            p[8 + 2 * n] = 0x04; // the letter A
+            p[6] += 1;
+            return Ok(Some(protocol::encode_frame(&p)));
+        }
+        Ok(Some(report))
     }
 }
 
@@ -2144,29 +2475,28 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(au.status()["state"], "asleep");
-        assert_eq!(au.status()["keys"][2]["mode"], "unknown");
+        assert_eq!(au.status()["keys"][0]["mode"], "unknown");
         let started = Instant::now();
-        au.configure(&json!({"enabled": true, "actions": {"k3": {"kind":"claudeDictation"}}}));
-        au.change(Change::KeyTyping(KeyId::K3, KeyTyping::own_code(KeyId::K3))).unwrap();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind":"claudeDictation"}}}));
         // "At once" compared with the 20 s a key-typing reply may take; generous for a loaded test machine.
         assert!(started.elapsed() < Duration::from_secs(2), "the choice returns at once");
-        let s = au.status();
-        assert_eq!(s["actions"]["k3"]["kind"], "claudeDictation", "saved before the list is read");
-        assert_eq!(s["keys"][2]["hotkey"]["state"], "ready", "the hotkey is claimed at once");
-        assert_eq!(s["keys"][2]["job"]["state"], "waiting");
-        assert_eq!(s["keys"][2]["job"]["message"], "Waiting for the key: press any key to wake it");
+        let s = wait_for(&au, |s| s["keys"][0]["job"]["state"] == "waiting");
+        assert_eq!(s["actions"]["k1"]["kind"], "claudeDictation", "saved before the list is read");
+        assert_eq!(s["keys"][0]["hotkey"]["state"], "ready", "the hotkey is claimed at once");
+        assert_eq!(s["keys"][0]["job"]["read"], true, "the unknown list is read first");
+        assert_eq!(s["keys"][0]["job"]["message"], "Waiting for the key: press any key to wake it");
         std::thread::sleep(Duration::from_millis(300));
-        assert!(fake.received().iter().all(|p| p[2] != 0x50), "nothing is written to a sleeping key");
-        // Waking the key sends the change; the job ends in Done and the key now types its own code.
+        assert!(fake.received().iter().all(|p| p[2] != 0x50), "nothing is sent to a sleeping key");
+        // Waking the key: K1 is read (factory), then set to its own code; the job ends in Done.
         fake.wake();
-        let s = wait_for(&au, |s| s["keys"][2]["job"]["state"] == "done");
-        assert_eq!(s["keys"][2]["job"]["message"], "Done");
-        assert_eq!(s["keys"][2]["mode"], "uc");
+        let s = wait_for(&au, |s| s["keys"][0]["job"]["state"] == "done");
+        assert_eq!(s["keys"][0]["job"]["message"], "Done");
+        assert_eq!(s["keys"][0]["mode"], "uc");
         // A failure ends in the error, not in a spinner.
         fake.lock().drop_replies = 1;
-        au.change(Change::KeyTyping(KeyId::K3, KeyTyping::factory())).unwrap();
-        let s = wait_for(&au, |s| s["keys"][2]["job"]["state"] == "failed");
-        assert!(s["keys"][2]["job"]["message"].as_str().unwrap().contains("did not answer"));
+        au.configure(&json!({"enabled": true}));
+        let s = wait_for(&au, |s| s["keys"][0]["job"]["state"] == "failed");
+        assert!(s["keys"][0]["job"]["message"].as_str().unwrap().contains("did not answer"));
         assert_eq!(s["busy"], false);
         au.shutdown();
     }
@@ -2180,11 +2510,16 @@ mod tests {
         let fake = au.fake_handle().unwrap().clone();
         let sets = |f: &FakeHandle| f.received().into_iter().filter(|p| p[2] == 0x50 && p[3] == 0x00).count();
         au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}},
-                             "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}, "k2": {"mode": "keys", "keys": "Ctrl + Enter"}}}));
-        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "uc" && s["keys"][1]["mode"] == "keys");
+                             "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}}}));
+        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "uc");
         assert_eq!(s["layer"]["target"], "live");
         assert_eq!(s["keys"][0]["offline"], "Ctrl + D");
-        assert_eq!(sets(&fake), 2, "K1 (its own code) and K2 (its changed offline typing) only");
+        assert_eq!(sets(&fake), 1, "K1 (its own code) only: K2 is not known and did not change");
+        // The user changes K2's offline typing: K2 types it while UC runs too (read first, then written).
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}},
+                             "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}, "k2": {"mode": "keys", "keys": "Ctrl + Enter"}}}));
+        wait_for(&au, |s| s["keys"][1]["mode"] == "keys");
+        assert_eq!(sets(&fake), 2);
         assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
         // Quit: K1 gets its offline typing back; K2 already holds its offline typing and is not written again.
         assert_eq!(au.shutdown(), Some(true));
@@ -2241,19 +2576,10 @@ mod tests {
     fn page_changes_parse_to_allowlisted_values_only() {
         assert_eq!(parse_change(&json!({"setting":"standbyTime","value":600})), Ok(Change::StandbyTime(600)));
         assert!(parse_change(&json!({"setting":"sleepTime","value":1234})).is_err());
-        assert_eq!(
-            parse_change(&json!({"setting":"keyTyping","key":"k3","mode":"uc"})),
-            Ok(Change::KeyTyping(KeyId::K3, KeyTyping::own_code(KeyId::K3)))
-        );
-        assert_eq!(
-            parse_change(&json!({"setting":"keyTyping","key":"knobPress","mode":"uc"})),
-            Ok(Change::KeyTyping(KeyId::KnobPress, KeyTyping::own_code(KeyId::KnobPress)))
-        );
-        assert_eq!(
-            parse_change(&json!({"setting":"keyTyping","key":"k1","mode":"keys","keys":"Ctrl + D"})),
-            Ok(Change::KeyTyping(KeyId::K1, KeyTyping::parse("Ctrl + D").unwrap()))
-        );
-        assert!(parse_change(&json!({"setting":"keyTyping","key":"knobLeft","mode":"factory"})).is_err());
+        assert_eq!(parse_change(&json!({"setting":"retryJob","key":"knobLeft"})), Ok(Change::Retry(KeyId::KnobLeft)));
+        // The key's lists change only through the layers (review 2026-11-17): no direct entry points.
+        assert!(parse_change(&json!({"setting":"keyTyping","key":"k3","mode":"uc"})).is_err());
+        assert!(parse_change(&json!({"setting":"knobTurn","mode":"uc"})).is_err());
         assert!(parse_change(&json!({"setting":"reboot","value":1})).is_err());
     }
 
@@ -2279,6 +2605,8 @@ mod tests {
         let s = au.status();
         assert_eq!(s["keys"][2]["mode"], "uc", "K3 types its own F22");
         assert_eq!(s["keys"][3]["factory"], "Backspace");
+        // K3 held UC's own code with no UC action: its offline typing is seeded as factory, and K3 gets it.
+        wait_for(&au, |s| s["keys"][2]["mode"] == "factory");
         au.change(Change::StandbyTime(900)).unwrap();
         // K1's offline layer: with no UC action it is what K1 types while UC runs too, so it is written now.
         au.configure(&json!({"enabled": true, "offline": {"k1": {"mode": "keys", "keys": "Ctrl + D"}}}));
@@ -2287,8 +2615,8 @@ mod tests {
         let s = wait_for(&au, |s| s["keys"][0]["mode"] == "keys" && s["standbyS"] == 900);
         assert_eq!(s["keys"][0]["label"], "Ctrl + D", "learned from the set's echo");
         let sent50: Vec<_> = au.fake_handle().unwrap().received().into_iter().filter(|p| p[2] == 0x50).collect();
-        // One read (K3), one set (K1), and K3 back to its layer: it had no UC action but held F22.
-        assert_eq!(sent50.len(), 3, "K3 read, K1 set, K3 set to its offline typing; no read-back");
+        // K3: read, set to factory (seeded; it held F22 without a UC action). K1: read first, then set.
+        assert_eq!(sent50.len(), 4, "K3 read and set, K1 read and set");
         assert_eq!(s["sleepS"], 0);
         let fake = au.fake_handle().unwrap();
         assert_eq!(fake.lock().mic, MicNr { level: 2, a: 100, b: 100 }, "the unknown values are kept");
@@ -2412,6 +2740,213 @@ mod tests {
         assert!(second.unwrap_err().contains("Another key"), "a second key read is refused while one runs");
         first.join().unwrap().unwrap();
         assert_eq!(au.fake_handle().unwrap().lock().overlapped, 0);
+        au.shutdown();
+    }
+    fn sets(f: &FakeHandle) -> usize {
+        f.received().into_iter().filter(|p| p[2] == 0x50 && p[3] == 0x00).count()
+    }
+    fn typing_cmds(f: &FakeHandle) -> usize {
+        f.received().into_iter().filter(|p| p[2] == 0x50).count()
+    }
+    fn job(s: &Value, key: &str) -> Value {
+        s["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(s["turns"].as_array().into_iter().flatten())
+            .find(|k| k["key"] == key)
+            .map(|k| k["job"].clone())
+            .unwrap_or(Value::Null)
+    }
+
+    /// Review 2026-11-17 (1): the key stores something else than written (the set's echo differs): one
+    /// write, then "failed"; never repeated automatically. Try again allows exactly one more.
+    #[test]
+    fn an_echo_that_differs_fails_after_one_write() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.test_control(&json!({"op": "mangleEcho", "value": true})).unwrap();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        let s = wait_for(&au, |s| job(s, "k1")["state"] == "failed");
+        assert!(job(&s, "k1")["message"].as_str().unwrap().contains("stored something else"), "{s}");
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(sets(&fake), 1, "one write, no automatic repeat");
+        au.change(Change::Retry(KeyId::K1)).unwrap();
+        wait_for(&au, |s| sets(&fake) == 2 && job(s, "k1")["state"] == "failed");
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(sets(&fake), 2, "Try again is one more write");
+        assert_eq!(fake.lock().overlapped, 0);
+        au.shutdown();
+    }
+
+    /// Review (2, 5): Quit and disable wait for a key-typing command already sent, then store the offline
+    /// layer; "stored" is never reported while one is in flight.
+    #[test]
+    fn quit_and_disable_wait_for_a_key_change_in_flight() {
+        for quit in [true, false] {
+            let au = worker();
+            let fake = au.fake_handle().unwrap().clone();
+            au.configure(&json!({"enabled": true}));
+            wait_for(&au, |s| s["micNr"].is_object());
+            fake.lock().key_typing_delay = Duration::from_millis(400);
+            au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+            // The set (after the read) is on its way.
+            let s = wait_for(&au, |s| job(s, "k1")["state"] == "sending" && job(s, "k1")["read"] == false);
+            assert_eq!(job(&s, "k1")["state"], "sending");
+            let stored = if quit {
+                au.shutdown()
+            } else {
+                au.configure(&json!({"enabled": false, "actions": {"k1": {"kind": "claudeDictation"}}}));
+                au.take_offline_result()
+            };
+            assert_eq!(stored, Some(true), "quit={quit}");
+            assert_eq!(fake.lock().typing[0], KeyTyping::factory(), "the offline layer is on the key");
+            assert_eq!(sets(&fake), 2, "the live set finished, then the offline set");
+            assert_eq!(fake.lock().overlapped, 0);
+            assert_eq!(au.take_abandoned(), None);
+            au.shutdown();
+        }
+    }
+
+    /// Review (2): out of time with a key-typing command unanswered: recorded, and the next run waits before
+    /// its first key-typing command.
+    #[test]
+    fn an_abandoned_key_change_makes_the_next_run_wait() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.set_timing(Duration::from_millis(150), Duration::from_millis(1500));
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        fake.lock().key_typing_delay = Duration::from_millis(600);
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        wait_for(&au, |s| job(s, "k1")["state"] == "sending");
+        assert_eq!(au.shutdown(), Some(false), "out of time: not stored");
+        let at = au.take_abandoned().expect("the unanswered command is recorded");
+
+        let next = worker();
+        let fake2 = next.fake_handle().unwrap().clone();
+        next.set_timing(Duration::from_millis(150), Duration::from_millis(1500));
+        let started = Instant::now();
+        next.configure(&json!({"enabled": true, "slowAbandonedAt": at, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        let s = wait_for(&next, |s| s["micNr"].is_object());
+        assert_eq!(s["keySync"]["waiting"], true);
+        while started.elapsed() < Duration::from_millis(1100) {
+            assert_eq!(typing_cmds(&fake2), 0, "no key-typing command during the wait");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        while typing_cmds(&fake2) == 0 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(started.elapsed() >= Duration::from_millis(1400), "the first one waits for the full time");
+        wait_for(&next, |s| s["keys"][0]["mode"] == "uc");
+        next.shutdown();
+    }
+
+    /// Review (3): after a key-typing command got no answer, nothing more is sent automatically until
+    /// Reconnect (or Try again).
+    #[test]
+    fn a_missed_key_reply_stops_automatic_key_changes() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.configure(&json!({"enabled": true}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        fake.lock().drop_replies = 1;
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}}}));
+        let s = wait_for(&au, |s| s["keySync"]["blocked"] == true);
+        assert_eq!(s["keySync"]["blocked"], true);
+        let before = typing_cmds(&fake);
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "claudeDictation"}, "k2": {"kind": "enter"}}}));
+        std::thread::sleep(Duration::from_millis(1000));
+        assert_eq!(typing_cmds(&fake), before, "no automatic key-typing command after a missed reply");
+        au.reconnect().unwrap();
+        let s = wait_for(&au, |s| s["keys"][0]["mode"] == "uc" && s["keys"][1]["mode"] == "uc");
+        assert_eq!(s["keySync"]["blocked"], false);
+        assert_eq!(fake.lock().overlapped, 0);
+        au.shutdown();
+    }
+
+    /// Review (4, 6): a start after the migration writes nothing for lists that already hold what UC wants,
+    /// and the user's keys seed the offline layer (UC's own codes become factory).
+    #[test]
+    fn a_start_after_migration_keeps_the_users_keys() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        let saved: Arc<Mutex<Vec<Value>>> = Default::default();
+        let sink = saved.clone();
+        au.set_persist(Arc::new(move |p| {
+            sink.lock_or_recover().push(p);
+            Ok(())
+        }));
+        // The user's K1 types Ctrl + D (set up in Ulanzi Studio). Settings from before the layers.
+        fake.lock().typing[0] = KeyTyping::parse("Ctrl + D").unwrap();
+        let old = json!({"enabled": true, "actions": {"k1": {"kind": "none"}, "k3": {"kind": "claudeDictation"}}});
+        au.configure(&old);
+        // K3 (UC action) is read: it already types F22, so nothing is written. K1 is left alone.
+        wait_for(&au, |s| s["keys"][2]["mode"] == "uc");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(sets(&fake), 0, "nothing written for lists that already hold what UC wants");
+        assert_eq!(typing_cmds(&fake), 1, "only K3 (UC action) was read");
+        // "Read from key" on K1: its keys become its offline typing; nothing is written.
+        au.read_key(KeyId::K1).unwrap();
+        let s = wait_for(&au, |s| s["layer"]["offline"]["k1"]["keys"] == "Ctrl + D");
+        assert_eq!(s["layer"]["offline"]["k1"]["keys"], "Ctrl + D", "seeded from the key: {}", s["layer"]);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(sets(&fake), 0, "a read never writes the user's keys away");
+        assert_eq!(fake.lock().typing[0], KeyTyping::parse("Ctrl + D").unwrap());
+        let patches = saved.lock_or_recover().clone();
+        assert!(
+            patches.iter().any(|p| p["offline"]["control"] == "k1" && p["offline"]["keys"] == "Ctrl + D" && p["offline"]["seed"] == true),
+            "{patches:?}"
+        );
+        let echo = patches.iter().find(|p| p["keyEcho"]["control"] == "k3").expect("K3's confirmed list is saved").clone();
+        // The patches save as the app would.
+        let mut au_settings = sanitize(&old);
+        for p in &patches {
+            apply_patch(&mut au_settings, p).unwrap();
+        }
+        assert_eq!(au_settings["offline"]["k1"]["keys"], "Ctrl + D");
+        assert_eq!(au_settings["keyEcho"]["k3"], echo["keyEcho"]["keys"]);
+        // A user's choice is never overwritten by a seed.
+        let mut chosen = sanitize(&json!({"offline": {"k2": {"mode": "keys", "keys": "Enter"}}, "offlineSet": {"k2": true}}));
+        apply_patch(&mut chosen, &json!({"offline": {"control": "k2", "mode": "factory", "seed": true}})).unwrap();
+        assert_eq!(chosen["offline"]["k2"]["keys"], "Enter");
+        au.shutdown();
+    }
+
+    /// Review (4): the next start with the confirmed lists saved reads and writes nothing.
+    #[test]
+    fn a_start_with_saved_confirmed_lists_sends_no_key_typing() {
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        let label = KeyTyping::own_code(KeyId::K3).label(KeyId::K3);
+        au.configure(&json!({"enabled": true, "layers": 1, "actions": {"k3": {"kind": "claudeDictation"}}, "keyEcho": {"k3": label}}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(typing_cmds(&fake), 0);
+        au.shutdown();
+    }
+
+    /// Review (7): a key that opens the quick menu needs the knob press on F19. The knob press is not checked
+    /// on the real key, so it waits for the user's "Set up", then gets F19.
+    #[test]
+    fn the_quick_menu_keeps_the_knob_press_on_f19() {
+        let l = Layers::from_settings(&json!({"actions": {"k1": {"kind": "quickMenu"}}}));
+        let press = LAYER_CONTROLS.iter().position(|(_, id)| *id == KeyId::KnobPress).unwrap();
+        assert!(l.uc[press]);
+        assert_eq!(l.live[press], KeyTyping::own_code(KeyId::KnobPress));
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        let s = wait_for(&au, |s| job(s, "knobPress")["state"] == "check");
+        assert_eq!(job(&s, "knobPress")["state"], "check", "{s}");
+        let idx = KeyId::KnobPress.index();
+        let press_cmds = |f: &FakeHandle| f.received().into_iter().filter(|p| p[2] == 0x50 && p.get(4).copied().unwrap_or(0) == idx).count();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(press_cmds(&fake), 0, "nothing sent for an unchecked control");
+        au.change(Change::Retry(KeyId::KnobPress)).unwrap();
+        wait_for(&au, |_| fake.lock().typing[idx as usize] == KeyTyping::own_code(KeyId::KnobPress));
+        assert_eq!(fake.lock().typing[idx as usize], KeyTyping::own_code(KeyId::KnobPress));
         au.shutdown();
     }
 }

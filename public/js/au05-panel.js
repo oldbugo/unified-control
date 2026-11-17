@@ -197,7 +197,7 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined}:null;
-    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
+    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,s.keySync,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
     const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
     if(this.dragAction!=null&&!force)return this.flash();
@@ -262,6 +262,8 @@ export class Au05Panel{
     const onKey=k=>k.mode==='unknown'?'not read':shortLabel(k.label);
     const readLink=k=>`<button class="au05-link" type="button" data-au05-read="${k.key}"${dis}>${k.mode==='unknown'?'Read from key':'Read again'}</button>`;
     const jobPill=(k)=>{const job=k.job;if(!job)return '';
+      if(job.state==='check')return `<span class="au05-pill warn au05-job" title="${esc(job.message)}">Needs a check <button class="au05-link" type="button" data-au05-retry="${k.key}">Set up</button></span>`;
+      if(job.read&&job.state!=='failed')return pill(job.state==='sending'?'Reading…':'Waiting to read','warn','au05-job');
       return job.state==='done'?pill('Key updated','ok','au05-job'):job.state==='failed'?`<span class="au05-pill bad au05-job" title="${esc(job.message)}">Failed <button class="au05-link" type="button" data-au05-retry="${k.key}">Try again</button></span>`:pill(job.state==='sending'?'Sending…':'Waiting for key','warn','au05-job');};
     // ---- the side panel for one key: mode, status and the current action (the palette assigns) ----
     const current=(icon,name,sub)=>`<div class="au05-current"><span class="au05-card-icon">${icon}</span><div><strong>${esc(name)}</strong>${sub?`<span class="au05-muted">${esc(sub)}</span>`:''}</div></div>`;
@@ -368,6 +370,8 @@ export class Au05Panel{
         <button type="button" data-au05-layer-view="live" aria-pressed="${!offlineView}">With Unified Control</button><button type="button" data-au05-layer-view="offline" aria-pressed="${offlineView}">On its own</button></div>
       ${L.target==='offline'?`<span class="au05-pill ${L.offlineOnKey?'ok':'warn'}">${L.offlineOnKey?'Offline layer on the key':'Storing the offline layer…'}</span><button class="btn" type="button" data-au05-layer="live"${native}>Back to Unified Control</button>`
         :`<button class="btn" type="button" data-au05-layer="offline"${live}>Store offline layer on the key now</button>`}
+      ${s.keySync?.blocked?'<span class="au05-pill bad" title="A key change got no answer. Nothing more is sent to the key until you press Reconnect or Try again">Key changes paused: use Reconnect</span>':''}
+      ${s.keySync?.waiting?'<span class="au05-pill warn" title="The last run left a key change unanswered; the key gets 20 seconds to finish it">Waiting for the key to finish an earlier change</span>':''}
       ${s.offlinePending&&!(L.target==='offline'&&L.offlineOnKey)?'<span class="au05-pill warn" title="At the last quit the key was asleep or there was no time">Offline layer not stored yet</span>':''}</div>
       ${offlineView?'<p class="au05-line">What each control types when Unified Control is not running (another PC, or after Quit). It is stored on the key when Unified Control quits.</p>':''}
       <p class="au05-line au05-risk">If the PC loses power while Unified Control runs, the key keeps its codes F19–F24 (harmless) until Unified Control runs again.</p>`;

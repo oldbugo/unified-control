@@ -175,14 +175,44 @@ The key stores one list per control (what it types). The page edits two layers, 
 UC keeps the key holding the right layer (`Worker::sync_layers`, every tick): while it runs, a control with a
 UC action is set to its own code and every other control to its offline typing; only controls whose stored
 list differs are written, through the usual key jobs (one key command at a time, read back from the set's
-echo, time limits, settle after wake, no retry: a failed job waits for "Try again"). A stored list that is
-not known (not read in this run) is written only for controls with a UC action, or whose layer changed in
-this run. Each panel shows "On the key now: …".
+echo, time limits, settle after wake, no retry). Each panel shows "On the key now: …".
+
+Guards on key-typing commands (cmd 0x50; independent review 2026-11-17):
+
+- **Read before write.** A list not known in this run is read first (one at a time, 20 s slow wait) and
+  written only if it differs. Only lists UC would write are read: a control with a UC action, one whose layer
+  changed in this run, or one whose saved confirmed list differs. The first `configure` of a run marks
+  nothing as changed, so a start sends no blind writes.
+- **Saved confirmed lists** (`au05.keyEcho`): each list the key confirms (a read, or a set whose echo
+  matched) is saved, so a later start neither reads nor writes a control that already holds what UC wants.
+  (If another PC changes the key meanwhile, UC does not notice until that control's layer changes or the
+  user presses Read from key.)
+- **Echo check.** A set whose echo differs from what was written ("The key stored something else") fails
+  and is never repeated automatically; one automatic attempt per control and wanted list, then only when
+  the wanted list changes or the user presses Try again.
+- **After a missed reply.** Any other key-typing failure (no reply, write timeout) pauses all automatic
+  key-typing commands until Reconnect or Try again (the page shows "Key changes paused: use Reconnect"); a
+  queued newer choice is dropped, and the set's result is treated as unknown.
+- **Unchecked controls.** Knob press and knob left are not checked on the real key: UC never writes them by
+  itself; they show "Needs a check" with "Set up", which allows them once.
+- **Keeping the user's keys (decision).** Until a control's offline typing is set by the user (or is not the
+  factory default), nothing is written for it. When its list becomes known (read at start, or "Read from
+  key"), that list becomes its offline typing (saved, `offlineSet`); one of UC's own codes F19–F24 counts as
+  the factory default. So the migration and "Read from key" never write the user's keys away. A seed never
+  overwrites a choice the user made meanwhile.
+- **Quick menu.** While any key opens the quick menu, the knob press is on its own code (F19) in the live
+  layer, as the hotkeys need it to choose.
 
 The offline layer goes back on the key at: Quit (up to 8 s), disabling the Vibe Key (up to 8 s), Windows
 session end (a hidden window on the hotkey thread gets WM_ENDSESSION; up to 4 s), and "Store offline layer on
 the key now" (until "Back to Unified Control" or the next start). Only an awake key is written; otherwise, or
-when time runs out, settings keep `offlinePending` and the page shows "Offline layer not stored yet". If the
+when time runs out, settings keep `offlinePending` and the page shows "Offline layer not stored yet".
+"Stored" is reported only when no key job waits or is being sent and no key-typing command is unanswered. A
+command already sent is always waited for within the budget; when the budget runs out no new one starts, and
+one still unanswered is saved as `slowAbandonedAt`: the next run waits 20 s after that time before its first
+key-typing command (the page shows "Waiting for the key to finish an earlier change"), so two never overlap
+on the key. Quit stores the Vibe Key first, before the cooler and before the 3 s exit watchdog is armed.
+Session end does nothing while the Vibe Key is disabled; stopping the worker forgets what the key holds. If the
 PC loses power while UC runs, the key keeps F19–F24 (harmless) until UC runs again; the page says so in one
 line.
 
