@@ -1,5 +1,6 @@
 // Vibe Key quick menu window (0.34.0: a dial; 0.35.0: bigger, a bump at the ends, dragging that no longer closes
-// it; 0.37.0: the rows share the whole ring, a thicker band, a taper as the end cue, upright labels). Shows the
+// it; 0.37.0: the rows share the whole ring, a thicker band, a taper as the end cue, upright labels; 0.38.0: the
+// taper is one smooth spiral, parallel-sided gaps). Shows the
 // core's menu view and sends input back (au05_menu). The core owns the state: knob turns, the knob press and
 // the menu key arrive there directly; this page adds the keyboard (arrows, Enter, Backspace, Esc) and the mouse
 // (click a segment, wheel over the ring).
@@ -10,7 +11,7 @@
 // Going into a level turns the chosen segment to the top of its (now dimmed) ring and the new level appears as a
 // larger ring around it; at most 3 rings show. The filled hole in the middle is the drag handle.
 import {PUSH,ringRadii,dialDiameter,fitScale,slotAngles,windowOffset,slotRows,edges,segmentPath,
-  point,tangent,fitLabel,taper,shade} from './quick-menu-dial.js';
+  point,tangent,fitLabel,taper,shade,spiralAt,spiralPath,gapAngle} from './quick-menu-dial.js';
 
 const T=window.__TAURI_INTERNALS__;
 const send=(op,index)=>T?T.invoke('au05_menu',{input:index===undefined?{op}:{op,index}}).then(render).catch(()=>{}):Promise.resolve();
@@ -68,11 +69,17 @@ function markup(fit,r){
   })};
 }
 
-/** A segment's geometry: its band (with the taper on the outer edge) and angles, less the gap. */
+/** A segment's geometry: the outer edge (the spiral on the current ring, a circle on a parent), its path, and
+ * the box labels fit in (the band at the segment's smallest outer radius, less the widest gap angle). */
 function seg(m,i){
-  const a=m.angles[i],gap=m.shown.length>1?GAP:0;
-  const outer=m.r1+(m.active?m.taper[i]:0);
-  return {r0:m.r0,r1:outer,a0:a.start+gap,a1:a.end-gap,mid:a.mid};
+  const a=m.angles[i],n=m.shown.length,many=n>1;
+  // The highlighted segment grows outward along the spiral (0.38.0: it no longer moves sideways, so its sides
+  // stay lined up with its neighbours).
+  const grow=m.active&&m.shown[i]===m.sel?PUSH:0;
+  const outer=m.active?(x=>m.r1+spiralAt(n,x)+grow):(()=>m.r1);
+  const d=m.active&&many?spiralPath(m.r0,outer,a.start,a.end):segmentPath(m.r0,m.r1,a.start+(many?GAP:0),a.end-(many?GAP:0));
+  const gap=many?Math.max(GAP,m.active?gapAngle(m.r0):0):0;
+  return {r0:m.r0,r1:Math.min(outer(a.start),outer(a.end)),a0:a.start+gap,a1:a.end-gap,mid:a.mid,d,mark:outer(a.mid)};
 }
 
 /** The ring (segments only; it turns as a whole when it becomes a parent). */
@@ -80,8 +87,8 @@ function ringSvg(m){
   const parts=m.shown.map((row,i)=>{
     const g=seg(m,i),r=m.rows[row]||{};
     const hl=row===m.sel;
-    const [dx,dy]=hl&&m.active?point(PUSH,g.mid):[0,0];
-    const d=segmentPath(g.r0,g.r1,g.a0,g.a1);
+    const [dx,dy]=[0,0];
+    const d=g.d;
     // The "more" fade on an edge segment whose neighbours in the list are not shown.
     const fade=!hl&&((i===m.shown.length-1&&m.edges.moreAfter)||(i===1&&m.edges.moreBefore));
     let fill='';
@@ -92,7 +99,7 @@ function ringSvg(m){
     }
     // The subtle shading toward the end of the list (heavier just before Back/Close).
     const sh=m.active?shade(m.shown.length,i):0;
-    return `<g class="qm-slot" data-row="${row}"${hl?' data-hl="true"':''} transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)})">${fill}<path class="qm-seg${fade?' qm-more':''}" data-kind="${kind(r)}" data-row="${row}" data-outer="${g.r1}"${hl?' data-hl="true"':''}${r.current?' data-current="true"':''}${fade?` fill="url(#qm-g${m.level}-${i})"`:''} style="--shade:${sh.toFixed(3)}" d="${d}"><title>${esc(r.label)}</title></path></g>`;
+    return `<g class="qm-slot" data-row="${row}"${hl?' data-hl="true"':''} transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)})">${fill}<path class="qm-seg${fade?' qm-more':''}" data-kind="${kind(r)}" data-row="${row}" data-outer="${g.mark.toFixed(2)}"${hl?' data-hl="true"':''}${r.current?' data-current="true"':''}${fade?` fill="url(#qm-g${m.level}-${i})"`:''} style="--shade:${sh.toFixed(3)}" d="${d}"><title>${esc(r.label)}</title></path></g>`;
   }).join('');
   return `<g class="qm-ring" data-level="${m.level}" data-active="${m.active}" transform="rotate(${m.rot.toFixed(2)})">${parts}</g>`;
 }
@@ -103,13 +110,13 @@ function labelsSvg(m){
   return m.shown.map((row,i)=>{
     const g=seg(m,i),r=m.rows[row]||{};
     const hl=row===m.sel;
-    const [dx,dy]=hl?point(PUSH,g.mid):[0,0];
+    const [dx,dy]=[0,0];
     const clip=`qm-c${++ids}`;
     const glyph=GLYPH[r.type];
     const fit=fitLabel(r.label,{siblings:r.type==='close'||r.type==='back'?[]:siblings,box:g,measure,
       prefix:glyph||(r.working?'●':''),suffix:r.type==='submenu'?'›':''});
     const attrs=` data-kind="${kind(r)}" data-row="${row}"${hl?' data-hl="true"':''}${fit.short?' data-short="true"':''} data-box="${[g.r0,g.r1,g.a0,g.a1].map(n=>n.toFixed(2)).join(',')}"`;
-    return `<g class="qm-lab" data-row="${row}"${hl?' data-hl="true"':''} transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)})"><clipPath id="${clip}"><path d="${segmentPath(g.r0,g.r1,g.a0,g.a1)}"/></clipPath>${labelSvg(markup(fit,r),'qm-label',attrs,clip)}</g>`;
+    return `<g class="qm-lab" data-row="${row}"${hl?' data-hl="true"':''} transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)})"><clipPath id="${clip}"><path d="${g.d}"/></clipPath>${labelSvg(markup(fit,r),'qm-label',attrs,clip)}</g>`;
   }).join('');
 }
 
@@ -166,7 +173,7 @@ function bump(dir){
   const m=last.rings.get(last.depth);
   const a=m?.angles[m.shown.indexOf(row)];
   if(!a)return;
-  const [px,py]=point(PUSH,a.mid),[tx,ty]=tangent(a.mid);
+  const [px,py]=[0,0],[tx,ty]=tangent(a.mid);
   const t0=performance.now();
   $('qm-dial').dataset.bumps=String(Number($('qm-dial').dataset.bumps||0)+1);
   const tick=now=>{
