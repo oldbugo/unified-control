@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.0 — 2026-11-17
+
+Claude sessions in the quick menu are now a tree: each project first, then its
+sessions (the main folder's session, then the build sessions working in the
+project's worktrees), by title, most recent first, with a dot for sessions
+working now. In every menu, K2 goes into an entry (or opens a session in
+Claude when there is nothing deeper) and K3 goes back up. K1 on a highlighted
+session opens it and starts dictation there. The highlight stops at the first
+and last entries instead of jumping around. The Claude sessions card explains
+that sessions appear once they start or restart after Connect.
+
 ## 0.28.0 — 2026-11-17
 
 Quick menu: each profile has its own menu, and switching profile switches the
