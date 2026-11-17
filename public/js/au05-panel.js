@@ -201,9 +201,11 @@ export class Au05Panel{
     root.querySelector('#au05-events').innerHTML=this.eventsMarkup();
     const controls=root.querySelector('#au05-controls');
     const menuSig=s.menu?{...s.menu,view:undefined,sessions:s.menu.sessions?{...s.menu.sessions,readAt:undefined}:null}:null;
-    const sig=JSON.stringify([s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,s.keySync,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
+    // Recent events: the card shows only when there is something in it.
+    const evBox=root.querySelector('.au05-events-box');if(evBox)evBox.hidden=!(s.events||[]).length;
+    const sig=JSON.stringify([s.changes,this.advancedOpen,s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,s.keySync,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
     // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
-    const active=document.activeElement,typing=controls.contains(active)&&active.matches('input');
+    const active=document.activeElement,typing=controls.contains(active)&&active.matches('input:not([type="range"]):not([type="checkbox"])');
     if(this.dragAction!=null&&!force)return this.flash();
     if(force||(sig!==this.lastSig&&!typing)){
       const refocus=controls.contains(active)&&active.id?active.id:null;
@@ -302,7 +304,7 @@ export class Au05Panel{
           <span class="au05-types">On the key now: ${esc(onKey(k))} ${readLink(k)}</span></div>
         <div class="au05-pills">${pills}</div></div>
         <div class="au05-seg au05-mode" data-au05-mode="${k.key}" data-value="${esc(value)}" role="group" aria-label="What ${esc(k.name)} does with Unified Control">${seg('uc','UC action')}${seg('offline','Same as on its own')}</div>
-        <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+        
         ${summary}${view==='uc'?custom+menuLine:''}${also}`;
     };
     // ---- the offline layer for one control (what the key types without Unified Control) ----
@@ -347,7 +349,7 @@ export class Au05Panel{
       const [ic,name,sub]=TURN[turnAct]||TURN.scroll;
       return `<div class="au05-panel-head"><div><h2>Knob turn</h2><span class="au05-types">${m.knobTurn==='uc'?'Types F23 / F24 with Unified Control':'Same as on its own'}${anyMenu?' · moves the quick menu':''}</span></div></div>
         <div class="au05-seg" data-au05-turn-seg role="group" aria-label="What turning the knob does with Unified Control">${seg('uc','UC action')}${seg('offline','Same as on its own')}</div>
-        <p class="au05-panel-note hint${this.noteAttention?' attention':''}" role="status">${esc(this.note)}</p>
+        
         ${m.knobTurn==='uc'?current(actionIcon(ic),name,sub):current(IC.scroll,'Same as on its own','')}
         <div class="au05-dirs">${(s.turns||[]).map(dir).join('')}</div>`;
     };
@@ -523,24 +525,46 @@ export class Au05Panel{
     const FIELDS=[['type','Type'],['time','Time'],['breatheLevel','Breathe'],['breatheBrightness','Breathe bright.'],['alwaysOnBrightness','Always-on']];
     const records=(light.records||[]).map((rec,r)=>`<tr><th scope="row">${r}</th>${FIELDS.map(([f,label],i)=>`<td><select data-au05-record="${r}" data-au05-field="${f}" aria-label="Record ${r} ${label}"${dis}>${numbers(Math.max(fmax[f],rec[i]??0),rec[i])}</select></td>`).join('')}</tr>`).join('');
     const codes=(s.controlCodes||[]).map((c,i)=>c==null?'':`<span class="au05-code"><span class="au05-muted">${['K1','K2','K3','Press','Right','Left'][i]}</span> ${esc(c)}</span>`).filter(Boolean).join('');
-    const row=(label,untested,control,rawText)=>`<div class="au05-set-row"><div class="au05-set-label">${esc(label)}${untested}${raw(rawText)}</div>${control}</div>`;
+    // 0.37.0: each setting's last change: waiting for a touch, sending, applied, what the key kept, or not applied.
+    const changes=s.changes||{};
+    const pending=key=>['touch','sending'].includes(changes[key]?.state)?changes[key].value:undefined;
+    const chg=key=>{const c=changes[key];if(!c)return '';
+      const recent=Date.now()-(c.at||0)<30000;
+      if(c.state==='touch')return '<span class="au05-chg warn" role="status">Touch the Vibe Key to apply</span>';
+      if(c.state==='sending')return '<span class="au05-chg">Sending…</span>';
+      if(c.state==='applied')return recent?'<span class="au05-chg ok">Applied</span>':'';
+      if(c.state==='kept')return `<span class="au05-chg warn" title="What the key read back after the change">${esc(c.message||'The key kept another value')}</span>`;
+      if(c.state==='failed')return `<span class="au05-chg bad">${esc(c.message||'Not applied')}</span>`;
+      return recent&&c.message?`<span class="au05-chg">${esc(c.message)}</span>`:'';};
+    const row=(label,untested,control,rawText,key)=>`<div class="au05-set-row"><div class="au05-set-label">${esc(label)}${untested}${raw(rawText)}</div><div class="au05-set-ctl">${control}${key?chg(key):''}</div></div>`;
+    // The light modes, as checked on the real key (2026-11-17): a tile each with the lit parts glowing.
+    const LIGHT_MODES=[['Off','Everything off',[]],['All','Dial and keys lit',['dial','keys']],['Dial','Dial only',['dial']],['Keys','Keys only (maybe just the active key)',['keys']]];
+    const lightTile=(i,[name,title,lit],cur)=>{const on=p=>lit.includes(p)?' lit':'';
+      return `<button type="button" class="au05-ltile" data-au05-light-mode="${i}" aria-pressed="${cur===i}" title="${esc(title)}"${dis}>
+        <svg viewBox="0 0 40 56" aria-hidden="true"><rect x="6" y="2" width="28" height="52" rx="7" class="body"/><circle cx="20" cy="15" r="8" class="part${on('dial')}"/>
+        <rect x="13" y="27" width="14" height="7" rx="2" class="part${on('keys')}"/><rect x="13" y="36" width="14" height="7" rx="2" class="part${on('keys')}"/><rect x="13" y="45" width="14" height="7" rx="2" class="part${on('keys')}"/></svg>
+        <span>${esc(name)}${i===3?' <span class="au05-unv" aria-label="not fully known">?</span>':''}</span></button>`;};
+    const modeNow=pending('lightMode')??light.mode;
+    const lightPicker=`<div class="au05-lpick" role="group" aria-label="Light mode">${LIGHT_MODES.map((m,i)=>lightTile(i,m,modeNow)).join('')}</div>`;
+    const brightNow=pending('lightBrightness')??light.brightness;
+    const brightness=`<span class="au05-slider"><input type="range" min="0" max="${Math.max(range.brightnessMax,light.brightness??0)}" step="1" value="${brightNow??0}" data-au05-set="lightBrightness" aria-label="All-on brightness"${brightNow==null?' disabled':dis}><span class="au05-value">${brightNow??'—'}</span></span>`;
     const notRead=v=>v==null?opt('','Not read','') :'';
     const deviceCard=(icon,title,body,wide=false)=>`<section class="au05-box au05-set-card${wide?' au05-wide':''}"><h3 class="au05-box-title"><span class="au05-box-icon">${icon}</span>${esc(title)}</h3>${body}</section>`;
     const device=`<div class="au05-section-head"><h2>Device</h2><div class="au05-box-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
       ${s.readsFailed?`<div class="au05-reads-failed" role="status"><span>${esc(s.readsFailed)}</span><button class="btn" data-au05="read-all" type="button">Read again</button></div>`:''}
       <div class="au05-settings-grid">
       ${deviceCard(IC.power,'Power',
-        row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,standby)).join('')}</select>`,standby==null?null:`${standby} s`)+
-        row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time" title="&quot;Never&quot; stops the key switching itself off, at some battery cost"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`)+
-        row('Standby status','',`<span class="au05-value">${s.standbyStatus==null?'—':esc(s.standbyStatus)}</span>`,null))}
+        row('Standby',this.untested('standbyTime'),`<select data-au05-set="standbyTime" aria-label="Standby time"${dis}>${notRead(standby)}${standbyOpts.map(([v,l])=>opt(v,l,pending('standbyTime')??standby)).join('')}</select>`,standby==null?null:`${standby} s`,'standbyTime')+
+        row('Power off',this.untested('sleepTime'),`<select data-au05-set="sleepTime" aria-label="Power-off time" title="&quot;Never&quot; stops the key switching itself off, at some battery cost"${dis}>${notRead(s.sleepS)}${sleepOpts.map(([v,l])=>opt(v,l,pending('sleepTime')??s.sleepS)).join('')}</select>`,s.sleepS==null?null:`${s.sleepS} s`,'sleepTime')+
+        row('Standby status','',`<span class="au05-value">${s.standbyStatus==null?'Not read':esc(s.standbyStatus)}</span>`,null))}
       ${deviceCard(IC.light,'Light',
-        row('Mode',this.untested('lightMode'),`<select data-au05-set="lightMode" aria-label="Light mode"${dis}>${notRead(light.mode)}${Array.from({length:Math.max(range.modeMax,light.mode??0)+1},(_,i)=>opt(i,`Mode ${i}`,light.mode)).join('')}</select>`,null)+
-        row('Brightness',this.untested('lightBrightness'),`<select data-au05-set="lightBrightness" aria-label="All-on brightness"${dis}>${notRead(light.brightness)}${numbers(Math.max(range.brightnessMax,light.brightness??0),light.brightness)}</select>`,null)+
-        row('Hooks mode',this.untested('hooksMode'),`<select data-au05-set="hooksMode" aria-label="Hooks mode"${dis}>${notRead(s.hooksMode)}${opt(0,'Off',s.hooksMode)}${opt(1,'On',s.hooksMode)}</select>`,null)+
-        `<div class="au05-records"><div class="au05-set-label">Mode records${this.untested('lightRecord')}</div>${records?`<div class="au05-table"><table><thead><tr><th></th>${FIELDS.map(([,l])=>`<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${records}</tbody></table></div>`:'<p class="au05-muted">Not read yet.</p>'}</div>`,true)}
+        row('Mode',this.untested('lightMode'),light.mode==null&&pending('lightMode')==null?'<span class="au05-value">Not read</span>':lightPicker,light.mode==null?null:`mode ${light.mode}`,'lightMode')+
+        row('Brightness',this.untested('lightBrightness'),brightness,null,'lightBrightness')+
+        row('Hooks mode',this.untested('hooksMode'),`<select data-au05-set="hooksMode" aria-label="Hooks mode"${dis}>${notRead(s.hooksMode)}${opt(0,'Off',pending('hooksMode')??s.hooksMode)}${opt(1,'On',pending('hooksMode')??s.hooksMode)}</select>`,null,'hooksMode')+
+        `<details class="au05-advanced"${this.advancedOpen?' open':''}><summary data-au05-advanced="">Advanced: mode records${this.untested('lightRecord')}</summary>${records?`<div class="au05-table"><table><thead><tr><th></th>${FIELDS.map(([,l])=>`<th scope="col">${l}</th>`).join('')}</tr></thead><tbody>${records}</tbody></table></div>`:'<p class="au05-muted">Not read yet.</p>'}${Object.keys(changes).filter(k=>k.startsWith('lightRecord:')).map(chg).join('')}</details>`,true)}
       ${deviceCard(IC.mic,'Microphone',
-        row('Noise reduction',this.untested('micNr'),`<select data-au05-set="micNr" aria-label="Noise reduction"${dis}>${notRead(s.micNr)}${Array.from({length:Math.max(s.micNrMax??3,s.micNr?.level??0)+1},(_,i)=>opt(i,i===0?'Off':`Level ${i}`,s.micNr?.level)).join('')}</select>`,s.micNr?`${s.micNr.level}, ${s.micNr.a}, ${s.micNr.b}`:null))}
-      ${deviceCard(IC.sliders,'Controls',`<div class="au05-codes">${codes||'<span class="au05-muted">Read all settings to see each control\'s code.</span>'}</div>`)}
+        row('Noise reduction',this.untested('micNr'),`<select data-au05-set="micNr" aria-label="Noise reduction"${dis}>${notRead(s.micNr)}${Array.from({length:Math.max(s.micNrMax??3,s.micNr?.level??0)+1},(_,i)=>opt(i,i===0?'Off':`Level ${i}`,pending('micNr')??s.micNr?.level)).join('')}</select>`,s.micNr?`${s.micNr.level}, ${s.micNr.a}, ${s.micNr.b}`:null,'micNr'))}
+      ${codes?deviceCard(IC.sliders,'Controls',`<div class="au05-codes">${codes}</div>`):''}
       </div>`;
 
     return `${topBar}${layerBar}<div class="au05-workspace"><div class="au05-drawing">${batteryMarkup}${diagram}</div>
@@ -550,7 +574,10 @@ export class Au05Panel{
   }
   async change(change){
     this.sending++;this.setNote('Sending to the Vibe Key…');this.paint(true);
-    try{const st=await this.invoke('au05_change',{change});this.state=st;this.setNote('Saved on the Vibe Key.');return true;}
+    try{const st=await this.invoke('au05_change',{change});this.state=st;
+      const key=change.setting==='lightRecord'?`lightRecord:${change.record}:${change.field}`:change.setting;
+      const c=st?.changes?.[key];
+      this.setNote(c?.state==='touch'?'Touch the Vibe Key to apply.':c?.state==='failed'?(c.message||'Not applied.'):c?.state==='kept'?c.message:'Saved on the Vibe Key.',c?.state==='failed'||c?.state==='kept');return true;}
     catch(error){this.setNote(errorText(error),true);return false;}
     finally{this.sending--;this.paint(true);this.onState();}
   }
@@ -714,6 +741,10 @@ export class Au05Panel{
       this.invoke('au05_read_all').then(s=>{this.state=s;this.setNote('Reading all settings, one at a time. Key settings are read per key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
     }
+    // The light mode tiles (0.37.0) and the Advanced detail (its open state survives a repaint).
+    const tile=e.type==='click'&&t.closest?.('[data-au05-light-mode]');
+    if(tile){if(!tile.disabled)this.change({setting:'lightMode',value:Number(tile.dataset.au05LightMode)});return true;}
+    if(e.type==='click'&&t.closest?.('[data-au05-advanced]')){this.advancedOpen=!t.closest('details').open;return false;}
     const zone=e.type==='click'&&t.closest?.('[data-au05-zone]');
     if(zone){this.select(zone.dataset.au05Zone);return true;}
     const retry=e.type==='click'&&t.closest?.('[data-au05-retry]');

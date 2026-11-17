@@ -27,7 +27,7 @@ const server=http.createServer((req,res)=>{
         {id:'claudeDictateSend',group:'Claude',label:'Dictate & send',keys:'Ctrl + D, then Enter',status:'unverified',note:'New: first press starts dictation',offlineKeys:null},
         {id:'chatgptNewChat',group:'ChatGPT',label:'New chat',keys:'Ctrl + Shift + O',status:'unverified',note:'Third-party report',offlineKeys:'Ctrl + Shift + O'},
         {id:'volumeUp',group:'Windows / media',label:'Volume up',keys:'Volume up',status:'verified',note:'Standard media key'}]},
-      checked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:false,lightBrightness:false,lightRecord:false,hooksMode:false,micNr:false},
+      checked:{standbyTime:true,keyTyping:true,sleepTime:false,lightMode:true,lightBrightness:false,lightRecord:false,hooksMode:false,micNr:false},
       lightRange:{modeMax:3,brightnessMax:10},micNrMax:3};
     const key=(key,name,mode,label,factory,ownCode,checked=true)=>({key,name,mode,label,keys:mode==='keys'?label:null,factory,ownCode,canSet:true,checked,hotkey:{state:'off'}});
     const hotkeys=()=>{for(const k of window.__au05.keys)k.hotkey={state:window.__au05.enabled&&window.__au05.actions[k.key].kind!=='none'?'ready':'off'};};
@@ -57,6 +57,7 @@ const server=http.createServer((req,res)=>{
         window.__writes.push({command,...args});
         const c=args.change;
         if(c.setting==='standbyTime')window.__au05.standbyS=c.value;
+        if(c.setting==='lightMode')window.__au05.light.mode=c.value;
         if(c.setting==='lightRecord'){const f=['type','time','breatheLevel','breatheBrightness','alwaysOnBrightness'].indexOf(c.field);window.__au05.light.records[c.record][f]=c.value;}
         if(c.setting==='retryJob'){const k=window.__au05.keys.find(k=>k.key===c.key);if(k)k.job=null;window.__au05.keySync={blocked:false,pending:false,waiting:false};}
         return structuredClone(window.__au05);
@@ -115,10 +116,12 @@ const server=http.createServer((req,res)=>{
   await page.waitForSelector('[data-au05-mode="knobPress"]');
   assert.match(await page.locator('#au05-events').textContent(),/knob right down/);
   // Every setting can be changed on a real key; unchecked ones are labelled Untested.
-  for(const name of ['sleepTime','lightMode','lightBrightness','micNr','hooksMode','standbyTime'])
-    assert.equal(await page.locator(`select[data-au05-set="${name}"]`).isDisabled(),false,name);
+  for(const name of ['sleepTime','lightBrightness','micNr','hooksMode','standbyTime'])
+    assert.equal(await page.locator(`[data-au05-set="${name}"]`).isDisabled(),false,name);
+  assert.equal(await page.locator('[data-au05-light-mode="1"]').isDisabled(),false,'lightMode');
   assert.equal(await page.locator('[data-au05-mode="knobPress"] [data-au05-segment="uc"]').isDisabled(),false);
-  assert.ok(await page.locator('#au05-controls .chip', {hasText:'Untested'}).count()>=6);
+  assert.ok(await page.locator('#au05-controls .chip', {hasText:'Untested'}).count()>=5);
+  await page.locator('[data-au05-advanced]').click();
   await page.locator('select[data-au05-record="1"][data-au05-field="time"]').selectOption('12');
   await page.waitForFunction(()=>window.__writes.some(w=>w.change?.setting==='lightRecord'&&w.change.record===1&&w.change.field==='time'&&w.change.value===12));
   await page.getByRole('button',{name:'Read all settings'}).click();
@@ -258,6 +261,33 @@ const server=http.createServer((req,res)=>{
   assert.equal((body.match(/Vibe Key awake/g)||[]).length,1,'the state is shown once');
   assert.ok(!/loses power|Menu controls \(while|grouped by your Claude sidebar/.test(body),'no explanatory subtext');
   assert.equal(await page.locator('#au05-page-message,#au05-page-state,.au05-risk').count(),0,'no duplicate status lines');
+  // 0.37.0: one note line ("Reconnecting." showed twice).
+  assert.equal((await page.locator('#au05-page').textContent()).split('Reconnecting.').length-1,1,'the note shows once');
+  // 0.37.0: the light mode picker (verified on the real key: no Untested chip), the brightness slider, the
+  // mode records under Advanced, and each setting's change state.
+  const tiles=page.locator('.au05-lpick [data-au05-light-mode]');
+  assert.equal(await tiles.count(),4);
+  assert.deepEqual(await tiles.allTextContents().then(t=>t.map(x=>x.trim())),['Off','All','Dial','Keys ?']);
+  assert.equal(await page.locator('[data-au05-light-mode="2"]').getAttribute('aria-pressed'),'true','mode 2: Dial');
+  assert.equal(await page.locator('[data-au05-light-mode="1"] .part.lit').count(),4,'All: the dial and the 3 keys glow');
+  assert.equal(await page.locator('.au05-lpick').locator('xpath=ancestor::div[contains(@class,"au05-set-row")]').locator('.au05-untested,.au05-pill').count(),0,'Light mode is no longer Untested');
+  await page.locator('[data-au05-light-mode="0"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_change'&&w.change.setting==='lightMode'&&w.change.value===0));
+  assert.equal(await page.locator('input[type="range"][data-au05-set="lightBrightness"]').count(),1,'brightness is a slider');
+  assert.equal(await page.locator('details.au05-advanced table').count(),1,'mode records under Advanced');
+  assert.equal(await page.locator('details.au05-advanced').evaluate(d=>d.open),true,'opened above, and kept open over repaints');
+  await page.evaluate(()=>{const now=Date.now();window.__au05.light.mode=2;window.__au05.changes={lightBrightness:{state:'touch',value:3,at:now},
+    micNr:{state:'kept',value:2,message:'Key kept level 0 (100, 100)',at:now},standbyTime:{state:'applied',value:600,at:now},
+    sleepTime:{state:'failed',value:0,message:'Not applied: the key was asleep',at:now}};});
+  await page.getByRole('button',{name:'Reconnect'}).click();
+  await page.waitForFunction(()=>/Touch the Vibe Key to apply/.test(document.querySelector('.au05-settings-grid')?.textContent||''));
+  assert.equal(await page.locator('input[data-au05-set="lightBrightness"]').inputValue(),'3','the waiting value is shown');
+  const grid=await page.locator('.au05-settings-grid').textContent();
+  for(const t of ['Key kept level 0 (100, 100)','Applied','Not applied: the key was asleep'])assert.ok(grid.includes(t),t);
+  assert.equal(await page.locator('.au05-set-card h3',{hasText:'Controls'}).count(),0,'the Controls card waits for the codes');
+  await page.locator('.au05-settings-grid').screenshot({path:path.join(shots,'uc-vibe-key-device.png')});
+  await page.locator('.au05-lpick').screenshot({path:path.join(shots,'uc-vibe-key-light-picker.png')});
+  await page.evaluate(()=>{window.__au05.changes={};});
   // 0.33.0: the settings reads stalled twice: the page says so and offers Read again.
   assert.equal(await page.locator('.au05-reads-failed').count(),0,'no note while the reads are fine');
   await page.evaluate(()=>{window.__au05.readsFailed="Couldn't read the settings: Read again";});
@@ -292,7 +322,7 @@ const server=http.createServer((req,res)=>{
     }
   }
   await page.setViewportSize({width:1440,height:1000});
-  await page.locator('.au05-records').screenshot({path:path.join(output,'uc-vibe-key-light-records.png')});
+  await page.locator('.au05-advanced').screenshot({path:path.join(output,'uc-vibe-key-light-records.png')});
   await page.locator('.au05-workspace').screenshot({path:path.join(output,'uc-vibe-key-diagram.png')});
   await nav('general').click();await page.locator('#au05-enabled').uncheck();
   await page.waitForFunction(()=>document.querySelector('[data-page="vibekey"]').hidden);

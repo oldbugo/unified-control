@@ -12,6 +12,8 @@ export const STEP=(360-STOP)/MAX_SLOTS;
 export const PUSH=10;
 /** The label font: from the normal size down to a readable minimum (px). */
 export const FONT_MAX=15, FONT_MIN=11;
+/** A single word too long for its segment may go this small before it is split with a hyphen. */
+export const WORD_MIN=8;
 const PAD=14, MIN_WIDTH=380, CAPTION=96;
 /** Inner and outer radius of each ring, oldest (innermost) first, for 1, 2 or 3 rings shown. The active (outer)
  * ring grows per level (170, 210, 260); the dimmed parent rings fit inside it. */
@@ -143,8 +145,8 @@ export function fitLabel(text,{siblings=[],box,measure,prefix='',suffix='',max=F
   const {r0,r1,deg,mid}=box;
   const thick=r1-r0,rm=(r0+r1)/2,margin=7;
   const top=!flipped(mid);
-  const tryWords=words=>{
-    for(let size=max;size>=min;size--){
+  const tryWords=(words,floor=min)=>{
+    for(let size=max;size>=floor;size--){
       const lh=size*1.15;
       if(thick>=lh+8){
         const line=[prefix,words.join(' '),suffix].filter(Boolean).join(' ');
@@ -178,8 +180,16 @@ export function fitLabel(text,{siblings=[],box,measure,prefix='',suffix='',max=F
     const r=tryWords(sf.kept.filter(i=>keep.has(i)).map(i=>sf.words[i]));
     if(r)return {...r,short:true};
   }
-  // One word that is longer than the segment: its first letters, as many as fit (still no ellipsis).
-  let w=sf.words[sf.order[0]]||words[0]||'';
-  while(w.length>1&&!tryWords([w]))w=w.slice(0,-1);
-  return {...(tryWords([w])||{lines:[w],size:min,radii:[rm]}),short:true};
+  // One word longer than the segment (0.37.0: never cut): smaller, down to 8 px; else split with a hyphen
+  // over two lines, as near the middle as fits.
+  const w=sf.words[sf.order[0]]||words[0]||'';
+  const small=tryWords([w],WORD_MIN);
+  if(small)return {...small,short:true};
+  const half=Math.ceil(w.length/2);
+  for(let d=0;d<half;d++)for(const k of [half-d,half+d]){
+    if(k<2||k>w.length-2)continue;
+    const r=tryWords([`${w.slice(0,k)}-`,w.slice(k)],WORD_MIN);
+    if(r&&r.lines.length===2)return {...r,short:true};
+  }
+  return {lines:[`${w.slice(0,half)}-`,w.slice(half)],size:WORD_MIN,radii:[rm+WORD_MIN*0.6,rm-WORD_MIN*0.6],short:true};
 }

@@ -103,7 +103,7 @@ const views={
     for(const l of ls){
       assert.ok(l.len<=l.room-8,`${name}: "${l.text}" fits its arc (${l.len.toFixed(0)} of ${l.room.toFixed(0)})`);
       assert.ok(!/…|\.\.\./.test(l.text),`${name}: no ellipsis in "${l.text}"`);
-      assert.ok(l.size>=11,`${name}: readable size`);
+      assert.ok(l.size>=11||(l.size>=8&&!/\s/.test(l.text.trim())),`${name}: readable size (${l.size}px "${l.text}")`);
     }
     return ls;
   };
@@ -236,6 +236,9 @@ const views={
   await show('long',{fresh:true});
   const ls=await checkFit('long');
   assert.ok(ls.some(l=>l.short),'a deliberate short form for names that do not fit');
+  // 0.37.0: a single long word is never cut: smaller, or split with a hyphen.
+  const word=ls.map(l=>l.text).join('|');
+  assert.ok(/Supercalifragilisticexpialidocious|Supercali\S*-\|\S*docious/.test(word),`the long word is whole: ${word}`);
   assert.ok(ls.filter(l=>l.short).every(l=>!/Unified/.test(l.text)),`the shared project prefix is dropped: ${ls.map(l=>l.text).join(' | ')}`);
   assert.match(await page.locator('#qm-caption').textContent(),/fix the Vibe Key settings reads after a stalled wake from switched off/,'the full name in the caption');
   await shoot('long',3);
