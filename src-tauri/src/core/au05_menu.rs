@@ -290,6 +290,8 @@ pub enum Input {
     Close,
     /// A mouse click on a row.
     Pick(usize),
+    /// The window is being dragged (0.35.0): counts as input, so the idle close waits; nothing else changes.
+    Hold,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -341,6 +343,9 @@ pub struct MenuState {
     path: Vec<usize>,
     pub highlight: usize,
     last_input: Option<Instant>,
+    /// The last turn past an end (0.35.0, the dial's bump against its stop): direction (-1 at Close/Back, 1 at
+    /// the last row) and a count that grows with every bump.
+    bump: (i8, u64),
     pub note: Option<String>,
     /// "Reopen where I left off" (setting `reopenWhereLeft`, default on).
     pub remember: bool,
@@ -463,15 +468,22 @@ impl MenuState {
             Input::Toggle | Input::Close => self.close(),
             // No wrap-around (2026-11-17): at the first or last row, further turns stay put.
             Input::Next => {
+                if self.highlight + 1 >= rows {
+                    self.bump = (1, self.bump.1 + 1);
+                }
                 self.highlight = (self.highlight + 1).min(rows - 1);
                 self.note = None;
                 Outcome::Moved
             }
             Input::Prev => {
+                if self.highlight == 0 {
+                    self.bump = (-1, self.bump.1 + 1);
+                }
                 self.highlight = self.highlight.saturating_sub(1);
                 self.note = None;
                 Outcome::Moved
             }
+            Input::Hold => Outcome::Nothing,
             Input::Dictate(then) => match self.highlighted_session(menu) {
                 Some(id) => {
                     self.close();
@@ -602,6 +614,7 @@ impl MenuState {
             "title": title,
             "rows": rows,
             "depth": self.path.len(),
+            "bump": {"dir": self.bump.0, "n": self.bump.1},
             "levels": levels,
             "highlight": self.highlight,
             "profile": profile_name,
@@ -759,8 +772,21 @@ mod tests {
         assert_eq!((v["rows"][0]["type"].as_str(), v["rows"][0]["label"].as_str()), (Some("close"), Some("Close")), "Close is always first");
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
         assert_eq!(m.highlight, 0);
+        assert_eq!(m.view(&json!({}), &menu)["bump"]["n"], 0, "no bump yet");
         assert_eq!(m.step(&menu, Input::Prev, t0), Outcome::Moved);
         assert_eq!(m.highlight, 0, "no wrap-around: stays on the first row");
+        assert_eq!(m.view(&json!({}), &menu)["bump"], json!({"dir": -1, "n": 1}), "a bump against the stop at Close");
+        let last = m.view(&json!({}), &menu)["rows"].as_array().unwrap().len() - 1;
+        m.highlight = last;
+        m.step(&menu, Input::Next, t0);
+        assert_eq!((m.highlight, m.view(&json!({}), &menu)["bump"].clone()), (last, json!({"dir": 1, "n": 2})), "and at the last row");
+        m.step(&menu, Input::Prev, t0);
+        assert_eq!(m.view(&json!({}), &menu)["bump"]["n"], 2, "a normal turn is no bump");
+        // Dragging the window holds the idle close off.
+        let later = t0 + CLOSE_AFTER - Duration::from_secs(1);
+        assert_eq!(m.step(&menu, Input::Hold, later), Outcome::Nothing);
+        assert!(!m.expired(later + Duration::from_secs(2)), "held");
+        m.highlight = 0;
         // Choosing Close closes.
         assert_eq!(m.step(&menu, Input::Choose, t0), Outcome::Closed);
         m.step(&menu, Input::Toggle, t0);

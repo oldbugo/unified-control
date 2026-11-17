@@ -19,13 +19,14 @@ use uc_core::core::sync::MutexExt;
 
 const LABEL: &str = "quickmenu";
 const MARGIN: f64 = 24.0;
-/// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (120, 150,
-/// 188), the push-out of the highlighted segment (8) and a margin (12) each side, at least 340 wide, plus the
-/// caption and hints (96). Matches `dialSize` in public/js/quick-menu-dial.js.
+/// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (170, 210,
+/// 260; 0.35.0), the push-out of the highlighted segment (10) and a margin (14) each side, at least 380 wide,
+/// plus the caption and hints (96). Matches `dialSize` in public/js/quick-menu-dial.js. On a smaller work area
+/// the window is clamped and the page draws the dial smaller.
 pub fn dial_size(rings: usize) -> (f64, f64) {
-    let outer = [120.0, 150.0, 188.0][rings.clamp(1, 3) - 1];
-    let d = 2.0 * (outer + 8.0 + 12.0);
-    (f64::max(d, 340.0), d + 96.0)
+    let outer = [170.0, 210.0, 260.0][rings.clamp(1, 3) - 1];
+    let d = 2.0 * (outer + 10.0 + 14.0);
+    (f64::max(d, 380.0), d + 96.0)
 }
 /// The caption and hints under the dial take 96 logical pixels: the window's centre is half of that below the
 /// dial's centre (physical pixels at this scale).
@@ -111,6 +112,9 @@ fn build(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             if *PLACED.lock_or_recover() == Some((pos.x, pos.y)) {
                 return; // our own placement
             }
+            // The user is dragging it (0.35.0): the page ignores the focus loss of Windows' move loop and holds
+            // the idle close until the moves settle.
+            let _ = w2.emit("uc:au05-menu-moved", ());
             if let (Ok(Some(m)), Ok(size)) = (w2.current_monitor(), w2.outer_size()) {
                 let r = rect(&m);
                 save_place(&Place {
@@ -254,15 +258,15 @@ mod tests {
     /// by scripts/check-quick-menu.cjs) and stays inside the work area.
     #[test]
     fn the_dial_window_fits_its_rings_and_the_work_area() {
-        assert_eq!(dial_size(1), (340.0, 376.0));
-        assert_eq!(dial_size(2), (340.0, 436.0));
-        assert_eq!(dial_size(3), (416.0, 512.0));
+        assert_eq!(dial_size(1), (388.0, 484.0));
+        assert_eq!(dial_size(2), (468.0, 564.0));
+        assert_eq!(dial_size(3), (568.0, 664.0));
         assert_eq!(dial_size(9), dial_size(3), "at most 3 rings");
         assert_eq!(rings(&serde_json::json!({"levels": [{}, {}]})), 3);
         assert_eq!(rings(&serde_json::json!({})), 1);
         let wa = (0, 0, 1920, 1040);
-        assert_eq!(fit((960, 520), 416, 512, wa), (752, 264));
-        assert_eq!(fit((1900, 20), 416, 512, wa), (1504, 0), "clamped into the work area");
-        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 400)), (416.0, 400.0), "never taller than the work area");
+        assert_eq!(fit((960, 520), 568, 664, wa), (676, 188));
+        assert_eq!(fit((1900, 20), 568, 664, wa), (1352, 0), "clamped into the work area");
+        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 600)), (568.0, 600.0), "never taller than the work area");
     }
 }

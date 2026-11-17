@@ -1361,6 +1361,7 @@ impl Au05 {
             "close" => Some(Input::Close),
             "toggle" => Some(Input::Toggle),
             "pick" => Some(Input::Pick(index.ok_or("Choose a row")?)),
+            "hold" => Some(Input::Hold),
             _ => return Err("Unknown menu input".into()),
         };
         if let Some(i) = input {
