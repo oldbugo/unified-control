@@ -10,6 +10,13 @@ it opens one level up near where it was. Each profile's menu remembers its own
 place until Unified Control restarts. A new setting under the menu controls,
 "Reopen where I left off" (on by default), turns this off.
 
+The Vibe Key page no longer says "asleep" while you are using the key: key
+presses now count, and it waits about 25 seconds without any sign from the
+key before saying asleep. After the key's power-off time it says the key is
+probably switched off and how to turn it on. The status now reads "Receiver
+connected · Vibe Key awake / asleep / probably off", so it is clear which part
+is connected.
+
 ## 0.31.0 — 2026-11-17
 
 The quick menu's Claude sessions now use your own projects from the Claude

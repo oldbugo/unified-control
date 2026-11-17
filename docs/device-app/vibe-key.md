@@ -440,6 +440,21 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Awake, asleep, probably off: the shown state (0.32.0, user report 2026-11-17)
+
+- The page said "asleep" while the key was in use (log: K1 hotkey 06:13:13, "state asleep" 06:13:26, K1
+  again 06:13:51). Cause: the session's awake test is the last private message within the 11 s awake window,
+  the status messages come about every 10 s, and presses that arrive as UC hotkeys (F-codes) do not count.
+- Display only (`au05::shown_state`, `asleep_after`): a hotkey from one of the key's own codes (F19–F24)
+  counts as a sign of life; "asleep" shows only after no private message and no key hotkey for max(25 s,
+  2.5 × the observed status interval); past the power-off time read from the key (`sleepS`) it shows "probably
+  switched off: hold the power button on its right side for 2–3 s". The 11 s send gate (send only to an
+  awake key) is unchanged.
+- Wording: "Receiver connected · Vibe Key awake / asleep / probably off" (the USB receiver vs the key).
+- Real key, standby 60 s (orchestrator, 2026-11-17): the light goes off at about the minute and the knob
+  wakes it; the first turn after waking can seem unresponsive. UC cannot shorten that wake time, and there is
+  no keep-alive (Studio's is 0x23, which stays forbidden).
+
 ### Reopen where I left off (0.32.0, user request 2026-11-17)
 
 - The quick menu opens where it was last closed: the same sub-menu path and highlighted entry (for example

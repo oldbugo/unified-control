@@ -6,8 +6,9 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="7.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16.5" cy="12" r="1.5"/><path d="M12 4v3"/></svg>';
 export const AU05_ICON=ICON;
 const STATES={
-  disabled:'Disabled',starting:'Starting',waiting:'Waiting for the key',connected:'Connected',asleep:'Asleep',
-  paused:'Paused',suspended:'Stopped',off:'Switched off?',not_found:'Not plugged in',error:'Error',
+  // "Receiver connected": the USB receiver; the rest is the key itself (2026-11-17).
+  disabled:'Disabled',starting:'Starting',waiting:'Receiver connected · waiting for the key',connected:'Receiver connected · Vibe Key awake',asleep:'Receiver connected · Vibe Key asleep',
+  paused:'Paused',suspended:'Stopped',off:'Receiver connected · Vibe Key probably off',not_found:'Not plugged in',error:'Error',
 };
 
 const STANDBY=[[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes'],[600,'10 minutes'],[900,'15 minutes'],[1800,'30 minutes'],[3600,'1 hour']];
