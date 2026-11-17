@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.27.0 — 2026-11-17
+
+Every Vibe Key control can now be fully set up from the Vibe Key page: when a
+control (for example the knob press for the quick menu) needs its one-time
+check, the page always shows "Needs a check · Set up". The "On its own" setup
+offers only actions the key can store by itself (keystrokes such as Ctrl+D,
+Enter, media keys, your own combinations); Unified Control-only actions such as
+the quick menu or Dictate & send are marked "Needs Unified Control". A small
+"Also use on its own" button copies a compatible action across.
+
 ## 0.26.0 — 2026-11-17
 
 Cooler engine 4.24.0: the screen's keep-display-on setting (0x15) is sent only
