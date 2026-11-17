@@ -1446,6 +1446,15 @@ impl Worker {
 
     fn connected(&self, transport: Box<dyn Transport>, rx: &Arc<Mutex<Receiver<Cmd>>>) {
         let mut session = Session::new(transport, self.config.clone());
+        // What the driver opened (collections, capabilities; no paths) and, below, a heartbeat with read
+        // counters: every 30 s for the first 5 minutes, then every 10 minutes (real-key bug 2026-11-17: the
+        // receiver opened but no report ever arrived).
+        if let Some(d) = session.diagnostics() {
+            self.log.line(&format!("receiver: {d}"));
+        }
+        let opened_at = Instant::now();
+        let mut next_beat = opened_at + Duration::from_secs(30);
+        let (mut ticks, mut outputs_seen) = (0u64, 0u64);
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut read_done = false;
         let mut read_burst: Option<(Instant, Vec<u64>)> = None;
@@ -1514,8 +1523,19 @@ impl Worker {
                     return;
                 }
             };
+            ticks += 1;
+            outputs_seen += outputs.len() as u64;
             for o in outputs {
                 self.handle(o, &mut tickets);
+            }
+            if Instant::now() >= next_beat {
+                let early = opened_at.elapsed() < Duration::from_secs(300);
+                next_beat = Instant::now() + Duration::from_secs(if early { 30 } else { 600 });
+                self.log.line(&format!(
+                    "heartbeat: {:?}, {ticks} ticks, {outputs_seen} messages; {}",
+                    session.state(),
+                    session.diagnostics().unwrap_or_else(|| "no transport diagnostics".into())
+                ));
             }
             self.start_jobs(&mut session, &mut tickets);
             let state = session.state();

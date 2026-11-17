@@ -23,7 +23,8 @@ png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ulanzi_dock = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "9ea93c06ad8ff3ae6f01784a4403886593ffff5d" }
 # AU05 Vibe Key driver (uc-ulanzi PRs 3, 4 and 5, merged).
-ulanzi_au05 = { git = "https://github.com/oldbugo/uc-ulanzi", rev = "5ecc40c0fbff99f9fde85cb28f8a3f00c03e110e" }
+# Local driver branch claude/au05-continuous-read (keep one read pending; diagnostics); the orchestrator switches this to GitHub.
+ulanzi_au05 = { git = "file:///C:/Users/pc/Documents/uc-worktrees/uc-ulanzi-au05", rev = "bdd2a3d5b29f2d18009ac3b3ee315a4c698f86e0" }
 
 [dev-dependencies]
 tempfile = "3"
