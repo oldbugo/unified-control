@@ -33,7 +33,49 @@ use ulanzi_au05::protocol::{self, Control, KeyId, KeyTyping, LightField, LightSt
 use ulanzi_au05::{Failure, Output, Session, SessionConfig, SessionState, Transport};
 
 /// Shown when the key has sent nothing for long enough that it has probably switched itself off.
-pub const OFF_MESSAGE: &str = "The Vibe Key is switched off or asleep. Hold the power button on its right side for 2–3 s";
+pub const OFF_MESSAGE: &str = "Receiver connected · Vibe Key probably switched off: hold the power button on its right side for 2–3 s";
+pub const AWAKE_MESSAGE: &str = "Receiver connected · Vibe Key awake";
+pub const ASLEEP_MESSAGE: &str = "Receiver connected · Vibe Key asleep. Press a key or turn the knob to wake it";
+pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the knob to wake the Vibe Key";
+
+/// Shown as asleep only after this long without a private message or a key hotkey (2026-11-17: the status
+/// messages come about every 10 s, so the session's 11 s send gate flipped the page to "asleep" while the key
+/// was in use). At least 25 s, or 2.5 times the observed status interval. Scaled by the session's awake window
+/// (11 s on the real key; tests use a shorter one). Display only: the send gate is unchanged.
+pub fn asleep_after(status_interval: Option<Duration>, awake_window: Duration) -> Duration {
+    let base = Duration::from_secs(25).max(status_interval.unwrap_or_default().mul_f64(2.5));
+    base.mul_f64(awake_window.as_secs_f64() / 11.0)
+}
+
+/// The state the page shows (display only; sending still follows the session's own state). `quiet`: since
+/// the last private message or key hotkey (`None`: none since the connection opened). `standby_off`: how long
+/// a connection may stay without any message before the key counts as off; `power_off`: the key's power-off
+/// time.
+pub fn shown_state(
+    state: SessionState,
+    quiet: Option<Duration>,
+    since_open: Duration,
+    asleep_after: Duration,
+    standby_off: Duration,
+    power_off: Option<Duration>,
+) -> (&'static str, &'static str) {
+    match state {
+        SessionState::Paused => return ("paused", "A reply was slow. Sending is paused for 30 seconds"),
+        SessionState::Suspended => return ("suspended", "Sending stopped after repeated slow replies. Use Reconnect"),
+        _ => {}
+    }
+    if state == SessionState::Awake || quiet.is_some_and(|q| q < asleep_after) {
+        return ("connected", AWAKE_MESSAGE);
+    }
+    let q = quiet.unwrap_or(since_open);
+    if power_off.is_some_and(|p| q > p) || (quiet.is_none() && q > standby_off) {
+        return ("off", OFF_MESSAGE);
+    }
+    if quiet.is_none() {
+        return ("waiting", WAITING_MESSAGE);
+    }
+    ("asleep", ASLEEP_MESSAGE)
+}
 
 /// The six controls in the order of their device index (test clicks and the event list).
 pub const CONTROLS: [(&str, Control); 6] = [
@@ -297,6 +339,8 @@ pub fn sanitize(v: &Value) -> Value {
             m["menuControls"].clone()
         }),
         "menuControlsVersion": MENU_CONTROLS_VERSION,
+        // "Reopen where I left off" (user request 2026-11-17): the menu opens where it was closed.
+        "reopenWhereLeft": v["reopenWhereLeft"].as_bool().unwrap_or(true),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -535,6 +579,11 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             }
         }
         au["menuControls"] = next;
+    }
+    if let Some(v) = patch.get("reopenWhereLeft") {
+        let v = v.as_bool().ok_or("Invalid Vibe Key setting")?;
+        au["reopenWhereLeft"] = json!(v);
+        lines.push(format!("page menu reopen where left = {v}"));
     }
     if let Some(k) = patch.get("knobTurn") {
         let k = k.as_str().filter(|k| *k == "factory" || *k == "uc").ok_or("Choose what the knob turn does")?;
@@ -790,6 +839,8 @@ pub struct MenuCtl {
     dictate_busy: Arc<AtomicBool>,
     dictate_last: Mutex<Option<Instant>>,
     sessions: Mutex<Option<SessionsFn>>,
+    /// When a hotkey from one of the key's own codes last arrived (the key is in use: shown as awake).
+    key_seen: Mutex<Option<Instant>>,
     /// The Claude desktop app's data folder (`claude_tree`), if it can be read.
     claude_data: Mutex<Option<std::path::PathBuf>>,
     /// The menu as shown, frozen while it is open (a changing session list never moves the highlight).
@@ -858,6 +909,11 @@ impl MenuCtl {
         let (outcome, was_open, view) = {
             let mut st = self.state.lock_or_recover();
             let was = st.open;
+            st.remember = settings["reopenWhereLeft"] != false;
+            if !was {
+                // The memory is per profile menu.
+                st.scope = settings["profile"].as_str().unwrap_or("").to_string();
+            }
             let o = st.step(&shown, input, Instant::now());
             (o, was, st.view(&settings, &shown))
         };
@@ -1044,6 +1100,9 @@ impl MenuCtl {
 
     /// A claimed hotkey arrived (on the hotkey thread: return quickly).
     pub fn hotkey(self: &Arc<Self>, vk: u16) {
+        if vk == hotkey::VK_F23 || vk == hotkey::VK_F24 || KeyId::ALL.into_iter().any(|k| own_vk(k) == vk) {
+            *self.key_seen.lock_or_recover() = Some(Instant::now());
+        }
         let settings = self.settings();
         let open = self.is_open();
         if vk == hotkey::VK_F23 || vk == hotkey::VK_F24 {
@@ -1136,6 +1195,7 @@ impl MenuCtl {
             "knobTurn": settings["knobTurn"],
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
+            "reopenWhereLeft": settings["reopenWhereLeft"] != false,
             "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
@@ -1225,6 +1285,7 @@ impl Au05 {
             opened: AtomicU64::new(0),
             last: Arc::new(Mutex::new(None)),
             sessions: Mutex::new(None),
+            key_seen: Mutex::new(None),
             // Fake and quiet (test) instances read only UC_CLAUDE_DATA.
             claude_data: Mutex::new(super::claude_tree::base_dir(
                 fake || std::env::var("UC_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0"),
@@ -2213,7 +2274,9 @@ impl Worker {
         let opened_at = Instant::now();
         let mut next_beat = opened_at + Duration::from_secs(30);
         let (mut ticks, mut outputs_seen) = (0u64, 0u64);
-        let (mut last_msg, mut seen_before, mut was_off): (Option<Instant>, u64, bool) = (None, 0, false);
+        let (mut last_msg, mut seen_before): (Option<Instant>, u64) = (None, 0);
+        // The observed status interval (gaps of 2 to 60 s between messages; control events come faster).
+        let mut interval: Option<Duration> = None;
         let mut tickets: HashMap<u64, Purpose> = HashMap::new();
         let mut read_done = false;
         let mut read_burst: Option<(Instant, Vec<u64>)> = None;
@@ -2221,7 +2284,7 @@ impl Worker {
         // A "Read from key" waiting for the settle time (one at a time).
         let mut deferred_read: Option<(KeyId, Sender<Result<(), String>>, Instant)> = None;
         let mut was_awake = false;
-        self.set_state("waiting", "Connected. Press a key or turn the knob to wake the Vibe Key");
+        self.set_state("waiting", WAITING_MESSAGE);
         loop {
             if self.stop.load(Ordering::SeqCst) {
                 break;
@@ -2352,38 +2415,27 @@ impl Worker {
                 }
             }
             if outputs_seen > seen_before {
+                if let Some(gap) = last_msg.map(|t| t.elapsed()).filter(|g| *g >= Duration::from_secs(2) && *g <= Duration::from_secs(60)) {
+                    interval = Some(interval.map_or(gap, |i| i.mul_f64(0.7) + gap.mul_f64(0.3)));
+                }
                 last_msg = Some(Instant::now());
                 seen_before = outputs_seen;
             }
-            // Switched off (2026-11-17, real key: after its power-off time the key turns itself off and only its
-            // power button brings it back): no message since the connection opened for longer than the
-            // standby time + 2 minutes, or none for longer than the power-off time.
-            let off = {
+            // The shown state (display only). Switched off (2026-11-17, real key: after its power-off time the
+            // key turns itself off and only its power button brings it back): no message since the connection
+            // opened for longer than the standby time + 2 minutes, or none for longer than the power-off time.
+            // A hotkey from the key's own codes counts as a sign of life (those controls report nothing privately).
+            let shown = {
                 let k = &self.status.lock_or_recover().known;
-                let quiet = last_msg.unwrap_or(opened_at).elapsed();
+                let key_at = *self.menu.key_seen.lock_or_recover();
+                let signal = [last_msg, key_at.filter(|t| *t >= opened_at)].into_iter().flatten().max();
                 let standby = Duration::from_secs(u64::from(k.standby_s.unwrap_or(600)) + 120);
                 let power_off = k.sleep_s.filter(|s| *s > 0).map(|s| Duration::from_secs(u64::from(s)));
-                matches!(state, SessionState::WaitingForKey | SessionState::Asleep)
-                    && ((last_msg.is_none() && quiet > standby) || power_off.is_some_and(|p| quiet > p))
+                shown_state(state, signal.map(|t| t.elapsed()), opened_at.elapsed(), asleep_after(interval, self.config.awake_window), standby, power_off)
             };
-            if off && !was_off {
-                was_off = true;
-                self.set_state("off", OFF_MESSAGE);
-            }
-            if !off && was_off {
-                was_off = false;
-                last_state = None; // show the session's own state again
-            }
-            if !off && last_state != Some(state) {
-                last_state = Some(state);
-                let (code, msg) = match state {
-                    SessionState::WaitingForKey => ("waiting", "Connected. Press a key or turn the knob to wake the Vibe Key"),
-                    SessionState::Awake => ("connected", "Connected"),
-                    SessionState::Asleep => ("asleep", "The Vibe Key is asleep. Press a key to wake it"),
-                    SessionState::Paused => ("paused", "A reply was slow. Sending is paused for 30 seconds"),
-                    SessionState::Suspended => ("suspended", "Sending stopped after repeated slow replies. Use Reconnect"),
-                };
-                self.set_state(code, msg);
+            if last_state != Some(shown) {
+                last_state = Some(shown);
+                self.set_state(shown.0, shown.1);
             }
             {
                 let mut s = self.status.lock_or_recover();
@@ -2744,6 +2796,50 @@ mod tests {
         let au = Au05::with_config(true, None, quick());
         au.fake_handle().unwrap().lock().status_period = Some(Duration::from_millis(200));
         au
+    }
+
+    /// The shown state (2026-11-17, "asleep" while the key was in use): awake until 25 s (or 2.5 status
+    /// intervals) without a message or key hotkey, then asleep, then probably off after the power-off time.
+    #[test]
+    fn the_shown_state_waits_longer_than_the_send_gate() {
+        let w = Duration::from_secs(11);
+        let s = Duration::from_secs;
+        assert_eq!(asleep_after(None, w), s(25));
+        assert_eq!(asleep_after(Some(s(10)), w), s(25), "status every 10 s: 25 s");
+        assert_eq!(asleep_after(Some(s(20)), w), s(50), "2.5 intervals when longer");
+        let (st, sb, po) = (SessionState::Asleep, s(720), Some(s(3600)));
+        let shown = |q: Option<u64>| shown_state(st, q.map(s), s(5000), s(25), sb, po).0;
+        assert_eq!(shown(Some(13)), "connected", "the log's 13 s gap between K1 and the next message: still awake");
+        assert_eq!(shown(Some(26)), "asleep");
+        assert_eq!(shown(Some(3601)), "off", "past the power-off time");
+        assert!(OFF_MESSAGE.contains("probably switched off") && OFF_MESSAGE.contains("2–3 s"));
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(10), s(25), sb, po).0, "waiting");
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(721), s(25), sb, po).0, "off", "nothing since the connection opened");
+        assert_eq!(shown_state(SessionState::Awake, Some(s(30)), s(30), s(25), sb, po), ("connected", AWAKE_MESSAGE));
+        assert_eq!(shown_state(SessionState::Paused, Some(s(1)), s(30), s(25), sb, po).0, "paused");
+    }
+
+    /// A hotkey from the key's own code shows the key awake although it reports nothing privately (the
+    /// session still treats it as asleep for sending).
+    #[test]
+    fn a_key_hotkey_counts_as_awake_for_the_shown_state() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "volumeUp"}}}));
+        wait_for(&au, |s| s["micNr"].is_object());
+        let fake = au.fake_handle().unwrap().clone();
+        fake.sleep();
+        let end = Instant::now() + Duration::from_secs(30);
+        while au.status()["state"] != "asleep" && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(au.status()["state"], "asleep");
+        assert_eq!(au.status()["message"], ASLEEP_MESSAGE);
+        desk.press(own_vk(KeyId::K1));
+        let s = wait_for(&au, |s| s["state"] == "connected");
+        assert_eq!(s["message"], AWAKE_MESSAGE);
+        assert!(!fake.lock().awake, "the fake key itself sent nothing");
+        au.shutdown();
     }
 
     /// The reported "stuck" choice (2026-11-17): choosing a UC action must never wait for the key. The action
@@ -3556,6 +3652,33 @@ mod tests {
         assert!(s["menu"]["sessions"]["note"].as_str().unwrap().contains("not found"));
         au.shutdown();
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// "Reopen where I left off" (default on) through the worker: the menu opens where it was closed; with the
+    /// setting off it opens at the top; the setting is saved and shown.
+    #[test]
+    fn the_menu_reopens_where_it_was_left_unless_turned_off() {
+        let au = worker();
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        assert_eq!(au.status()["menu"]["reopenWhereLeft"], true, "on by default");
+        let hl = |au: &Au05| au.status()["menu"]["view"]["highlight"].as_u64();
+        desk.press(hotkey::VK_F20); // open
+        au.menu_input("next", None).unwrap();
+        au.menu_input("next", None).unwrap();
+        desk.press(hotkey::VK_F20); // close
+        assert_eq!(au.status()["menu"]["view"]["open"], false);
+        desk.press(hotkey::VK_F20);
+        assert_eq!(hl(&au), Some(3), "reopened on the same entry");
+        desk.press(hotkey::VK_F20);
+        let mut s = sanitize(&json!({"enabled": true, "actions": {"k1": {"kind": "quickMenu"}}}));
+        apply_patch(&mut s, &json!({"reopenWhereLeft": false})).unwrap();
+        assert_eq!(s["reopenWhereLeft"], false);
+        au.configure(&s);
+        desk.press(hotkey::VK_F20);
+        assert_eq!(hl(&au), Some(1), "setting off: the first entry");
+        assert_eq!(au.status()["menu"]["reopenWhereLeft"], false);
+        au.shutdown();
     }
 
     /// 0.31.0: a knob press "close" saved from the old default becomes "select", once (with a marker); after

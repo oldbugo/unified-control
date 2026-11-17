@@ -6,8 +6,9 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="7.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="16.5" cy="12" r="1.5"/><path d="M12 4v3"/></svg>';
 export const AU05_ICON=ICON;
 const STATES={
-  disabled:'Disabled',starting:'Starting',waiting:'Waiting for the key',connected:'Connected',asleep:'Asleep',
-  paused:'Paused',suspended:'Stopped',off:'Switched off?',not_found:'Not plugged in',error:'Error',
+  // "Receiver connected": the USB receiver; the rest is the key itself (2026-11-17).
+  disabled:'Disabled',starting:'Starting',waiting:'Receiver connected · waiting for the key',connected:'Receiver connected · Vibe Key awake',asleep:'Receiver connected · Vibe Key asleep',
+  paused:'Paused',suspended:'Stopped',off:'Receiver connected · Vibe Key probably off',not_found:'Not plugged in',error:'Error',
 };
 
 const STANDBY=[[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes'],[600,'10 minutes'],[900,'15 minutes'],[1800,'30 minutes'],[3600,'1 hour']];
@@ -474,6 +475,7 @@ export class Au05Panel{
     const usesCodes=anyMenu?['k2','k3'].filter(k=>(ctl[k]||'none')!=='none'&&(s.actions?.[k]?.kind||'offline')==='offline').map(k=>k.toUpperCase()):[];
     const controlsBox=`<div class="au05-menu-controls"><div class="au05-set-label">Menu controls (while the menu is open)</div>
       <div class="au05-roles"><span class="au05-role"><span>Knob turn</span><span class="au05-muted">Move</span></span>${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</div>
+      <label class="au05-reopen"><input type="checkbox" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off <span class="au05-muted">(the menu opens at the sub-menu and entry it was closed on, for each profile)</span></label>
       <p class="au05-line">${usesCodes.length?`<strong>${usesCodes.join(' and ')} type ${usesCodes.length>1?'their':'its'} own code${usesCodes.length>1?'s':''} (${usesCodes.map(k=>k==='K2'?'F21':'F22').join(', ')}) while Unified Control runs</strong>, so the menu can use ${usesCodes.length>1?'them':'it'}; when the menu is closed, Unified Control types ${usesCodes.length>1?'their':'its'} usual keys. `:''}Their normal actions wait while the menu is open.</p></div>`;
     const profileName=(profiles.find(p=>p.id===m.profile)||{}).name||'';
     const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2>${profileName?`<span class="au05-muted">for the profile ${esc(profileName)}</span>`:''}</div>
@@ -703,6 +705,7 @@ export class Au05Panel{
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
+    if(t.dataset.qmReopen!==undefined){this.configure({reopenWhereLeft:t.checked});return true;}
     if(t.dataset.qmRole!==undefined){this.configure({menuControls:{[t.dataset.qmRole]:t.value}});return true;}
     if(t.dataset.qmThen!==undefined){const path=t.dataset.qmThen;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].then=t.value;});return true;}
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}

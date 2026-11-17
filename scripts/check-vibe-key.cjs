@@ -49,6 +49,7 @@ const server=http.createServer((req,res)=>{
         if(args.patch.action)window.__au05.actions[args.patch.action.control]={kind:args.patch.action.kind,value:args.patch.action.value,app:args.patch.action.app||''};
         if(args.patch.offline){const o=args.patch.offline;window.__au05.layer.offline[o.control]=o.mode==='keys'?{factory:false,keys:o.keys,label:o.keys}:{factory:true,label:'Factory default'};}
         if(args.patch.layer)window.__au05.layer.target=args.patch.layer;
+        if('reopenWhereLeft' in args.patch){window.__au05.menu=window.__au05.menu||{};window.__au05.menu.reopenWhereLeft=args.patch.reopenWhereLeft;}
         if(args.patch.menuControls){window.__au05.menu=window.__au05.menu||{};window.__au05.menu.controls={...window.__au05.menu.controls,...args.patch.menuControls};}
         hotkeys();return structuredClone(window.__au05);
       }
@@ -217,6 +218,11 @@ const server=http.createServer((req,res)=>{
   await press.selectOption('close');
   await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.menuControls?.knobPress==='close'));
   await page.waitForFunction(()=>document.querySelector('select[data-qm-role="knobPress"]')?.value==='close');
+  // "Reopen where I left off": on by default, can be turned off.
+  const reopen=page.locator('input[data-qm-reopen]');
+  assert.equal(await reopen.isChecked(),true,'reopen where I left off is on by default');
+  await reopen.uncheck();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.patch?.reopenWhereLeft===false));
   await page.evaluate(()=>{window.__au05.menu.sessions={source:'desktop',open:3,groups:null,groupsNote:"Claude's sidebar groups were not found"};});
   await page.getByRole('button',{name:'Reconnect'}).click();
   await page.waitForFunction(()=>/groups the sessions by folder/.test(document.querySelector('.au05-claude')?.textContent||''));
