@@ -78,6 +78,31 @@ knob press never did. So UC does not use private events for actions. Instead:
 
 Hotkeys are claimed only while the Vibe Key is enabled and a key has an action. They are released when the
 action is set to Nothing, when the key is switched to Types keys or Factory default, on disable and on quit.
+
+Real key, 2026-11-17: once a control types its own code, the key seems to stop reporting that control on the
+private channel (K3 on F22 and the knob right on F23 sent no private events). The power button sends nothing
+at all (three short presses: only the 10 s status message arrived).
+
+## Message box first (user report 2026-11-17)
+
+With Claude's terminal panel focused (Claude Code desktop), "Start dictation" sent Ctrl + D into the terminal
+(which can close the shell), and "Dictate & send" would have sent Enter there (running a command). Now the
+actions that type into a message box (Claude: Start dictation, Send message, Dictate & send; ChatGPT: Start
+dictation, Send message; and the Target-app actions that become them) first bring the app forward, then find
+its message box with Windows UI Automation (`core/au05_composer.rs`), focus it and confirm the focus moved
+there, and only then press the keys. Dictate & send does this before each of its keys (Ctrl + D, and Enter).
+
+- The message box: an enabled, focusable, on-screen Edit (or a Document other than the page) whose name or
+  automation id names a prompt or message box (prompt, message, reply, ask, chat, composer), and never one
+  named terminal, console, xterm, search, find, filter or rename. With no such name, a single editable field
+  left counts. Chromium builds its accessibility tree when first asked, so UC looks a second time after 0.3 s.
+- Not found or not focused: nothing is pressed, the key's event shows "Couldn't find Claude's message box"
+  (or ChatGPT's), and the log says why, with up to eight editable elements seen (type, a 40-character label
+  and automation id; never their text). The element found is logged once per run so the search can be
+  tuned on the real app.
+- The search is tested on a list of elements (terminal next to the prompt box, only a terminal, the page,
+  two unnamed fields); the fake desktop models a missing message box (nothing pressed). The real Claude and
+  ChatGPT windows are an open check.
 If another app already holds the code, the page shows that the key is not available.
 
 Actions:
@@ -240,9 +265,11 @@ setting has a short note that "Never" avoids this at some battery cost; UC does 
 - Above the drawing: a battery icon with its fill level and the percentage; warning colour at 15 % or less;
   "Full" at 100 %; "Asleep — last known 30 %" while the key sleeps; on hover: volts, the time of the last
   report and the raw status flags. The Home card's status chip shows it too ("Connected · 30 %").
-- The periodic status message (class 0x7B) carries millivolts, percent and a flags byte (0x08 seen so far,
-  not understood). Charging is not shown until a flag bit is confirmed; every change of the flags is logged
-  ("battery status flags 0x08 -> ...") so plugging the charger in on the real key can map it.
+- The periodic status message (class 0x7B) carries millivolts, percent and a flags byte. Real key
+  2026-11-17: 0x08 at 30 % while it was most likely charging; `0b 7b 1e 10 00 64` (4126 mV, 100 %, flags
+  0x00) full and unplugged. So bit 0x08 is treated as "charging": the page shows the bolt and the tooltip
+  says "probably charging (charging bit not confirmed yet)". Every change of the flags is still logged
+  ("battery status flags 0x08 -> ...").
 
 ## Action palette (user request 2026-11-17: drag an action onto the key)
 
@@ -427,8 +454,12 @@ changes, and menu edits (entry count only); knob turn changes; Claude sessions c
 16. Dictate & send on K1: press once (Claude comes forward, dictation starts), speak, press again (dictation
     stops, the text is sent once). Press quickly twice: nothing odd. With Claude closed: nothing is pressed.
     With the microphone muted in Windows: "Dictation didn't start". Watch the Vibe Key log lines.
-17. Battery: plug in the charger, then unplug; note the "battery status flags" lines in the log to map
-    charging and full.
+17. Battery: plug in the charger, then unplug; note the "battery status flags" lines in the log and check
+    the bolt follows bit 0x08 (then mark it confirmed).
+18. Message box: in Claude, focus the terminal panel, then press Start dictation: dictation starts in the
+    message box, nothing reaches the terminal. Note the "Claude message box: ..." log line (type, name). Do
+    the same for Dictate & send (the Enter goes to the message box) and for ChatGPT's Start dictation. If the
+    page says "Couldn't find Claude's message box", send the logged element list to tune the search.
 14. Knob turn: choose Unified Control, Scroll. Both directions are set (knob left is the first real F24 set).
     Check one notch per click in both directions with the menu closed, one menu step per click with it open,
     no scrolling behind the menu, then Volume. Then Factory scroll: confirm the n 0 write restores the

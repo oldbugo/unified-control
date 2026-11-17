@@ -404,7 +404,7 @@ export class Au05Panel{
     const low=pct!=null&&pct<=15;
     const fill=pct==null?0:Math.max(3,Math.min(100,pct));
     const bTime=b?.at?new Date(b.at).toLocaleTimeString('en-AU',{hour12:false}):'';
-    const bTitle=b?`Battery ${pct} % · ${(b.millivolts/1000).toFixed(2)} V${bTime?` · updated ${bTime}`:''}${b.flags!=null?` · status flags 0x${b.flags.toString(16).padStart(2,'0')} (charging not known yet)`:''}`:'Battery: not read yet. Press a key to wake the Vibe Key.';
+    const bTitle=b?`Battery ${pct} % · ${(b.millivolts/1000).toFixed(2)} V${bTime?` · updated ${bTime}`:''}${b.charging===true?' · probably charging':''}${b.flags!=null?` · status flags 0x${b.flags.toString(16).padStart(2,'0')}${b.chargingConfirmed?'':' (charging bit not confirmed yet)'}`:''}`:'Battery: not read yet. Press a key to wake the Vibe Key.';
     const bText=pct==null?'Battery —':asleep?`Asleep — last known ${pct} %`:b.full?'Full':`${pct} %`;
     const batteryMarkup=`<div class="au05-battery${low?' low':''}${asleep?' asleep':''}${pct==null?' unknown':''}" title="${esc(bTitle)}">
       <svg class="au05-batt-icon" viewBox="0 0 44 22" aria-hidden="true"><rect x="1.5" y="2.5" width="36" height="17" rx="4" class="shell"/><rect x="39" y="8" width="3.5" height="6" rx="1.2" class="tip"/>

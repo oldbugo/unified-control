@@ -569,8 +569,8 @@ pub fn parse_change(v: &Value) -> Result<Change, String> {
 #[derive(Clone, Debug, Default)]
 struct Known {
     battery: Option<(u16, u8)>,
-    /// The status message's flags byte (class 0x7B, byte 4). Its bits are not understood yet; changes are
-    /// logged so charging and full can be mapped on the real key.
+    /// The status message's flags byte (class 0x7B, byte 4). Bit 0x08 is probably "charging" (not confirmed);
+    /// changes are logged so the bits can be mapped on the real key.
     battery_flags: Option<u8>,
     /// When the battery was last reported (ms since 1970).
     battery_at: Option<u64>,
@@ -867,11 +867,11 @@ impl MenuCtl {
                     super::sync::guarded("Vibe Key action", || {
                         if dictate {
                             // Decided from Claude's real microphone state; logs what was seen and sent.
-                            hotkey::dictate_send(&*d, hotkey::DictateTiming::default()).map(|seen| {
+                            hotkey::dictate_send(&*d, hotkey::DictateTiming::default(), &|l| log.line(l)).map(|seen| {
                                 log.line(&format!("dictate & send: {seen}"));
                             })
                         } else {
-                            d.run(&action)
+                            hotkey::run_action(&*d, &action, &|l| log.line(l))
                         }
                     })
                     .unwrap_or_else(|| Err("The action crashed".into()))
@@ -1582,8 +1582,11 @@ impl Au05 {
             "state": s.state,
             "message": s.message,
             // Charging is not known yet (the flag bits are not mapped): null until verified on the real key.
+            // Bit 0x08 of the flags: probably charging (real key 2026-11-17: 0x08 at 30 % while most likely
+            // charging, 0x00 full and unplugged). Not confirmed yet: the page says "probably".
             "battery": k.battery.map(|(mv, pct)| json!({"millivolts": mv, "percent": pct, "flags": k.battery_flags,
-                "at": k.battery_at, "charging": Value::Null, "full": pct >= 100})),
+                "at": k.battery_at, "charging": k.battery_flags.map(|f| f & 0x08 != 0), "chargingConfirmed": false,
+                "full": pct >= 100})),
             "standbyS": k.standby_s,
             "sleepS": k.sleep_s,
             "sleepChoices": SleepTime::CHOICES,
@@ -2751,14 +2754,15 @@ mod tests {
         let ev = s["events"].as_array().unwrap().iter().find(|e| e["action"].is_string()).unwrap().clone();
         assert_eq!(ev["control"], "K3");
         assert_eq!(ev["action"], "ran Claude: Start dictation");
-        assert_eq!(*desk.ran.lock_or_recover(), vec!["focus claude.exe, press Ctrl + D".to_string()]);
+        // Claude's message box gets the focus first, then Ctrl + D (never the terminal panel).
+        assert_eq!(*desk.ran.lock_or_recover(), vec!["focus claude.exe", "message box claude.exe", "press Ctrl + D"]);
         // K2 now types F21 too: its action runs.
         au.test_control(&json!({"op":"click","control":"k2"})).unwrap();
         let end = Instant::now() + Duration::from_secs(3);
-        while desk.ran.lock_or_recover().len() < 2 && Instant::now() < end {
+        while desk.ran.lock_or_recover().len() < 4 && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(desk.ran.lock_or_recover()[1], "press Enter");
+        assert_eq!(desk.ran.lock_or_recover()[3], "press Enter");
         // Choosing "nothing" releases the key; disabling releases all.
         au.configure(&json!({"enabled": true, "actions": {"k2": {"kind":"enter"}}}));
         assert_eq!(desk.claimed(), vec![hotkey::VK_F21]);
