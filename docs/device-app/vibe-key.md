@@ -457,6 +457,32 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Long lists flow; the Recent list grouped, 1.2.0 (user feedback 2026-11-19)
+
+User: the twist is "the right one ... just a little too much"; for long lists "instead of using a dashed line,
+but maintaining the overall shape structure ... the tail of the line fades ... tuck a little bit of the content
+underneath the biggest block on top", "I want the block to flow out ... along the perimeter of the circle ... the
+entire thing starts moving around anti-clockwise", and "the back button would actually go into some sort of
+fading". For the Recent list: "always be grouped by their folder structure", a touched project moves up "and its
+entire recent sessions"; bigger, "it feels really cramped"; no Close row ("we have ... a physical close button";
+the dial keeps it).
+
+- **Dial, lists over 8 rows** (`longRingSvg`, `longLabelsSvg`, `flow` in `quick-menu.js`): a row's place is a slot
+  fraction `s = row - offset`; 1..7 visible, below 1 tucked under the top block's clockwise side, above 7 under
+  its other side (opacity falls to 0 there). The top block is drawn last. Tail fade: the slot-7 block (not when
+  highlighted) gets an inline gradient fill toward the top block when more follow; the top block (not when
+  highlighted) fades toward its clockwise side when rows are before the window. Peeks: the next/previous row as a
+  7 px rim outside the top block's edge on that side, half transparent. A window move animates `s` for every row
+  (260 ms; rows passing through are drawn as `m.transit`), labels follow along the circle and fade. Short lists
+  (8 rows or fewer) are drawn as before. The twist is 4° over 260 ms and does not run with a flow.
+- **Recent list** (`claude_tree::recent_list`): sorted by each project's newest session, then the project name,
+  then newest first; each row has `project`, its detail is the age (and worktree). The window draws a sticky
+  heading per project (count; the highlighted row's project in the accent), names at body + 3 px on up to two
+  lines, the highlight with an outline and a side marker, "n / total" in the header; the highlight is kept near
+  the middle. Window 500 x 660 logical.
+- **No Close row in list menus** (`MenuState::no_close`, set from the menu's style; view `noClose`): opens on the
+  first entry, Prev at the first entry bumps, row 0 cannot be picked; K3 (Close) and Esc close.
+
 ### The old dial again, with motion, 1.1.1 (user feedback 2026-11-18)
 
 User: "I like the design of the old dial, especially to rotate to right hand side"; asked to choose, they picked

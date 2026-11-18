@@ -372,8 +372,11 @@ struct Cx<'a> {
     now_ms: u64,
 }
 
-/// Every open Claude session as one flat list, the one the user last spoke to first (1.0, the "Recent
-/// sessions" list menu). Each row names its project (as the menu groups them) in its detail.
+/// Every open Claude session as one list for the "Recent sessions" menu, grouped by project (1.2.0, user request
+/// 2026-11-19: "always be grouped by their folder structure"; touching one session moves "that project and its
+/// entire recent sessions up"): the project with the session spoken to last comes first, and inside each project
+/// the sessions newest first. Each row carries its `project` (the window draws a heading per project); its detail
+/// is the age (and worktree).
 pub fn recent_list(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[String], now_ms: u64, recent: &Recent) -> Vec<Value> {
     let r = Recent { fold_ms: None, ..recent.clone() };
     let t = tree_with(sessions, groups, working, &json!("none"), now_ms, &r);
@@ -384,7 +387,7 @@ pub fn recent_list(sessions: &[DesktopSession], groups: Option<&Groups>, working
                 let mut x = e.clone();
                 let rest = e["detail"].as_str().unwrap_or("");
                 x["project"] = json!(project);
-                x["detail"] = json!(if project.is_empty() { rest.to_string() } else { format!("{project} · {rest}") });
+                x["detail"] = json!(rest);
                 rows.push(x);
             }
         }
@@ -410,7 +413,18 @@ pub fn recent_list(sessions: &[DesktopSession], groups: Option<&Groups>, working
             walk(p, p["label"].as_str().unwrap_or(""), &mut rows);
         }
     }
-    rows.sort_by_key(|e| std::cmp::Reverse(e["at"].as_u64().unwrap_or(0)));
+    // Each project's newest session decides the project's place.
+    let mut newest: HashMap<String, u64> = HashMap::new();
+    for r in &rows {
+        let p = r["project"].as_str().unwrap_or("").to_string();
+        let at = r["at"].as_u64().unwrap_or(0);
+        let e = newest.entry(p).or_insert(0);
+        *e = (*e).max(at);
+    }
+    rows.sort_by(|a, b| {
+        let (pa, pb) = (a["project"].as_str().unwrap_or(""), b["project"].as_str().unwrap_or(""));
+        newest[pb].cmp(&newest[pa]).then_with(|| pa.cmp(pb)).then_with(|| b["at"].as_u64().cmp(&a["at"].as_u64()))
+    });
     rows
 }
 
@@ -721,5 +735,36 @@ mod tests {
         let t = tree_with(&all, None, &[], &json!("none"), now, &Recent { fold_ms: None, ..recent.clone() });
         assert_eq!(t[1]["entries"].as_array().unwrap().len(), 5);
         assert_eq!(t[0]["label"], "B");
+    }
+
+    /// 1.2.0: the Recent sessions list is grouped by project; speaking to any one session of a project moves the
+    /// whole project (all its recent sessions) to the top; inside a project the newest first; sub-sessions are
+    /// listed too; the detail is the age, the project is its own field.
+    #[test]
+    fn the_recent_list_groups_by_project_and_the_project_used_last_comes_first() {
+        const H: u64 = 3600 * 1000;
+        let now = 100 * H;
+        let all = vec![
+            session(1, None, "UnifiedControl", now - 5 * H),
+            session(2, None, "UnifiedControl", now - 6 * H),
+            session(3, Some(2), "UnifiedControl", now - 7 * H),
+            session(4, None, "GazeBrowser", now - H),
+            session(5, None, "GazeBrowser", now - 9 * H),
+            session(6, None, "vault", now - 2 * H),
+        ];
+        let order = |r: &Recent| -> Vec<(String, String)> {
+            recent_list(&all, None, &[], now, r).iter().map(|e| (e["project"].as_str().unwrap().to_string(), e["label"].as_str().unwrap().to_string())).collect()
+        };
+        let plain = Recent::default();
+        let o = order(&plain);
+        let s = |p: &str, l: &str| (p.to_string(), l.to_string());
+        assert_eq!(o, [s("GazeBrowser", "S4"), s("GazeBrowser", "S5"), s("vault", "S6"), s("UnifiedControl", "S1"), s("UnifiedControl", "S2"), s("UnifiedControl", "S3")]);
+        // Speaking to the old sub-session S3 brings the whole project up, S3 first within it.
+        let spoke = Recent { spoke: HashMap::from([(id(3), now - 60_000)]), fold_ms: None };
+        let o = order(&spoke);
+        assert_eq!(o[..3], [s("UnifiedControl", "S3"), s("UnifiedControl", "S1"), s("UnifiedControl", "S2")]);
+        assert_eq!(o[3], s("GazeBrowser", "S4"));
+        let row = &recent_list(&all, None, &[], now, &plain)[0];
+        assert!(!row["detail"].as_str().unwrap().contains("GazeBrowser"), "the project is a heading, not in the detail: {row}");
     }
 }

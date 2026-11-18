@@ -399,6 +399,9 @@ pub struct MenuState {
     pub note: Option<String>,
     /// "Reopen where I left off" (setting `reopenWhereLeft`, default on).
     pub remember: bool,
+    /// No Close row (1.2.0, the list style: "we don't need that close button on the very top", K3 closes): row 0
+    /// is never highlighted or chosen; turning back past the first entry stops there.
+    pub no_close: bool,
     /// Whose menu this is (the profile): the memory is per profile menu.
     pub scope: String,
     /// The last spot per profile menu, in memory only (not kept over an app restart).
@@ -456,6 +459,12 @@ impl MenuState {
     /// sub-menu), the nearest surviving level with that row (clamped); the highlighted entry by its id, else
     /// its row (clamped). Nothing remembered: the first entry at the top.
     fn restore(&mut self, menu: &Value) {
+        self.restore_inner(menu);
+        if self.no_close && self.path.is_empty() {
+            self.highlight = self.highlight.max(1);
+        }
+    }
+    fn restore_inner(&mut self, menu: &Value) {
         self.path.clear();
         self.highlight = usize::from(menu.as_array().is_some_and(|a| !a.is_empty()));
         let Some(spot) = self.memory.get(&self.scope).cloned().filter(|_| self.remember) else { return };
@@ -540,6 +549,12 @@ impl MenuState {
                 self.note = None;
                 Outcome::Moved
             }
+            Input::Prev if self.no_close && self.path.is_empty() && self.highlight <= 1 => {
+                self.bump = (-1, self.bump.1 + 1);
+                self.note = None;
+                Outcome::Moved
+            }
+            Input::Pick(0) if self.no_close && self.path.is_empty() => Outcome::Nothing,
             Input::Prev => {
                 if self.highlight == 0 {
                     self.bump = (-1, self.bump.1 + 1);
@@ -682,6 +697,7 @@ impl MenuState {
             "bump": {"dir": self.bump.0, "n": self.bump.1},
             "levels": levels,
             "highlight": self.highlight,
+            "noClose": self.no_close && self.path.is_empty(),
             "profile": profile_name,
             "target": target_name(target),
             "note": self.note,
@@ -987,5 +1003,30 @@ mod tests {
         assert!(!m.open, "the menu closes");
         let v = { let mut m = MenuState::default(); m.step(&menu, Input::Toggle, t0); m.step(&menu, Input::Choose, t0); m.view(&json!({}), &menu) };
         assert_eq!(v["rows"][1]["working"], true, "the window gets the working dot");
+    }
+
+    /// 1.2.0: a list menu has no Close row: it opens on the first entry, turning back past it stops there (a
+    /// bump), row 0 cannot be picked; K3 (Close) still closes.
+    #[test]
+    fn a_list_menu_has_no_close_row() {
+        let menu = json!([
+            {"type": "action", "label": "A", "action": {"kind": "playPause", "value": "", "app": ""}},
+            {"type": "action", "label": "B", "action": {"kind": "nextTrack", "value": "", "app": ""}},
+        ]);
+        let mut st = MenuState { no_close: true, remember: true, ..Default::default() };
+        let t = Instant::now();
+        assert_eq!(st.step(&menu, Input::Toggle, t), Outcome::Opened);
+        assert_eq!(st.highlight, 1);
+        assert_eq!(st.step(&menu, Input::Prev, t), Outcome::Moved);
+        assert_eq!(st.highlight, 1, "stays on the first entry");
+        assert_eq!(st.step(&menu, Input::Pick(0), t), Outcome::Nothing);
+        assert!(st.open);
+        assert_eq!(st.view(&json!({}), &menu)["noClose"], true);
+        assert_eq!(st.step(&menu, Input::Next, t), Outcome::Moved);
+        assert_eq!(st.highlight, 2);
+        assert_eq!(st.step(&menu, Input::Close, t), Outcome::Closed);
+        // Reopened where it was left, never on row 0.
+        st.step(&menu, Input::Toggle, t);
+        assert_eq!(st.highlight, 2);
     }
 }

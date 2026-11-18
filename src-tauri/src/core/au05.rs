@@ -1095,6 +1095,7 @@ impl MenuCtl {
                 // The memory is per profile menu (and per menu, 1.0).
                 st.scope = self.scope_of(&settings);
             }
+            st.no_close = self.face_of(&settings)["style"] == "list";
             let o = st.step(&shown, input, Instant::now());
             (o, was, self.with_face(&settings, st.view(&settings, &shown)))
         };
@@ -1153,6 +1154,7 @@ impl MenuCtl {
         *self.frozen.lock_or_recover() = Some(shown.clone());
         let view = {
             let mut st = self.state.lock_or_recover();
+            st.no_close = self.face_of(settings)["style"] == "list";
             st.switch(&before, &shown, self.scope_of(settings), Instant::now());
             self.with_face(settings, st.view(settings, &shown))
         };

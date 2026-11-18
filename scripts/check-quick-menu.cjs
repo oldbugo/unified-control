@@ -129,7 +129,9 @@ const views={
   };
   // The taper on the drawn ring: Close/Back furthest out, each next one a smidge smaller, the last a notch.
   const checkTaper=async name=>{
-    const o=await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] .qm-seg:not([data-hl="true"])')].map(p=>Number(p.dataset.outer)));
+    // In slot order (1.2.0: a long ring draws its top block last), visible segments only, peeks left out.
+    const o=await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] .qm-slot:not([data-hl="true"]):not([display="none"])')]
+      .sort((a,b)=>Number(a.dataset.s??0)-Number(b.dataset.s??0)).map(g=>Number(g.querySelector('.qm-seg').dataset.outer)));
     assert.ok(o.length>1,name);
     assert.equal(Math.max(...o),o[0],`${name}: Close/Back is the biggest (${o})`);
     assert.equal(Math.min(...o),o.at(-1),`${name}: the last is the smallest (${o})`);
@@ -246,22 +248,49 @@ const views={
   assert.equal(await page.locator('.qm-ring').count(),3);
   assert.equal(await ring(0).getAttribute('transform'),'rotate(-90.00)','in place at once');
 
-  // 31 entries: 8 segments, a moving window, "more" fades, no stop (not at the end), the position.
+  // 31 entries: 8 segments, a moving window, no dashed edges (1.2.0): the tail fades, the top block fades toward
+  // its other side, and the next and previous entries peek out from under the top block.
   await show('many',{fresh:true});
-  assert.equal(await ring(1).locator('.qm-seg').count(),8);
-  assert.equal(await ring(1).locator('.qm-seg[data-row="0"]').count(),1,'Back stays');
+  const visible=()=>ring(1).locator('.qm-slot:not([display="none"])');
+  assert.equal(await visible().count(),8);
+  assert.equal(await ring(1).locator('.qm-slot[data-row="0"]').count(),1,'Back stays');
   assert.equal(await ring(1).locator('.qm-slot[data-row="20"]').getAttribute('data-hl'),'true');
+  assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.qm-ring[data-active="true"] > g')].at(-1).dataset.row),'0','the top block is drawn last: the others slide under it');
   await checkTaper('many');
   assert.match(await page.locator('.qm-pos').textContent(),/^20 \/ 31$/);
-  // Back a few: the window stays; "more" fades at both edges.
+  assert.equal(await page.locator('.qm-more').count(),0,'no dashed edges');
+  assert.equal(await page.locator('.qm-tail').count(),0,'the highlighted tail does not fade');
+  assert.equal(await page.locator('.qm-topfade').count(),1,'the top block fades toward the entries before');
+  assert.deepEqual(await page.locator('.qm-peek').evaluateAll(e=>e.map(x=>x.dataset.side).sort()),['after','before'],'peeks both ways');
+  // Back a few: the window stays.
   await show('many',{extra:{highlight:16}});
   assert.equal(await ring(1).locator('.qm-slot[data-row="20"]').count(),1,'the window did not move');
-  assert.equal(await page.locator('.qm-seg.qm-more').count(),2,'"more" both ways');
+  assert.equal(await page.locator('.qm-tail').count(),1,'the tail fades along the line');
   await checkFit('many');
   await shoot('31',2);
+  // Past the tail: the window moves one row and every block flows anticlockwise along the circle; the row that
+  // leaves tucks under the top block (and is hidden afterwards), the new one comes out from under it.
+  const flows=()=>page.evaluate(()=>Number(document.getElementById('qm-dial').dataset.flows||0));
+  await show('many',{extra:{highlight:20}});
+  await page.waitForTimeout(400);
+  const f0=await flows(),d0=await ring(1).locator('.qm-slot[data-row="18"] path').getAttribute('d');
+  await show('many',{extra:{highlight:21}});
+  await page.waitForTimeout(110);
+  assert.equal(await flows(),f0+1,'one flow');
+  const dMid=await ring(1).locator('.qm-slot[data-row="18"] path').getAttribute('d');
+  assert.notEqual(dMid,d0,'mid-way the block is moving');
+  await page.waitForTimeout(400);
+  const dEnd=await ring(1).locator('.qm-slot[data-row="18"] path').getAttribute('d');
+  assert.ok(dEnd!==dMid&&dEnd!==d0,'settled one slot anticlockwise');
+  assert.equal(await ring(1).locator('.qm-slot[data-row="14"]').getAttribute('display'),'none','the row that left is tucked away');
+  assert.equal(await visible().count(),8,'eight blocks again');
+  await checkFit('many-flowed');
   await show('many',{extra:{highlight:31}});
+  await page.waitForTimeout(400);
   assert.equal(await ring(1).locator('.qm-slot[data-row="31"]').getAttribute('data-hl'),'true','the window follows to the last entry');
-  assert.equal(await page.locator('.qm-seg.qm-more').count(),1,'"more" only before');
+  assert.equal(await page.locator('.qm-tail').count(),0,'no tail fade at the end');
+  assert.deepEqual(await page.locator('.qm-peek').evaluateAll(e=>e.map(x=>x.dataset.side)),['before'],'only the peek before');
+  await shoot('31-end',2);
 
   // 3 entries (and Back): four quarter segments with the taper.
   await show('three',{fresh:true});
@@ -311,19 +340,33 @@ const views={
   assert.match(await ring(0).getAttribute('transform'),/rotate\(-90\.00\)/,'and settled where it was before');
   assert.equal(await twists(),t0+2,'no twist on a level change');
 
-  // The list style (K2's second menu): every row, the highlight in view, Close first, no dial.
-  const recent=[{label:'Close',type:'close'},...many.slice(1).map(r=>({...r,detail:`${r.detail} · 5 min`}))];
-  await page.setViewportSize({width:440,height:560});
-  await page.evaluate(v=>import('/js/quick-menu.js').then(m=>m.render(v)),{...base,style:'list',title:['Recent sessions'],faces:['Quick menu','Recent sessions'],faceIndex:1,face:'Recent sessions',rows:recent,highlight:25,depth:0,levels:[],closeAfterMs:8000,leftMs:8000});
-  await page.waitForTimeout(100);
-  assert.equal(await page.locator('.qm-row').count(),recent.length,'one row each');
+  // The list style (K2's second menu, 1.2.0): grouped by project with a heading each, no Close row, the
+  // highlight near the middle, larger rows, the position in the header.
+  const names={UnifiedControl:['Quick menu navigation and VibeKey audio','Vibe Key AU05 connection setup','Unified Control: Input tester page','Cooler freeze at UC update hand-over','Add Ulanzi AU05 Vibe Key support'],
+    GazeBrowser:['GazeBrowser performance log review','Dashboard layout pass','Gaze calibration retry'],vault:['Vault sync check','Runs summary tidy'],CoolerScreen:['Cooler screen freeze logging','Theme hand-over','Embedded clip store','Settle after stop','Skip stored setting','Connection backend']};
+  const recent=[{label:'Close',type:'close'}];
+  for(const [project,list] of Object.entries(names))list.forEach((label,i)=>recent.push({label,type:'claudeSession',project,detail:`${(i+1)*7} min`,working:project==='UnifiedControl'&&i===0}));
+  await page.setViewportSize({width:500,height:660});
+  const list=hl=>page.evaluate(v=>import('/js/quick-menu.js').then(m=>m.render(v)),{...base,style:'list',noClose:true,title:['Recent sessions'],faces:['Quick menu','Recent sessions'],faceIndex:1,face:'Recent sessions',rows:recent,highlight:hl,depth:0,levels:[],closeAfterMs:8000,leftMs:8000});
+  await list(1);
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('.qm-row').count(),recent.length-1,'no Close row');
+  assert.equal(await page.locator('.qm-row[data-kind="nav"]').count(),0);
+  assert.deepEqual(await page.locator('.qm-group-name').allTextContents(),['UnifiedControl','GazeBrowser','vault','CoolerScreen'],'one heading per project, in order');
+  assert.equal(await page.locator('.qm-group[data-current="true"] .qm-group-name').textContent(),'UnifiedControl','the highlighted row\'s project stands out');
   assert.equal(await page.locator('.qm-wheel').isVisible(),false,'no dial in the list style');
-  const inView=await page.evaluate(()=>{const l=document.getElementById('qm-list'),r=l.querySelector('[data-hl]').getBoundingClientRect(),b=l.getBoundingClientRect();return r.top>=b.top-1&&r.bottom<=b.bottom+1;});
-  assert.ok(inView,'the highlighted row is scrolled into view');
-  assert.match(await page.locator('#qm-list-title').textContent(),/^2\/2 Recent sessions$/,'the menu named once');
+  const nameSize=await page.locator('.qm-row[data-hl="true"] .qm-row-name').evaluate(e=>parseFloat(getComputedStyle(e).fontSize));
+  assert.ok(nameSize>=16,`larger names (${nameSize}px)`);
+  assert.match(await page.locator('#qm-list-title').textContent(),/^2\/2 Recent sessions1 \/ 16$/,'the menu named once, the position');
+  await page.screenshot({path:path.join(shots,'quick-menu-list-top.png')});
+  await list(12);
+  await page.waitForTimeout(500);
+  const middle=await page.evaluate(()=>{const l=document.getElementById('qm-list'),r=l.querySelector('[data-hl]').getBoundingClientRect(),b=l.getBoundingClientRect();return {inView:r.top>=b.top-1&&r.bottom<=b.bottom+1,off:Math.abs((r.top+r.bottom)/2-(b.top+b.bottom)/2)/b.height};});
+  assert.ok(middle.inView&&middle.off<0.3,`the highlight near the middle: ${JSON.stringify(middle)}`);
+  assert.equal(await page.locator('.qm-group[data-current="true"] .qm-group-name').textContent(),'CoolerScreen');
   await page.evaluate(()=>{window.__inputs=[];});
-  await page.locator('.qm-row[data-row="24"]').click();
-  assert.deepEqual(await page.evaluate(()=>window.__inputs),[{op:'pick',index:24}]);
+  await page.locator('.qm-row[data-row="13"]').click();
+  assert.deepEqual(await page.evaluate(()=>window.__inputs),[{op:'pick',index:13}]);
   await page.screenshot({path:path.join(shots,'quick-menu-list.png')});
   // Back to the dial menu (K2): the dial again, drawn fresh, the menu named in the caption.
   await page.setViewportSize({width:682,height:778});

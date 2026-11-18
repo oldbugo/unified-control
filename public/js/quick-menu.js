@@ -11,8 +11,8 @@
 // last a notch smaller: the step back up to row 0 is where the list starts and ends. Labels are always upright.
 // Going into a level turns the chosen segment to the top of its (now dimmed) ring and the new level appears as a
 // larger ring around it; at most 3 rings show. The filled hole in the middle is the drag handle.
-import {PUSH,ringRadii,dialDiameter,fitScale,slotAngles,windowOffset,slotRows,edges,segmentPath,
-  point,tangent,fitLabel,taper,shade,spiralAt,spiralPath,gapAngle} from './quick-menu-dial.js';
+import {PUSH,MAX_SLOTS,ringRadii,dialDiameter,fitScale,slotAngles,windowOffset,slotRows,edges,segmentPath,
+  point,tangent,fitLabel,taper,shade,spiralAt,spiralPath,gapAngle,centroid} from './quick-menu-dial.js';
 
 const T=window.__TAURI_INTERNALS__;
 const send=(op,index)=>T?T.invoke('au05_menu',{input:index===undefined?{op}:{op,index}}).then(render).catch(()=>{}):Promise.resolve();
@@ -22,7 +22,13 @@ const SEP='␟', ANIM_MS=320, BUMP_MS=120, GAP=1.2;
 /** 1.1.1 (user feedback 2026-11-18: the old dial's design, turning to the right, with the whole circle moving):
  * each move twists the whole ring this far in the turn's direction (clockwise for the next entry) and it settles
  * back; a level change adds a spin of SPIN degrees to the grow or shrink. */
-const TWIST=9, TWIST_MS=280, SPIN=70;
+const TWIST=4, TWIST_MS=260, SPIN=70;
+/** 1.2.0 (user request 2026-11-19): a list longer than the ring flows. Instead of dashed "more" edges, the tail
+ * fades along the line and the next entry peeks out from under the top block (Close/Back); with entries before the
+ * window the top block fades toward its other side and the previous entry peeks out there. When the window moves,
+ * every block slides along the circle (anticlockwise going toward the tail), the one leaving tucks under the top
+ * block and the new one comes out from under it. */
+const FLOW_MS=260, RIM=7, STEP_DEG=360/MAX_SLOTS;
 const GLYPH={close:'✕',back:'‹'};
 
 // Text widths for fitting the labels (the label font, semibold so the highlight fits too).
@@ -89,6 +95,7 @@ function seg(m,i){
 
 /** The ring (segments only; it turns as a whole when it becomes a parent). */
 function ringSvg(m){
+  if(m.active&&m.count>MAX_SLOTS)return longRingSvg(m);
   const parts=m.shown.map((row,i)=>{
     const g=seg(m,i),r=m.rows[row]||{};
     const hl=row===m.sel;
@@ -109,8 +116,103 @@ function ringSvg(m){
   return `<g class="qm-ring" data-level="${m.level}" data-active="${m.active}" transform="rotate(${m.rot.toFixed(2)})">${parts}</g>`;
 }
 
+// ---- The flowing ring (1.2.0): long lists only. A row's place is a fraction `s` of a slot (row - window offset):
+// 1..7 are the visible slots, below 1 it is tucked under the top block's clockwise side, above 7 under its other
+// side. ----
+const flowOpacity=s=>s<1?Math.max(0,Math.min(1,s)):s>MAX_SLOTS-1?Math.max(0,MAX_SLOTS-s):1;
+function flowGeom(m,s,row){
+  const mid=s*STEP_DEG,a0=mid-STEP_DEG/2,a1=mid+STEP_DEG/2;
+  const grow=row===m.sel?PUSH:0;
+  const outer=x=>m.r1+spiralAt(MAX_SLOTS,x)+grow;
+  return {d:spiralPath(m.r0,outer,a0,a1),mark:outer(mid),a0,a1,mid,outer};
+}
+/** The box a label fits in at place s (as `seg`). */
+function flowBox(m,s,row){
+  const g=flowGeom(m,s,row),gap=Math.max(GAP,gapAngle(m.r0));
+  return {r0:m.r0,r1:Math.min(g.outer(g.a0),g.outer(g.a1)),a0:g.a0+gap,a1:g.a1-gap};
+}
+const clampSlot=s=>Math.min(Math.max(s,1),MAX_SLOTS-1);
+/** The rows a long ring draws: the window, plus rows passing through during a move (`m.transit`). */
+const flowRows=m=>[...new Set([...m.shown.slice(1),...(m.transit||[])])];
+const fadeGrad=(id,g,from,to,o0,o1)=>{
+  const rm=(g.r0+g.r1)/2,[x0,y0]=point(rm,from),[x1,y1]=point(rm,to);
+  return `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}"><stop offset="0" class="qm-fade0" style="stop-opacity:${o0}"/><stop offset="1" class="qm-fade1" style="stop-opacity:${o1}"/></linearGradient>`;
+};
+
+function longRingSvg(m){
+  const parts=[];
+  const gapA=Math.max(GAP,gapAngle(m.r0))+1;
+  // The peeks: the next (or previous) entry as a thin rim standing out from under the top block.
+  const peek=(row,a0,a1,side)=>`<g class="qm-peek" data-side="${side}" data-row="${row}"><path class="qm-seg qm-peek-seg" data-row="${row}" d="${spiralPath(m.r1-6,x=>m.r1+spiralAt(MAX_SLOTS,x)+RIM,a0,a1)}"><title>${esc(m.rows[row]?.label)}</title></path></g>`;
+  if(m.edges.moreAfter)parts.push(peek(m.offset+MAX_SLOTS,-STEP_DEG/2+gapA,-2,'after'));
+  if(m.edges.moreBefore)parts.push(peek(m.offset,2,STEP_DEG/2-gapA,'before'));
+  for(const row of flowRows(m)){
+    const s=row-m.offset,g=flowGeom(m,s,row),r=m.rows[row]||{},hl=row===m.sel,op=flowOpacity(s);
+    // The tail fades along the line toward the top block when more entries follow.
+    const tail=!hl&&m.edges.moreAfter&&s===MAX_SLOTS-1;
+    const grad=tail?fadeGrad(`qm-t${m.level}`,{r0:m.r0,r1:m.r1},g.a0+4,g.a1,1,0.2):'';
+    const sh=shade(MAX_SLOTS,clampSlot(s));
+    parts.push(`<g class="qm-slot" data-row="${row}" data-s="${s}"${hl?' data-hl="true"':''} opacity="${op.toFixed(3)}"${op<=0?' display="none"':''}>${grad}<path class="qm-seg${tail?' qm-tail':''}" data-kind="${kind(r)}" data-row="${row}" data-outer="${g.mark.toFixed(2)}"${hl?' data-hl="true"':''}${r.current?' data-current="true"':''}${tail?` data-fill="url(#qm-t${m.level})"`:''} style="--shade:${sh.toFixed(3)}${tail?`;fill:url(#qm-t${m.level})`:''}" d="${g.d}"><title>${esc(r.label)}</title></path></g>`);
+  }
+  // The top block last, so the others slide under it; it fades toward its clockwise side when entries are before.
+  const r0=m.rows[0]||{},hl0=m.sel===0,g0=flowGeom(m,0,0);
+  const faded=!hl0&&m.edges.moreBefore;
+  const grad0=faded?fadeGrad(`qm-b${m.level}`,{r0:m.r0,r1:m.r1},g0.a0+10,g0.a1,1,0.3):'';
+  parts.push(`<g class="qm-slot" data-row="0" data-s="0"${hl0?' data-hl="true"':''}>${grad0}<path class="qm-seg${faded?' qm-topfade':''}" data-kind="${kind(r0)}" data-row="0" data-outer="${g0.mark.toFixed(2)}"${hl0?' data-hl="true"':''}style="--shade:0${faded?`;fill:url(#qm-b${m.level})`:''}" d="${g0.d}"><title>${esc(r0.label)}</title></path></g>`);
+  return `<g class="qm-ring" data-level="${m.level}" data-active="true" data-flow="true" transform="rotate(0.00)">${parts.join('')}</g>`;
+}
+
+function longLabelsSvg(m){
+  const siblings=m.rows.filter(r=>r.type!=='close'&&r.type!=='back').map(r=>r.label);
+  return [0,...flowRows(m)].map(row=>{
+    const s=row===0?0:row-m.offset,sc=row===0?0:clampSlot(s),r=m.rows[row]||{},hl=row===m.sel;
+    const box=flowBox(m,sc,row),clip=`qm-c${++ids}`,glyph=GLYPH[r.type];
+    const fit=fitLabel(r.label,{siblings:glyph?[]:siblings,box,measure,prefix:glyph||(r.working?'●':''),suffix:r.type==='submenu'?'›':''});
+    const [cx,cy]=centroid(box),[px,py]=centroid(flowBox(m,s,row));
+    const op=row===0?1:flowOpacity(s);
+    const attrs=` data-kind="${kind(r)}" data-row="${row}"${hl?' data-hl="true"':''}${fit.short?' data-short="true"':''} data-box="${[box.r0,box.r1,box.a0,box.a1].map(n=>n.toFixed(2)).join(',')}"`;
+    return `<g class="qm-lab" data-row="${row}" data-sc="${sc}"${hl?' data-hl="true"':''} opacity="${op.toFixed(3)}"${op<=0?' display="none"':''} transform="translate(${(px-cx).toFixed(2)} ${(py-cy).toFixed(2)})"><clipPath id="${clip}"><path d="${flowGeom(m,sc,row).d}"/></clipPath>${labelSvg(markup(fit,r),'qm-label',attrs,clip)}</g>`;
+  }).join('');
+}
+
+/** The window moved: every row slides from its old place to its new one along the circle. */
+let flowFrame=0;
+function flow(m,from){
+  cancelAnimationFrame(flowFrame);
+  const svg=$('qm-dial'),ring=svg.querySelector('.qm-ring[data-flow="true"]');
+  if(!ring)return;
+  svg.dataset.flows=String(Number(svg.dataset.flows||0)+1);
+  const slots=[...ring.querySelectorAll('.qm-slot')].filter(g=>g.dataset.row!=='0');
+  const labs=[...svg.querySelectorAll('.qm-labels .qm-lab')].filter(g=>g.dataset.row!=='0');
+  const peeks=[...ring.querySelectorAll('.qm-peek')];
+  const fills=[...ring.querySelectorAll('[data-fill]')];
+  for(const f of fills)f.style.fill='';
+  const t0=performance.now(),ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+  const tick=now=>{
+    const t=Math.min((now-t0)/FLOW_MS,1),p=from+(m.offset-from)*ease(t);
+    for(const g of slots){
+      const row=Number(g.dataset.row),s=row-p,op=flowOpacity(s);
+      g.querySelector('path').setAttribute('d',flowGeom(m,s,row).d);
+      g.setAttribute('opacity',op.toFixed(3));
+      if(op<=0)g.setAttribute('display','none');else g.removeAttribute('display');
+    }
+    for(const l of labs){
+      const row=Number(l.dataset.row),s=row-p,sc=Number(l.dataset.sc),op=flowOpacity(s);
+      const [cx,cy]=centroid(flowBox(m,sc,row)),[px,py]=centroid(flowBox(m,s,row));
+      l.setAttribute('transform',`translate(${(px-cx).toFixed(2)} ${(py-cy).toFixed(2)})`);
+      l.setAttribute('opacity',(op*op).toFixed(3));
+      if(op<=0)l.setAttribute('display','none');else l.removeAttribute('display');
+    }
+    for(const k of peeks)k.setAttribute('opacity',t.toFixed(3));
+    if(t<1)flowFrame=requestAnimationFrame(tick);
+    else for(const f of fills)f.style.fill=f.dataset.fill;
+  };
+  flowFrame=requestAnimationFrame(tick);
+}
+
 /** The current ring's labels: upright, never turned (they sit outside the turning ring group). */
 function labelsSvg(m){
+  if(m.count>MAX_SLOTS)return longLabelsSvg(m);
   const siblings=m.rows.filter(r=>r.type!=='close'&&r.type!=='back').map(r=>r.label);
   return m.shown.map((row,i)=>{
     const g=seg(m,i),r=m.rows[row]||{};
@@ -206,23 +308,44 @@ function bump(dir){
   requestAnimationFrame(tick);
 }
 
+/** The list style (1.1.0; 1.2.0, user request 2026-11-19: grouped by project, no Close row, bigger and easier to
+ * follow). Rows that carry a `project` get a heading per project; the highlighted row stays near the middle. */
 function renderList(v){
   const rows=Array.isArray(v.rows)?v.rows:[];
   const sel=Math.max(0,Math.min(v.highlight|0,rows.length-1));
   const list=$('qm-list');
-  list.innerHTML=rows.map((r,i)=>{
+  const first=v.noClose?1:0;
+  let html='',group=null;
+  const count=rows.length-first;
+  for(let i=first;i<rows.length;i++){
+    const r=rows[i];
+    const project=typeof r.project==='string'?r.project:null;
+    if(project!==null&&project!==group){
+      group=project;
+      const n=rows.slice(i).filter(x=>x.project===project).length;
+      const has=sel>=i&&sel<i+n;
+      html+=`<li class="qm-group" role="presentation"${has?' data-current="true"':''}><span class="qm-group-name">${esc(project||'Other')}</span><span class="qm-group-count">${n}</span></li>`;
+    }
     const glyph=GLYPH[r.type];
     const hl=i===sel?' data-hl="true" aria-selected="true"':'';
     const dot=r.working?'<span class="qm-dot" aria-label="working"></span>':'';
-    return `<li class="qm-row" role="option" data-row="${i}" data-kind="${kind(r)}"${hl}>${glyph?`<span class="qm-glyph">${glyph}</span>`:dot}<span class="qm-row-name">${esc(r.label)}</span>${r.detail?`<span class="qm-row-detail">${esc(r.detail)}</span>`:''}${r.type==='submenu'?'<span class="qm-glyph">›</span>':''}</li>`;
-  }).join('');
-  const into=()=>list.querySelector('[data-hl]')?.scrollIntoView({block:'nearest'});
+    html+=`<li class="qm-row${project!==null?' qm-in-group':''}" role="option" data-row="${i}" data-kind="${kind(r)}"${hl}>${glyph?`<span class="qm-glyph">${glyph}</span>`:dot}<span class="qm-row-text"><span class="qm-row-name">${esc(r.label)}</span>${r.detail?`<span class="qm-row-detail">${esc(r.detail)}</span>`:''}</span>${r.type==='submenu'?'<span class="qm-glyph">›</span>':''}</li>`;
+  }
+  list.innerHTML=html;
+  const into=()=>{
+    const el=list.querySelector('[data-hl]');if(!el)return;
+    // Keep the highlight near the middle (with its heading in view when it is the first of its project).
+    const head=el.previousElementSibling?.classList.contains('qm-group')?el.previousElementSibling:null;
+    const top=(head||el).offsetTop, want=top-list.clientHeight/2+el.offsetHeight;
+    list.scrollTop=Math.max(0,Math.min(want,list.scrollHeight-list.clientHeight));
+  };
   into();requestAnimationFrame(into);
   const faces=Array.isArray(v.faces)?v.faces:[];
   const face=faces.length>1?`<span class="qm-face">${(v.faceIndex|0)+1}/${faces.length} ${esc(v.face||'')}</span>`:'';
   const title=Array.isArray(v.title)?v.title:[];
   const crumb=title.length===1&&title[0]===v.face&&face?'':esc(title.join(' › '));
-  $('qm-list-title').innerHTML=`${face}${crumb?`<span class="qm-crumb">${crumb}</span>`:''}${v.note?`<span class="qm-note">${esc(v.note)}</span>`:''}`;
+  const pos=count>1&&sel>=first?`<span class="qm-list-pos">${sel-first+1} / ${count}</span>`:'';
+  $('qm-list-title').innerHTML=`${face}${crumb?`<span class="qm-crumb">${crumb}</span>`:''}${v.note?`<span class="qm-note">${esc(v.note)}</span>`:''}${pos}`;
 }
 
 /** The bar runs down from the time left to the idle close (restarted by every input). */
@@ -260,6 +383,10 @@ export function render(v){
   // Animate only a change of level while open; reopening where it was left draws the rings in place.
   const moved=last.open&&depth!==last.depth;
   const leaving=moved?[...last.rings.values()].filter(p=>!m.some(r=>r.level===p.level)):[];
+  // The window moved on the same level (1.2.0): the rows that pass through are drawn too, and everything flows.
+  const act=m.at(-1),prev=last.open&&!moved?last.rings.get(depth):null;
+  const flowFrom=prev&&act.count>MAX_SLOTS&&prev.count===act.count&&prev.offset!==act.offset?prev.offset:null;
+  if(flowFrom!==null)act.transit=prev.shown.slice(1).filter(r=>!act.shown.includes(r));
   svg.innerHTML=`<g class="qm-rings">${leaving.map(ringSvg).join('')}${m.map(ringSvg).join('')}</g><g class="qm-labels" id="qm-labels">${m.filter(r=>!r.active).map(parentLabel).join('')}${m.filter(r=>r.active).map(labelsSvg).join('')}</g>`;
   const groups=[];
   if(moved){
@@ -281,6 +408,7 @@ export function render(v){
   // A turn past an end since the last render (not on opening).
   if(wasOpen&&n>bumpBefore&&!moved)bump(v.bump.dir>0?1:-1);
   // A move on the same level: the whole dial twists the way it went (right for the next entry).
+  else if(flowFrom!==null)flow(act,flowFrom);
   else if(wasOpen&&!moved&&before!==undefined&&hl!==before)twist(hl>before?1:-1);
 }
 

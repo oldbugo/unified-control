@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-11-19
+
+Long lists on the dial flow now. Instead of dashed edges, the last block
+before the top fades out along the line when more entries follow, and the
+next entry peeks out from under the top block (Close or Back). When there are
+entries before the window, the top block fades toward its other side and the
+previous entry peeks out there. When the window moves, every block slides
+along the circle (anticlockwise as you go toward the end): the one leaving
+tucks under the top block and the new one comes out from under it. The twist
+on each turn is gentler (4° instead of 9°).
+
+The Recent sessions list is grouped by project, with a heading per project.
+The project you spoke to last comes first with all its recent sessions, and
+inside a project the newest session comes first. The list has no Close row any
+more (K3 closes it). It is larger and easier to follow: bigger names on up to
+two lines, the age under each name, a clear highlight with a marker, the
+current project's heading lit, the position (for example "3 / 16") at the top,
+and the highlight kept near the middle as you scroll.
+
 ## 1.1.1 — 2026-11-18
 
 The old dial is back: Close or Back at the top, the entries going clockwise to

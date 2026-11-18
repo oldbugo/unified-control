@@ -29,8 +29,8 @@ pub fn dial_size(rings: usize) -> (f64, f64) {
     let d = 2.0 * (outer + 12.0 + 10.0 + 14.0);
     (f64::max(d, 380.0), d + 96.0)
 }
-/// The list style's window (1.1.0).
-pub const LIST_SIZE: (f64, f64) = (440.0, 560.0);
+/// The list style's window (1.1.0; 1.2.0: larger, user feedback "it feels really cramped").
+pub const LIST_SIZE: (f64, f64) = (500.0, 660.0);
 /// The window's logical size for a view: the list, or the dial with its rings.
 pub fn view_size(view: &Value) -> (f64, f64) {
     if view["style"] == "list" { LIST_SIZE } else { dial_size(rings(view)) }
