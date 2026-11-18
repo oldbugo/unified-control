@@ -41,6 +41,9 @@ pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the
 /// The standby time used before the key's own was read (0.36.0): the last one read (kept in the settings),
 /// else 300 s.
 pub const DEFAULT_STANDBY_S: u32 = 300;
+/// The quick menu's fold times for Claude sessions, in hours (0 = never fold), and the default (1.0).
+pub const SESSION_FOLD_H: [u64; 6] = [0, 1, 4, 8, 24, 72];
+pub const SESSION_FOLD_DEFAULT_H: u64 = 8;
 
 /// The state the page shows (0.36.0, deterministic: the key's own timers run from its last input). Display
 /// only: sending still follows the session's own 11 s gate. `quiet`: since the last input, which is the latest
@@ -345,6 +348,8 @@ pub fn sanitize(v: &Value) -> Value {
         "menuControlsVersion": MENU_CONTROLS_VERSION,
         // "Reopen where I left off" (user request 2026-11-17): the menu opens where it was closed.
         "reopenWhereLeft": v["reopenWhereLeft"].as_bool().unwrap_or(true),
+        // Claude sessions not used for this many hours fold into "More" in the quick menu (1.0; 0 = never).
+        "sessionFoldH": v["sessionFoldH"].as_u64().filter(|h| SESSION_FOLD_H.contains(h)).unwrap_or(SESSION_FOLD_DEFAULT_H),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -597,6 +602,11 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             }
         }
         au["menuControls"] = next;
+    }
+    if let Some(v) = patch.get("sessionFoldH") {
+        let h = v.as_u64().filter(|h| SESSION_FOLD_H.contains(h)).ok_or("Choose one of the offered times")?;
+        au["sessionFoldH"] = json!(h);
+        lines.push(format!("page menu session fold = {h} h"));
     }
     if let Some(v) = patch.get("reopenWhereLeft") {
         let v = v.as_bool().ok_or("Invalid Vibe Key setting")?;
@@ -982,7 +992,8 @@ impl MenuCtl {
                            "project": s["project"], "working": s["state"] == "working", "at": s["last"]})).collect::<Vec<_>>()})
             }
         };
-        menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok())
+        let fold = settings["sessionFoldH"].as_u64().filter(|h| *h > 0).map(|h| h * 3600 * 1000);
+        menu::expand_with(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok(), fold)
     }
 
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
@@ -1287,6 +1298,7 @@ impl MenuCtl {
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
             "reopenWhereLeft": settings["reopenWhereLeft"] != false,
+            "sessionFoldH": settings["sessionFoldH"].as_u64().unwrap_or(SESSION_FOLD_DEFAULT_H),
             "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),

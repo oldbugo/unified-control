@@ -109,6 +109,12 @@ fn age(ms: u64) -> String {
 /// `desktop`: the Claude desktop app's own session list (`claude_tree`), used when it could be read; else the
 /// hook list.
 pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, desktop: Option<&super::claude_tree::Desktop>) -> Value {
+    expand_with(menu, sessions, connected, now_ms, desktop, None)
+}
+
+/// [`expand`] with folding (1.0): sessions not used within `fold_ms` go into a "More" entry per level, and
+/// every level is ordered by when the user last spoke to it (the hooks' `spoke`).
+pub fn expand_with(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, desktop: Option<&super::claude_tree::Desktop>, fold_ms: Option<u64>) -> Value {
     let Some(list) = menu.as_array() else { return json!([]) };
     Value::Array(
         list.iter()
@@ -120,7 +126,14 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, de
                         .filter_map(|s| s["desktopId"].as_str().map(str::to_string))
                         .collect();
                     let d = desktop.expect("checked");
-                    let mut entries = super::claude_tree::tree(&d.sessions, d.groups.as_ref().ok(), &working, &e["then"], now_ms);
+                    let recent = super::claude_tree::Recent {
+                        spoke: sessions
+                            .iter()
+                            .filter_map(|s| Some((s["desktopId"].as_str()?.to_string(), s["spoke"].as_u64()?)))
+                            .collect(),
+                        fold_ms,
+                    };
+                    let mut entries = super::claude_tree::tree_with(&d.sessions, d.groups.as_ref().ok(), &working, &e["then"], now_ms, &recent);
                     if entries.is_empty() {
                         entries.push(json!({"type": "note", "label": "No open Claude sessions"}));
                     }
@@ -137,7 +150,7 @@ pub fn expand(menu: &Value, sessions: &[Value], connected: bool, now_ms: u64, de
                 }
                 Some("submenu") => {
                     let mut x = e.clone();
-                    x["entries"] = expand(&e["entries"], sessions, connected, now_ms, desktop);
+                    x["entries"] = expand_with(&e["entries"], sessions, connected, now_ms, desktop, fold_ms);
                     x
                 }
                 _ => e.clone(),
@@ -316,6 +329,7 @@ pub fn entry_key(e: &Value) -> String {
     let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
     match e["type"].as_str().unwrap_or("") {
         "claudeSession" => format!("s:{}", s("session")),
+        "submenu" if e["more"] == true => "more".into(),
         "submenu" if e["group"].is_string() => format!("g:{}", s("group")),
         "submenu" if e["project"] == true => format!("p:{}", s("label").to_lowercase()),
         "submenu" if e["session"].is_string() => format!("s:{}", s("session")),

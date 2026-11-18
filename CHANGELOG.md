@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0 — 2026-11-18
+
+The quick menu's Claude sessions put what you use first. At every level
+(projects, sessions, sub-sessions) the one you last spoke to comes first, so
+going back and forth between two projects stays one or two turns away. "Spoke
+to" means you sent the session a message (Claude's hook event; with Live working
+status off, Claude's own last-activity time is used). Projects now follow this
+order instead of the Claude sidebar order.
+
+Sessions you have not used for a while fold into a "More (n)" entry at the end
+of their list; open it and they are all there, in the same order. At least
+three stay shown, a working session is never folded, and a single old entry is
+never folded on its own. "Fold sessions after" (In the menu) picks 1 hour, 4
+hours, 8 hours (default), 1 day, 3 days or Never.
+
+Fixed: lists on the Vibe Key page lost your choice when the page refreshed
+while the list was open (the battery and Claude session counts refresh it every
+few seconds). This is why noise reduction levels 0, 2 and 3 never reached the
+key: only one change, to level 1, was ever sent. The page now waits while a list
+is in use.
+
 ## 0.38.0 — 2026-11-17
 
 The quick menu dial is one spiral now, like a nautilus shell. The outer edge

@@ -457,6 +457,34 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Recent first and folding, 1.0.0 (user request 2026-11-18)
+
+User: with sessions in project A and project B, "trying to switch to project B, it's always a pain"; wanted the
+most recent ones "alongside with the rest of the list", not a separate Recent list, and things not used for a
+while to "collapse" into an entry that shows everything when opened. "Just build it first, and let's see how it
+feels."
+
+- **Order** (`claude_tree::tree_with`, `Recent`): every level is newest first by when the user last spoke to it.
+  A session's time is the hooks' `spoke` (set on UserPromptSubmit, kept in `claude-sessions.json`, expires with
+  the hook entry after 24 h idle), else Claude's own `lastActivityAt`/`lastTurnEdgeAt`. A project or a session with
+  sub-sessions counts its newest session below it. Projects (sidebar groups and "Other sessions") follow this
+  order, not the sidebar order.
+- **Folding** (`claude_tree::fold`): at each level, entries used within the fold time, working entries and the
+  first three stay; the rest go, in order, into a last `{"type":"submenu","more":true}` entry "More (n)" with
+  "not used for …". Nothing folds when only one entry would. A session's "Open: …" row is never folded. The
+  menu memory key of a More entry is `more`.
+- **Setting** `au05.sessionFoldH`: 1, 4, 8 (default), 24, 72 hours or 0 (never), "Fold sessions after" in the
+  "In the menu" row. The hook-only fallback list (no Claude session files) is not folded.
+- Known limit: Claude's own files cannot tell the user's messages from Claude's own turns, so without the hooks a
+  session where only Claude worked also moves up.
+
+### Page lists keep their choice, 1.0.0
+
+The page re-rendered every few seconds (battery, Claude session counts) even while a list was open, which
+replaced the list and lost the choice. The log showed only one noise reduction change ever sent (level 1,
+2026-11-17 09:14Z); the user's later 0, 2 and 3 never reached UC's core. The page now waits while a list has
+focus and catches up when it loses focus. Not yet checked on the installed app.
+
 ### The dial (0.34.0, user request 2026-11-17)
 
 User: "let's make it a dial, like a round thing ... make a full circle ... like pieces of a pie ... the top one

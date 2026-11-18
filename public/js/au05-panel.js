@@ -204,8 +204,11 @@ export class Au05Panel{
     // Recent events: the card shows only when there is something in it.
     const evBox=root.querySelector('.au05-events-box');if(evBox)evBox.hidden=!(s.events||[]).length;
     const sig=JSON.stringify([s.changes,this.advancedOpen,s.battery,s.state,s.claude,this.claudeFull,s.turns,s.keys,s.standbyS,s.sleepS,s.light,s.micNr,s.hooksMode,s.standbyStatus,s.controlCodes,s.actions,s.fake,s.enabled,this.sending>0,this.selected,menuSig,s.menuHotkeys,s.layer,s.offlinePending,s.keySync,this.layerView,this.offlineView,this.modeView,this.turnView,this.menuPick,this.renaming,s.catalogue,this.paletteOpen]);
-    // Re-render while a select has focus (so a key job's state updates next to it), but never while text is typed.
-    const active=document.activeElement,typing=controls.contains(active)&&active.matches('input:not([type="range"]):not([type="checkbox"])');
+    // Never re-render while text is typed or a list is in use (1.0: a re-render replaced an open list, so the
+    // choice was lost: noise reduction levels 0, 2 and 3 never reached the key). The page catches up when the
+    // list loses focus.
+    const active=document.activeElement,typing=controls.contains(active)&&active.matches('input:not([type="range"]):not([type="checkbox"]),select');
+    if(typing&&active.matches('select')&&!active.dataset.au05Wait){active.dataset.au05Wait='1';active.addEventListener('blur',()=>this.paint(),{once:true});}
     if(this.dragAction!=null&&!force)return this.flash();
     if(force||(sig!==this.lastSig&&!typing)){
       const refocus=controls.contains(active)&&active.id?active.id:null;
@@ -490,7 +493,8 @@ export class Au05Panel{
     const codesTip=`${usesCodes.length?`${usesCodes.join(' and ')} type ${usesCodes.length>1?'their':'its'} own code${usesCodes.length>1?'s':''} (${usesCodes.map(k=>k==='K2'?'F21':'F22').join(', ')}) while Unified Control runs, so the menu can use ${usesCodes.length>1?'them':'it'}; when the menu is closed, Unified Control types ${usesCodes.length>1?'their':'its'} usual keys. `:''}Their normal actions wait while the menu is open. The knob turn moves the highlight.`;
     const controlsBox=`<div class="au05-inmenu"><span class="au05-inmenu-title" title="${esc(codesTip)}">In the menu</span>
       <span class="au05-inmenu-roles">${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</span>
-      <label class="au05-reopen" title="The menu opens at the sub-menu and entry it was closed on, for each profile"><input type="checkbox" role="switch" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off</label></div>`;
+      <label class="au05-reopen" title="The menu opens at the sub-menu and entry it was closed on, for each profile"><input type="checkbox" role="switch" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off</label>
+      <label class="au05-role" title="Claude sessions you have not spoken to for this long fold into a &quot;More&quot; entry at the end of their list; open it to see them all"><span>Fold sessions after</span><select data-qm-fold="" aria-label="Fold Claude sessions not used for"${native}>${[[1,'1 hour'],[4,'4 hours'],[8,'8 hours'],[24,'1 day'],[72,'3 days'],[0,'Never']].map(([v,t])=>opt(v,t,m.sessionFoldH??8)).join('')}</select></label></div>`;
     const profileName=(profiles.find(p=>p.id===m.profile)||{}).name||'';
     const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2>${profileName?`<span class="au05-muted">for the profile ${esc(profileName)}</span>`:''}</div>
       <div class="au05-box-actions"><button class="btn" type="button" data-qm-op="open"${live}>Open</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset</button></div></header>
@@ -754,6 +758,7 @@ export class Au05Panel{
     if(e.type!=='change')return false;
     if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
     if(t.dataset.qmReopen!==undefined){this.configure({reopenWhereLeft:t.checked});return true;}
+    if(t.dataset.qmFold!==undefined){this.configure({sessionFoldH:Number(t.value)});return true;}
     if(t.dataset.qmRole!==undefined){this.configure({menuControls:{[t.dataset.qmRole]:t.value}});return true;}
     if(t.dataset.qmThen!==undefined){const path=t.dataset.qmThen;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].then=t.value;});return true;}
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}

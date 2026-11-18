@@ -246,6 +246,10 @@ impl Sessions {
             }
             s["last"] = json!(now_ms);
             s["state"] = json!(if event == "UserPromptSubmit" { "working" } else { "idle" });
+            // When the user last spoke to it (sent a message): the quick menu's "recent first" order (1.0).
+            if event == "UserPromptSubmit" {
+                s["spoke"] = json!(now_ms);
+            }
             // The title (named in Claude) follows each change.
             if let Some(t) = v["title"].as_str().map(|t| clean(t, TITLE_MAX)).filter(|t| !t.is_empty()) {
                 s["title"] = json!(t);
