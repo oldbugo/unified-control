@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.1 — 2026-11-18
+
+The old dial is back: Close or Back at the top, the entries going clockwise to
+the right, the nautilus edge and the eight-segment window. What is new is the
+motion: every knob turn twists the whole dial a little the way you turned
+(clockwise for the next entry) and it settles, and going into or out of a
+sub-menu the rings spin as they grow or shrink. Everything else from 1.1.0
+stays: several menus with K2, K3 closes, the Recent sessions list and the time
+bar. The helix from 1.1.0 is gone.
+
+The Recent sessions list now scrolls inside its box so the highlighted row is
+always in view.
+
 ## 1.1.0 — 2026-11-18
 
 Several quick menus. K2 now shows the next menu and K3 closes the menu

@@ -52,7 +52,7 @@ html, body { margin: 0; height: 100%; background: transparent; color: var(--text
 .qm-panel { width: calc(100% - 16px); margin-top: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-1); box-shadow: 0 8px 24px rgba(0,0,0,.35); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
 .qm-list-title { display: flex; align-items: center; gap: var(--s2); padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: var(--fs-small); color: var(--text-muted); cursor: move; }
 .qm-crumb { font-weight: 600; color: var(--text); }
-.qm-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; scrollbar-width: thin; }
+.qm-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; scrollbar-width: thin; min-height: 0; flex: 1 1 auto; }
 .qm-row { display: flex; align-items: center; gap: var(--s2); padding: 7px 10px; border-radius: 8px; cursor: pointer; }
 .qm-row:hover { background: var(--surface-2); }
 .qm-row[data-hl="true"] { background: var(--accent); color: var(--accent-ink); }

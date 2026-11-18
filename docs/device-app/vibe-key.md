@@ -457,6 +457,15 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### The old dial again, with motion, 1.1.1 (user feedback 2026-11-18)
+
+User: "I like the design of the old dial, especially to rotate to right hand side"; asked to choose, they picked
+"old dial + spinning motion". The 0.38.0 dial drawing is back (`quick-menu.js` rings, the taper spiral, the
+8-slot window, `quick_menu::dial_size` by rings; the list keeps `LIST_SIZE`). Added: each move on the same level
+twists the rings and labels groups up to 9° in the move's direction over 280 ms and settles (`twist`, counted in
+`data-twists`); a level change adds a 70° spin to the existing grow/shrink (320 ms; clockwise going deeper). The
+helix code stays in `quick-menu-dial.js` but is unused. The 1.1.0 helix notes below are history.
+
 ### Several menus, list style, helix dial, 1.1.0 (user requests 2026-11-18)
 
 User: "can we also create a version that is just a drop list of all the recent ones ... a button that will
