@@ -457,6 +457,35 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Several menus, list style, helix dial, 1.1.0 (user requests 2026-11-18)
+
+User: "can we also create a version that is just a drop list of all the recent ones ... a button that will
+transition between the round quick menu into the square ... the key mechanic here is allowing multiple quick
+menus"; "K2 is switch menu, switch to the next one. And then K3 is closing it altogether ... we'll leave it
+configurable"; no "More" to mark the end, "let it keep scrolling"; "I do want to see the whole circle moving ...
+like a drill drilling into wood ... that helix motion towards inside"; the idle close as a bar, and "remove that
+subtext".
+
+- **Menus** (`au05.menuFaces`, `au05_menu::sanitize_faces`): 1 to 6 entries `{name, style: dial|list, source:
+  menu|recent}`. Defaults: "Quick menu" (dial, the profile's menu) and "Recent sessions" (list, every open Claude
+  session from `claude_tree::recent_list`, newest spoken-to first, detail "project · age"). Not per profile; the
+  "menu" source is always the current profile's menu.
+- **K2 next menu** (role `nextMenu`, `Input::NextMenu`, `Au05::next_menu`): after the last, the first again. The
+  spot in each menu is remembered per profile and menu (`MenuState::switch`, scope `<profile>#<index>`). The
+  menu opens on the last menu used when "Reopen where I left off" is on, else on the first. Defaults (version 3 of
+  `menuControls`): K2 nextMenu, K3 close, knob press select; saved old defaults (K2 select, K3 back) move once.
+  Back from a sub-menu: the Back row (row 0), or the arrow key / Backspace in the window.
+- **Helix dial** (`quick-menu-dial.js` `helix*`, `quick-menu.js`): row k steps from the highlight is the canonical
+  segment turned −40·k° and scaled 1.05^−k (a logarithmic spiral, so neighbours meet along one edge). Drawn: 2 rows
+  before (larger, fading), 16 after, labels to 9 after. Moves animate the highlight position (200 ms); a level change
+  animates the old level a full turn deeper with a fade and the new one in from a turn outside (460 ms); Back is the
+  reverse. Labels are fitted for the angle each segment rests at. No window, no "more" fades, no end stop; the
+  core still stops at the first and last row.
+- **Window**: dial 506 x 602, list 440 x 560 logical (`quick_menu::style_size`), around the saved centre.
+- **Time bar**: the view carries `leftMs` and `closeAfterMs`; the bar runs down linearly and restarts on each
+  input. The hint line is removed (the view still has `hints`).
+- `sessionFoldHours` (renamed from 1.0.0's `sessionFoldH`) defaults to 0, never.
+
 ### Recent first and folding, 1.0.0 (user request 2026-11-18)
 
 User: with sessions in project A and project B, "trying to switch to project B, it's always a pain"; wanted the

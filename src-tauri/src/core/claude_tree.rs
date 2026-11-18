@@ -372,6 +372,48 @@ struct Cx<'a> {
     now_ms: u64,
 }
 
+/// Every open Claude session as one flat list, the one the user last spoke to first (1.0, the "Recent
+/// sessions" list menu). Each row names its project (as the menu groups them) in its detail.
+pub fn recent_list(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[String], now_ms: u64, recent: &Recent) -> Vec<Value> {
+    let r = Recent { fold_ms: None, ..recent.clone() };
+    let t = tree_with(sessions, groups, working, &json!("none"), now_ms, &r);
+    let mut rows: Vec<Value> = Vec::new();
+    fn walk(e: &Value, project: &str, rows: &mut Vec<Value>) {
+        if e["type"] == "claudeSession" && !e["label"].as_str().unwrap_or("").starts_with("Open: ") {
+            if !rows.iter().any(|x| x["session"] == e["session"]) {
+                let mut x = e.clone();
+                let rest = e["detail"].as_str().unwrap_or("");
+                x["project"] = json!(project);
+                x["detail"] = json!(if project.is_empty() { rest.to_string() } else { format!("{project} · {rest}") });
+                rows.push(x);
+            }
+        }
+        if e["type"] == "submenu" && e["project"] != true && e["session"].is_string() {
+            // A session with sub-sessions: the session itself, then its children.
+            let me = e["entries"].as_array().and_then(|a| a.first()).cloned();
+            if let Some(mut m) = me {
+                m["label"] = e["label"].clone();
+                m["detail"] = e["detail"].clone();
+                walk(&m, project, rows);
+            }
+        }
+        for c in e["entries"].as_array().into_iter().flatten() {
+            walk(c, project, rows);
+        }
+    }
+    for p in &t {
+        if p["label"] == OTHER {
+            for f in p["entries"].as_array().into_iter().flatten() {
+                walk(f, f["label"].as_str().unwrap_or(""), &mut rows);
+            }
+        } else {
+            walk(p, p["label"].as_str().unwrap_or(""), &mut rows);
+        }
+    }
+    rows.sort_by_key(|e| std::cmp::Reverse(e["at"].as_u64().unwrap_or(0)));
+    rows
+}
+
 /// The live summary for the page's Claude sessions card (0.36.0): open sessions, projects (as the menu groups
 /// them), how many work now, and the newest few with their project. Titles only; nothing else from the files.
 pub fn summary(d: &Desktop, working: &[String], now_ms: u64, recent: usize) -> Value {

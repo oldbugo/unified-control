@@ -271,10 +271,44 @@ fn clean_level(v: &Value, profiles: &[String], depth: usize, count: &mut usize) 
 
 /// Controls that can have a role while the menu is open, and the roles (user request 2026-11-17).
 /// Knob press selects (user feedback 2026-11-17: "It is natural to keep the thumb there").
-pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "select"), ("k3", "back"), ("knobPress", "select")];
-pub const ROLES: [&str; 4] = ["select", "back", "close", "none"];
+/// 1.0 (user request 2026-11-18: "K2 is switch menu, switch to the next one. And then K3 is closing it
+/// altogether"): K2 next menu, K3 close.
+pub const CONTROL_KEYS: [(&str, &str); 3] = [("k2", "nextMenu"), ("k3", "close"), ("knobPress", "select")];
+pub const ROLES: [&str; 5] = ["select", "back", "close", "nextMenu", "none"];
 
-/// The menu roles, defaults filled in: K2 select, K3 back, knob press select.
+/// The menus K2 cycles through (1.0, user request 2026-11-18: "allowing multiple quick menus"; "a drop list of
+/// all the recent ones"). Each has a name, a style ("dial" or "list") and what it shows: "menu" (the profile's
+/// own menu, edited on the page) or "recent" (every open Claude session, the one last spoken to first).
+pub const MAX_FACES: usize = 6;
+pub const FACE_STYLES: [&str; 2] = ["dial", "list"];
+pub const FACE_SOURCES: [&str; 2] = ["menu", "recent"];
+
+pub fn default_faces() -> Value {
+    json!([
+        {"name": "Quick menu", "style": "dial", "source": "menu"},
+        {"name": "Recent sessions", "style": "list", "source": "recent"},
+    ])
+}
+
+/// Valid menus only (at most six, at least one); an empty or broken list gives the defaults.
+pub fn sanitize_faces(v: &Value) -> Value {
+    let faces: Vec<Value> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            let style = f["style"].as_str().filter(|s| FACE_STYLES.contains(s))?;
+            let source = f["source"].as_str().filter(|s| FACE_SOURCES.contains(s))?;
+            let name = clean_label(&f["name"]);
+            let name = if name.is_empty() { if source == "recent" { "Recent sessions".to_string() } else { "Quick menu".to_string() } } else { name };
+            Some(json!({"name": name, "style": style, "source": source}))
+        })
+        .take(MAX_FACES)
+        .collect();
+    if faces.is_empty() { default_faces() } else { Value::Array(faces) }
+}
+
+/// The menu roles, defaults filled in: K2 next menu, K3 close, knob press select.
 pub fn sanitize_controls(v: &Value) -> Value {
     Value::Object(
         CONTROL_KEYS
@@ -305,6 +339,8 @@ pub enum Input {
     Pick(usize),
     /// The window is being dragged (0.35.0): counts as input, so the idle close waits; nothing else changes.
     Hold,
+    /// Switch to the next menu (1.0). Handled by the owner, which knows the menus ([`MenuState::switch`]).
+    NextMenu,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -458,6 +494,21 @@ impl MenuState {
         }
         o
     }
+    /// Another menu is shown while open (1.0, K2): the spot in this one is remembered, the other opens where it
+    /// was left (setting on), else on its first entry.
+    pub fn switch(&mut self, menu_before: &Value, menu: &Value, scope: String, now: Instant) {
+        self.remember_spot(menu_before);
+        self.scope = scope;
+        self.restore(menu);
+        self.note = None;
+        self.last_input = Some(now);
+    }
+    /// The time left before the idle close (for the window's bar).
+    pub fn left_ms(&self, now: Instant) -> u64 {
+        let used = self.last_input.map(|t| now.duration_since(t)).unwrap_or_default();
+        CLOSE_AFTER.saturating_sub(used).as_millis() as u64
+    }
+
     /// True when the menu has been open without input for `CLOSE_AFTER`.
     pub fn expired(&self, now: Instant) -> bool {
         self.open && self.last_input.is_some_and(|t| now.duration_since(t) >= CLOSE_AFTER)
@@ -497,7 +548,7 @@ impl MenuState {
                 self.note = None;
                 Outcome::Moved
             }
-            Input::Hold => Outcome::Nothing,
+            Input::Hold | Input::NextMenu => Outcome::Nothing,
             Input::Dictate(then) => match self.highlighted_session(menu) {
                 Some(id) => {
                     self.close();
@@ -635,7 +686,9 @@ impl MenuState {
             "target": target_name(target),
             "note": self.note,
             "closeAfterS": CLOSE_AFTER.as_secs(),
-            // The hints at the bottom: what each control does while the menu is open.
+            "closeAfterMs": CLOSE_AFTER.as_millis() as u64,
+            // The time left before the idle close (the window's bar runs down from here).
+            "leftMs": self.left_ms(Instant::now()),
             "hints": hints(&settings["menuControls"]),
         })
     }
@@ -648,7 +701,7 @@ pub fn hints(controls: &Value) -> String {
         let r = role(controls, k);
         if r != "none" {
             let name = if k == "knobPress" { "Knob press" } else if k == "k2" { "K2" } else { "K3" };
-            parts.push(format!("{name} {r}"));
+            parts.push(format!("{name} {}", if r == "nextMenu" { "next menu" } else { r }));
         }
     }
     parts.join(" · ")
@@ -872,11 +925,15 @@ mod tests {
         let clean = sanitize_menu(&bad, &profiles);
         assert_eq!(clean.as_array().unwrap().len(), 1, "only the sub-menu is kept");
         assert!(clean[0]["entries"][0]["entries"].as_array().unwrap().is_empty(), "at most three levels");
-        // Menu controls: defaults K2 select, K3 back, knob press select; invalid values fall back.
+        // Menu controls: defaults K2 next menu, K3 close, knob press select (1.0); invalid values fall back.
         let c = sanitize_controls(&json!({"k2": "close", "k3": "explode"}));
-        assert_eq!(c, json!({"k2": "close", "k3": "back", "knobPress": "select"}));
+        assert_eq!(c, json!({"k2": "close", "k3": "close", "knobPress": "select"}));
         assert_eq!(role(&json!({}), "k1"), "none");
-        assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 select · K3 back · Knob press select");
+        assert_eq!(hints(&sanitize_controls(&json!({}))), "Turn: move · K2 next menu · K3 close · Knob press select");
+        // Menus: the defaults (the profile's dial, then the recent sessions list); broken entries are dropped.
+        assert_eq!(sanitize_faces(&Value::Null), default_faces());
+        let f = sanitize_faces(&json!([{"name": "", "style": "list", "source": "menu"}, {"style": "cube", "source": "menu"}]));
+        assert_eq!(f, json!([{"name": "Quick menu", "style": "list", "source": "menu"}]));
     }
 
     /// Session tree: projects by recent activity; in a project the main checkout's session first, then the

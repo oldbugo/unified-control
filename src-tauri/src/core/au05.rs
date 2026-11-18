@@ -43,7 +43,8 @@ pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the
 pub const DEFAULT_STANDBY_S: u32 = 300;
 /// The quick menu's fold times for Claude sessions, in hours (0 = never fold), and the default (1.0).
 pub const SESSION_FOLD_H: [u64; 6] = [0, 1, 4, 8, 24, 72];
-pub const SESSION_FOLD_DEFAULT_H: u64 = 8;
+/// 1.0 (user feedback 2026-11-18): no "More" folding unless the user picks a time; long lists keep scrolling.
+pub const SESSION_FOLD_DEFAULT_H: u64 = 0;
 
 /// The state the page shows (0.36.0, deterministic: the key's own timers run from its last input). Display
 /// only: sending still follows the session's own 11 s gate. `quiet`: since the last input, which is the latest
@@ -349,7 +350,9 @@ pub fn sanitize(v: &Value) -> Value {
         // "Reopen where I left off" (user request 2026-11-17): the menu opens where it was closed.
         "reopenWhereLeft": v["reopenWhereLeft"].as_bool().unwrap_or(true),
         // Claude sessions not used for this many hours fold into "More" in the quick menu (1.0; 0 = never).
-        "sessionFoldH": v["sessionFoldH"].as_u64().filter(|h| SESSION_FOLD_H.contains(h)).unwrap_or(SESSION_FOLD_DEFAULT_H),
+        "sessionFoldHours": v["sessionFoldHours"].as_u64().filter(|h| SESSION_FOLD_H.contains(h)).unwrap_or(SESSION_FOLD_DEFAULT_H),
+        // The menus K2 cycles through (1.0).
+        "menuFaces": menu::sanitize_faces(&v["menuFaces"]),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -429,7 +432,7 @@ fn profile_id(name: &str, profiles: &[Value]) -> String {
 ///   profileEdit?: {op: add|rename|remove, id?, name?}}`
 /// The menu controls' settings version. 2 (0.31.0): a knob press "close" saved from the old default becomes
 /// "select", once (user feedback 2026-11-17); after that a user who picks "close" keeps it.
-pub const MENU_CONTROLS_VERSION: u64 = 2;
+pub const MENU_CONTROLS_VERSION: u64 = 3;
 
 /// The one-time menu controls migration on the raw Vibe Key settings. True when it changed anything (the
 /// marker included), so the caller saves it.
@@ -437,8 +440,19 @@ pub fn migrate_menu_controls(au: &mut Value) -> bool {
     if !au.is_object() || au["menuControlsVersion"].as_u64().unwrap_or(0) >= MENU_CONTROLS_VERSION {
         return false;
     }
-    if au["menuControls"]["knobPress"] == "close" {
+    let from = au["menuControlsVersion"].as_u64().unwrap_or(0);
+    if from < 2 && au["menuControls"]["knobPress"] == "close" {
         au["menuControls"]["knobPress"] = json!("select");
+    }
+    // 1.0: K2 next menu and K3 close are the new defaults; the old defaults (select, back) move to them once.
+    // A role the user chose (anything else) is kept.
+    if from < 3 && au["menuControls"].is_object() {
+        if au["menuControls"]["k2"] == "select" {
+            au["menuControls"]["k2"] = json!("nextMenu");
+        }
+        if au["menuControls"]["k3"] == "back" {
+            au["menuControls"]["k3"] = json!("close");
+        }
     }
     au["menuControlsVersion"] = json!(MENU_CONTROLS_VERSION);
     true
@@ -603,9 +617,21 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
         }
         au["menuControls"] = next;
     }
-    if let Some(v) = patch.get("sessionFoldH") {
+    if let Some(v) = patch.get("menuFaces") {
+        let faces = v.as_array().ok_or("Invalid menus")?;
+        if faces.is_empty() || faces.len() > menu::MAX_FACES {
+            return Err(format!("Keep between 1 and {} menus", menu::MAX_FACES));
+        }
+        let clean = menu::sanitize_faces(v);
+        if clean.as_array().map_or(0, |a| a.len()) != faces.len() {
+            return Err("Choose a style and what each menu shows".into());
+        }
+        au["menuFaces"] = clean;
+        lines.push(format!("page menus = {}", faces.len()));
+    }
+    if let Some(v) = patch.get("sessionFoldHours") {
         let h = v.as_u64().filter(|h| SESSION_FOLD_H.contains(h)).ok_or("Choose one of the offered times")?;
-        au["sessionFoldH"] = json!(h);
+        au["sessionFoldHours"] = json!(h);
         lines.push(format!("page menu session fold = {h} h"));
     }
     if let Some(v) = patch.get("reopenWhereLeft") {
@@ -927,6 +953,8 @@ pub struct MenuCtl {
     claude_data: Mutex<Option<std::path::PathBuf>>,
     /// The menu as shown, frozen while it is open (a changing session list never moves the highlight).
     frozen: Mutex<Option<Value>>,
+    /// The menu shown (index into `menuFaces`, 1.0); kept between openings when "Reopen where I left off" is on.
+    face: Mutex<usize>,
     /// Where the last session list came from (for the page).
     session_source: Mutex<Value>,
 }
@@ -992,12 +1020,63 @@ impl MenuCtl {
                            "project": s["project"], "working": s["state"] == "working", "at": s["last"]})).collect::<Vec<_>>()})
             }
         };
-        let fold = settings["sessionFoldH"].as_u64().filter(|h| *h > 0).map(|h| h * 3600 * 1000);
+        let fold = settings["sessionFoldHours"].as_u64().filter(|h| *h > 0).map(|h| h * 3600 * 1000);
+        let face = self.face_of(settings);
+        if face["source"] == "recent" {
+            return match &desktop {
+                Ok(d) => {
+                    let working: Vec<String> =
+                        list.iter().filter(|s| s["state"] == "working").filter_map(|s| s["desktopId"].as_str().map(str::to_string)).collect();
+                    let recent = super::claude_tree::Recent {
+                        spoke: list.iter().filter_map(|s| Some((s["desktopId"].as_str()?.to_string(), s["spoke"].as_u64()?))).collect(),
+                        fold_ms: None,
+                    };
+                    let rows = super::claude_tree::recent_list(&d.sessions, d.groups.as_ref().ok(), &working, now_ms(), &recent);
+                    if rows.is_empty() { json!([{"type": "note", "label": "No open Claude sessions"}]) } else { Value::Array(rows) }
+                }
+                Err(_) => {
+                    let rows = menu::session_tree(&list, &json!("none"), now_ms());
+                    let flat: Vec<Value> = rows.iter().flat_map(|p| p["entries"].as_array().cloned().unwrap_or_default()).collect();
+                    if flat.is_empty() { json!([{"type": "note", "label": "No Claude sessions yet"}]) } else { Value::Array(flat) }
+                }
+            };
+        }
         menu::expand_with(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok(), fold)
+    }
+
+    /// The current menu (`menuFaces`), clamped.
+    fn face_of(&self, settings: &Value) -> Value {
+        let faces = settings["menuFaces"].as_array().cloned().unwrap_or_default();
+        let i = *self.face.lock_or_recover();
+        faces.get(i).or(faces.first()).cloned().unwrap_or_else(|| menu::default_faces()[0].clone())
+    }
+    /// The memory scope of the current menu: per profile for its own menu, shared for the recent list.
+    fn scope_of(&self, settings: &Value) -> String {
+        let i = *self.face.lock_or_recover();
+        format!("{}#{i}", settings["profile"].as_str().unwrap_or(""))
+    }
+    /// The view with the current menu's style and the list of menus (for the window).
+    fn with_face(&self, settings: &Value, mut view: Value) -> Value {
+        let faces = settings["menuFaces"].as_array().cloned().unwrap_or_default();
+        let face = self.face_of(settings);
+        view["style"] = face["style"].clone();
+        view["face"] = face["name"].clone();
+        view["faceIndex"] = json!((*self.face.lock_or_recover()).min(faces.len().saturating_sub(1)));
+        view["faces"] = json!(faces.iter().map(|f| f["name"].clone()).collect::<Vec<_>>());
+        if face["source"] == "recent" {
+            view["title"] = json!([face["name"]]);
+        }
+        view
     }
 
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
         let settings = self.settings();
+        if input == Input::NextMenu {
+            return self.next_menu(&settings, source);
+        }
+        if !self.is_open() && input == Input::Toggle && settings["reopenWhereLeft"] == false {
+            *self.face.lock_or_recover() = 0;
+        }
         // Read once when the menu opens; kept while it is open.
         let frozen = self.frozen.lock_or_recover().clone();
         let shown = match frozen {
@@ -1013,11 +1092,11 @@ impl MenuCtl {
             let was = st.open;
             st.remember = settings["reopenWhereLeft"] != false;
             if !was {
-                // The memory is per profile menu.
-                st.scope = settings["profile"].as_str().unwrap_or("").to_string();
+                // The memory is per profile menu (and per menu, 1.0).
+                st.scope = self.scope_of(&settings);
             }
             let o = st.step(&shown, input, Instant::now());
-            (o, was, st.view(&settings, &shown))
+            (o, was, self.with_face(&settings, st.view(&settings, &shown)))
         };
         let open = view["open"] == true;
         if !open {
@@ -1056,6 +1135,30 @@ impl MenuCtl {
             }
             Outcome::Unavailable(m) => self.log.line(&format!("menu: {m}")),
             Outcome::Nothing | Outcome::Moved => {}
+        }
+    }
+
+    /// K2 while open (1.0): show the next menu (after the last, the first again), where it was left.
+    fn next_menu(self: &Arc<Self>, settings: &Value, source: &str) {
+        if !self.is_open() {
+            return;
+        }
+        let faces = settings["menuFaces"].as_array().map_or(1, |a| a.len().max(1));
+        let before = self.shown_menu(settings);
+        {
+            let mut f = self.face.lock_or_recover();
+            *f = (*f + 1) % faces;
+        }
+        let shown = self.fresh_menu(settings);
+        *self.frozen.lock_or_recover() = Some(shown.clone());
+        let view = {
+            let mut st = self.state.lock_or_recover();
+            st.switch(&before, &shown, self.scope_of(settings), Instant::now());
+            self.with_face(settings, st.view(settings, &shown))
+        };
+        self.log.line(&format!("menu next: {} ({source})", view["face"].as_str().unwrap_or("")));
+        if let Some(v) = self.view.lock_or_recover().clone() {
+            v.show(&view, false);
         }
     }
 
@@ -1248,6 +1351,7 @@ impl MenuCtl {
                 "select" => return self.input(Input::Choose, name),
                 "back" => return self.input(Input::Back, name),
                 "close" => return self.input(Input::Close, name),
+                "nextMenu" => return self.input(Input::NextMenu, name),
                 _ => {}
             }
         }
@@ -1287,8 +1391,10 @@ impl MenuCtl {
         let settings = self.settings();
         let shown = self.shown_menu(&settings);
         let view = self.state.lock_or_recover().view(&settings, &shown);
+        let view = self.with_face(&settings, view);
         json!({
             "view": view,
+            "faces": settings["menuFaces"],
             "entries": settings["menu"],
             "profiles": settings["profiles"].as_array().map(|ps| ps.iter().map(|p| json!({"id": p["id"], "name": p["name"]})).collect::<Vec<_>>()),
             "profile": settings["profile"],
@@ -1298,7 +1404,7 @@ impl MenuCtl {
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
             "reopenWhereLeft": settings["reopenWhereLeft"] != false,
-            "sessionFoldH": settings["sessionFoldH"].as_u64().unwrap_or(SESSION_FOLD_DEFAULT_H),
+            "sessionFoldHours": settings["sessionFoldHours"].as_u64().unwrap_or(SESSION_FOLD_DEFAULT_H),
             "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
@@ -1397,6 +1503,7 @@ impl Au05 {
                 fake || std::env::var("UC_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0"),
             )),
             frozen: Mutex::new(None),
+            face: Mutex::new(0),
             session_source: Mutex::new(Value::Null),
             dictate_busy: Arc::new(AtomicBool::new(false)),
             dictate_last: Mutex::new(None),
@@ -1463,6 +1570,7 @@ impl Au05 {
             "choose" => Some(Input::Choose),
             "back" => Some(Input::Back),
             "close" => Some(Input::Close),
+            "nextMenu" => Some(Input::NextMenu),
             "toggle" => Some(Input::Toggle),
             "pick" => Some(Input::Pick(index.ok_or("Choose a row")?)),
             "hold" => Some(Input::Hold),
@@ -4179,7 +4287,11 @@ mod tests {
         list.lock_or_recover().push(json!({"desktopId": "local_0123abcd-0000-4000-8000-000000000001", "project": "P", "last": now_ms()}));
         au.menu_input("next", None).unwrap();
         au.menu_input("prev", None).unwrap();
-        assert_eq!(au.status()["menu"]["view"], before, "frozen while open");
+        let still = |mut v: Value| {
+            v["leftMs"] = Value::Null; // the idle bar's time left moves on
+            v
+        };
+        assert_eq!(still(au.status()["menu"]["view"].clone()), still(before), "frozen while open");
         au.shutdown();
     }
 
@@ -4243,7 +4355,8 @@ mod tests {
         let mut old = json!({"enabled": true, "menuControls": {"k2": "select", "k3": "back", "knobPress": "close"}});
         assert_eq!(sanitize(&old)["menuControls"]["knobPress"], "select", "applies before it is saved too");
         assert!(migrate_menu_controls(&mut old));
-        assert_eq!(old["menuControls"], json!({"k2": "select", "k3": "back", "knobPress": "select"}));
+        // 1.0: the old defaults K2 select and K3 back also move to the new ones (next menu, close).
+        assert_eq!(old["menuControls"], json!({"k2": "nextMenu", "k3": "close", "knobPress": "select"}));
         assert_eq!(old["menuControlsVersion"], MENU_CONTROLS_VERSION);
         assert!(!migrate_menu_controls(&mut old), "only once");
         // The user picks Close again: kept, through sanitising and further patches.
@@ -4306,9 +4419,22 @@ mod tests {
         assert!(!open(&au));
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(desk.ran.lock_or_recover().len(), 1, "nothing ran");
-        // Open; K2 selects the first entry (Claude dictation), which runs after the menu closes.
+        // 1.0: K2 shows the next menu (the recent sessions list) and the menu stays open; K3 closes.
+        let face = |au: &Au05| au.status()["menu"]["view"]["faceIndex"].as_u64();
         desk.press(hotkey::VK_F20);
         desk.press(hotkey::VK_F21);
+        assert!(open(&au));
+        assert_eq!(face(&au), Some(1));
+        assert_eq!(au.status()["menu"]["view"]["style"], "list");
+        desk.press(hotkey::VK_F22);
+        assert!(!open(&au));
+        // It opens on the menu it was left on; K2 again goes round to the first; the knob press selects the first
+        // entry (Claude dictation), which runs after the menu closes.
+        desk.press(hotkey::VK_F20);
+        assert_eq!(face(&au), Some(1));
+        desk.press(hotkey::VK_F21);
+        assert_eq!(face(&au), Some(0));
+        desk.press(hotkey::VK_F19);
         assert!(!open(&au));
         assert_eq!(ran(4)[1..], ["focus claude.exe", "message box claude.exe", "press Ctrl + D"]);
         // Closed again: K2 types Enter (its factory typing).

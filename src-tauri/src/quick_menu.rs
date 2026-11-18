@@ -19,24 +19,24 @@ use uc_core::core::sync::MutexExt;
 
 const LABEL: &str = "quickmenu";
 const MARGIN: f64 = 24.0;
-/// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (225, 254,
-/// 305; 0.37.0: a thicker band), Close/Back's taper (12), the push-out of the highlighted segment (10) and a
-/// margin (14) each side, at least 380 wide, plus the caption and hints (96). Matches `dialSize` in
-/// public/js/quick-menu-dial.js. On a smaller work area the window is clamped and the page draws the dial
-/// smaller.
-pub fn dial_size(rings: usize) -> (f64, f64) {
-    let outer = [225.0, 254.0, 305.0][rings.clamp(1, 3) - 1];
-    let d = 2.0 * (outer + 12.0 + 10.0 + 14.0);
-    (f64::max(d, 380.0), d + 96.0)
+/// The window's logical size for a menu style (1.0): the helix dial (its diameter, `helixDiameter` in
+/// public/js/quick-menu-dial.js, plus the caption and the time bar, 96) or the list. On a smaller work area the
+/// window is clamped and the page draws the dial smaller.
+pub fn style_size(style: &str) -> (f64, f64) {
+    if style == "list" {
+        (440.0, 560.0)
+    } else {
+        (506.0, 506.0 + 96.0)
+    }
 }
-/// The caption and hints under the dial take 96 logical pixels: the window's centre is half of that below the
-/// dial's centre (physical pixels at this scale).
+/// The caption under the dial takes 96 logical pixels: the window's centre is half of that below the dial's
+/// centre (physical pixels at this scale).
 fn half_caption(scale: f64) -> i64 {
     (48.0 * scale).round() as i64
 }
-/// The rings a view shows: its level and up to two above it.
-fn rings(view: &Value) -> usize {
-    view["levels"].as_array().map_or(0, |l| l.len().min(2)) + 1
+/// The style a view shows.
+fn style(view: &Value) -> &str {
+    if view["style"] == "list" { "list" } else { "dial" }
 }
 
 pub fn enabled() -> bool {
@@ -94,7 +94,7 @@ fn build(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let (r, g, b) = crate::window::BG;
     let win = WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::App("quick-menu.html".into()))
         .title("Vibe Key quick menu")
-        .inner_size(dial_size(1).0, dial_size(1).1)
+        .inner_size(style_size("dial").0, style_size("dial").1)
         .decorations(false)
         .resizable(false)
         .maximizable(false)
@@ -145,8 +145,8 @@ fn fit(c: (i64, i64), w: i64, h: i64, wa: (i64, i64, i64, i64)) -> (i32, i32) {
 }
 
 /// The logical size, made to fit the work area (physical) at this scale.
-fn fitted_size(rings: usize, scale: f64, wa: (i64, i64, i64, i64)) -> (f64, f64) {
-    let (w, h) = dial_size(rings);
+fn fitted_size(style: &str, scale: f64, wa: (i64, i64, i64, i64)) -> (f64, f64) {
+    let (w, h) = style_size(style);
     (w.min(wa.2 as f64 / scale), h.min(wa.3 as f64 / scale))
 }
 
@@ -155,14 +155,14 @@ fn work_area(m: &tauri::Monitor) -> (i64, i64, i64, i64) {
     (wa.position.x as i64, wa.position.y as i64, wa.size.width as i64, wa.size.height as i64)
 }
 
-/// Grow or shrink the window for another number of rings, around the dial's current centre.
-fn resize(win: &WebviewWindow, rings: usize) {
+/// Grow or shrink the window for another style, around its current centre.
+fn resize(win: &WebviewWindow, style: &str) {
     let (Ok(pos), Ok(size), Ok(Some(m))) = (win.outer_position(), win.outer_size(), win.current_monitor()) else {
         return;
     };
     let scale = m.scale_factor();
     let wa = work_area(&m);
-    let (lw, lh) = fitted_size(rings, scale, wa);
+    let (lw, lh) = fitted_size(style, scale, wa);
     let (w, h) = ((lw * scale).round() as i64, (lh * scale).round() as i64);
     if (w, h) == (size.width as i64, size.height as i64) {
         return;
@@ -176,7 +176,7 @@ fn resize(win: &WebviewWindow, rings: usize) {
 }
 
 /// Put the window on the remembered monitor and place, or near the top-right of the primary monitor.
-fn place(app: &AppHandle, win: &WebviewWindow, rings: usize) {
+fn place(app: &AppHandle, win: &WebviewWindow, style: &str) {
     let monitors = app.available_monitors().unwrap_or_default();
     let saved = load_place();
     let remembered = saved.as_ref().and_then(|s| {
@@ -192,7 +192,7 @@ fn place(app: &AppHandle, win: &WebviewWindow, rings: usize) {
     let Some(m) = monitor else { return };
     let scale = m.scale_factor();
     let wa = work_area(&m);
-    let (lw, lh) = fitted_size(rings, scale, wa);
+    let (lw, lh) = fitted_size(style, scale, wa);
     let (w, h) = ((lw * scale).round() as i64, (lh * scale).round() as i64);
     let r = rect(&m);
     // The window's centre (the dial is at its top, the caption below).
@@ -227,11 +227,11 @@ impl MenuView for TauriMenu {
                     }
                 },
             };
-            let rings = rings(&view);
+            let style = style(&view);
             if first {
-                place(&app, &win, rings);
+                place(&app, &win, style);
             } else {
-                resize(&win, rings);
+                resize(&win, style);
             }
             let _ = app.emit("uc:au05-menu", &view);
             if first {
@@ -258,16 +258,14 @@ mod tests {
     /// The window grows with the rings (the same sizes as `dialSize` in public/js/quick-menu-dial.js, checked
     /// by scripts/check-quick-menu.cjs) and stays inside the work area.
     #[test]
-    fn the_dial_window_fits_its_rings_and_the_work_area() {
-        assert_eq!(dial_size(1), (522.0, 618.0));
-        assert_eq!(dial_size(2), (580.0, 676.0));
-        assert_eq!(dial_size(3), (682.0, 778.0));
-        assert_eq!(dial_size(9), dial_size(3), "at most 3 rings");
-        assert_eq!(rings(&serde_json::json!({"levels": [{}, {}]})), 3);
-        assert_eq!(rings(&serde_json::json!({})), 1);
+    fn the_menu_window_fits_its_style_and_the_work_area() {
+        assert_eq!(style_size("dial"), (506.0, 602.0));
+        assert_eq!(style_size("list"), (440.0, 560.0));
+        assert_eq!(style(&serde_json::json!({"style": "list"})), "list");
+        assert_eq!(style(&serde_json::json!({})), "dial");
         let wa = (0, 0, 1920, 1040);
         assert_eq!(fit((960, 520), 682, 778, wa), (619, 131));
         assert_eq!(fit((1900, 20), 682, 778, wa), (1238, 0), "clamped into the work area");
-        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 600)), (682.0, 600.0), "never taller than the work area");
+        assert_eq!(fitted_size("dial", 1.0, (0, 0, 1280, 500)), (506.0, 500.0), "never taller than the work area");
     }
 }

@@ -230,6 +230,16 @@ export class Au05Panel{
     return ev.slice(0,20).map(e=>`<li><span>${esc(new Date(e.at).toLocaleTimeString('en-AU',{hour12:false}))}</span> <strong>${esc(e.control)}</strong> ${e.pressed?'down':'up'} <span class="hint">${esc(e.code)}</span>${e.action?` <span class="chip">${esc(e.action)}</span>`:''}</li>`).join('');
   }
   // Every setting can be sent; the ones not yet checked on the real key carry an "Untested" label.
+  /** The menus K2 cycles through (1.0): name, style (dial or list), what it shows; add, move, remove. */
+  facesMarkup(faces,native){
+    const o=(v,l,sel)=>`<option value="${esc(v)}"${v===sel?' selected':''}>${esc(l)}</option>`;
+    const rows=faces.map((f,i)=>`<li class="au05-face-row"><input type="text" class="au05-face-name" data-qm-face="${i}:name" value="${esc(f.name)}" aria-label="Menu name"${native}>
+      <select data-qm-face="${i}:style" aria-label="Style"${native}>${o('dial','Dial',f.style)}${o('list','List',f.style)}</select>
+      <select data-qm-face="${i}:source" aria-label="Shows"${native}>${o('menu','This profile’s menu',f.source)}${o('recent','Recent Claude sessions',f.source)}</select>
+      <span class="au05-face-tools"><button class="btn btn-icon" type="button" data-qm-face-op="up:${i}" title="Move up"${i===0?' disabled':native}>↑</button><button class="btn btn-icon" type="button" data-qm-face-op="down:${i}" title="Move down"${i===faces.length-1?' disabled':native}>↓</button><button class="btn btn-icon" type="button" data-qm-face-op="remove:${i}" title="Remove"${faces.length<2?' disabled':native}>✕</button></span></li>`).join('');
+    return `<div class="au05-faces"><span class="au05-inmenu-title" title="With the menu open, the control set to &quot;Next menu&quot; (K2) shows the next one; after the last, the first again">Menus</span><ul class="au05-face-list">${rows}</ul>
+      <button class="btn" type="button" data-qm-face-op="add"${faces.length>=6?' disabled':native}>${IC.plus} Add menu</button></div>`;
+  }
   untested(name){return this.state?.checked?.[name]===true?'':' <span class="chip attention au05-untested">Untested</span>';}
   controlsMarkup(){
     const s=this.state||{};const off=!this.native||s.enabled!==true||this.sending>0;
@@ -486,7 +496,7 @@ export class Au05Panel{
         ${(m.targets||[]).map(t=>qmCard(`t:${t.id}`,IC.target,`Target ${t.name}`,`Target app: ${t.name}`)).join('')}
         ${qmCard('submenu',IC.folder,'Sub-menu','A menu inside the menu')}${qmCard('sessions',IC.sessions,'Claude sessions','The live list of Claude sessions')}</div></section>`)}</div>`:'';
     // What K2, K3 and the knob press do while the menu is open.
-    const ROLE={select:'Select',back:'Back',close:'Close',none:'Its own action'};
+    const ROLE={nextMenu:'Next menu',select:'Select',back:'Back',close:'Close',none:'Its own action'};
     const ctl=m.controls||{};
     const roleSel=(k,label)=>`<label class="au05-role"><span>${esc(label)}</span><select data-qm-role="${k}" aria-label="${esc(label)} while the menu is open"${native}>${Object.entries(ROLE).map(([v,t])=>opt(v,t,ctl[k]||'none')).join('')}</select></label>`;
     const usesCodes=anyMenu?['k2','k3'].filter(k=>(ctl[k]||'none')!=='none'&&(s.actions?.[k]?.kind||'offline')==='offline').map(k=>k.toUpperCase()):[];
@@ -494,12 +504,12 @@ export class Au05Panel{
     const controlsBox=`<div class="au05-inmenu"><span class="au05-inmenu-title" title="${esc(codesTip)}">In the menu</span>
       <span class="au05-inmenu-roles">${roleSel('k2','K2')}${roleSel('k3','K3')}${roleSel('knobPress','Knob press')}</span>
       <label class="au05-reopen" title="The menu opens at the sub-menu and entry it was closed on, for each profile"><input type="checkbox" role="switch" data-qm-reopen=""${m.reopenWhereLeft!==false?' checked':''}${native}> Reopen where I left off</label>
-      <label class="au05-role" title="Claude sessions you have not spoken to for this long fold into a &quot;More&quot; entry at the end of their list; open it to see them all"><span>Fold sessions after</span><select data-qm-fold="" aria-label="Fold Claude sessions not used for"${native}>${[[1,'1 hour'],[4,'4 hours'],[8,'8 hours'],[24,'1 day'],[72,'3 days'],[0,'Never']].map(([v,t])=>opt(v,t,m.sessionFoldH??8)).join('')}</select></label></div>`;
+      <label class="au05-role" title="Claude sessions you have not spoken to for this long fold into a &quot;More&quot; entry at the end of their list; open it to see them all"><span>Fold sessions after</span><select data-qm-fold="" aria-label="Fold Claude sessions not used for"${native}>${[[1,'1 hour'],[4,'4 hours'],[8,'8 hours'],[24,'1 day'],[72,'3 days'],[0,'Never']].map(([v,t])=>opt(v,t,m.sessionFoldHours??0)).join('')}</select></label></div>`;
     const profileName=(profiles.find(p=>p.id===m.profile)||{}).name||'';
     const menuBox=`<section class="au05-box"><header class="au05-box-head"><div class="au05-box-title"><span class="au05-box-icon">${IC.menu}</span><h2>Quick menu</h2>${profileName?`<span class="au05-muted">for the profile ${esc(profileName)}</span>`:''}</div>
       <div class="au05-box-actions"><button class="btn" type="button" data-qm-op="open"${live}>Open</button><button class="btn" type="button" data-qm-op="reset"${native}>Reset</button></div></header>
       <ul class="au05-menu-list" aria-label="Quick menu entries"><li class="au05-menu-row au05-menu-fixed" style="--depth:0" title="Always the first entry; inside a sub-menu the first entry is Back"><span class="au05-card-icon">${IC.close}</span><span class="au05-fixed-label">Close</span><span class="au05-muted">Always first</span></li>${rows.join('')}</ul>
-      <div class="au05-box-foot"><button class="btn" type="button" data-qm-op="add-top"${native}>${IC.plus} Add entry</button>${m.last?`<span class="au05-muted">Last: ${esc(m.last)}</span>`:''}</div>${controlsBox}${picker}</section>`;
+      <div class="au05-box-foot"><button class="btn" type="button" data-qm-op="add-top"${native}>${IC.plus} Add entry</button>${m.last?`<span class="au05-muted">Last: ${esc(m.last)}</span>`:''}</div>${controlsBox}${picker}${this.facesMarkup(m.faces||[],native)}</section>`;
 
     // ---- Claude sessions ----
     const cs=s.claude||{},full=this.claudeFull||{};
@@ -753,12 +763,19 @@ export class Au05Panel{
     if(zone){this.select(zone.dataset.au05Zone);return true;}
     const retry=e.type==='click'&&t.closest?.('[data-au05-retry]');
     if(retry){this.change({setting:'retryJob',key:retry.dataset.au05Retry});return true;}
+    const fop=e.type==='click'&&t.closest?.('[data-qm-face-op]');
+    if(fop){const [op,i0]=fop.dataset.qmFaceOp.split(':'),i=Number(i0);const f=(this.state?.menu?.faces||[]).map(x=>({...x}));
+      if(op==='add')f.push({name:'Recent sessions',style:'list',source:'recent'});
+      else if(op==='remove')f.splice(i,1);
+      else{const j=op==='up'?i-1:i+1;if(f[i]&&f[j])[f[i],f[j]]=[f[j],f[i]];}
+      this.configure({menuFaces:f});return true;}
     const read=e.type==='click'&&t.closest?.('[data-au05-read]');
     if(read){this.readKey(read.dataset.au05Read);return true;}
     if(e.type!=='change')return false;
     if(t.dataset.qmLabel!==undefined){const path=t.dataset.qmLabel;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].label=t.value;});return true;}
     if(t.dataset.qmReopen!==undefined){this.configure({reopenWhereLeft:t.checked});return true;}
-    if(t.dataset.qmFold!==undefined){this.configure({sessionFoldH:Number(t.value)});return true;}
+    if(t.dataset.qmFold!==undefined){this.configure({sessionFoldHours:Number(t.value)});return true;}
+    if(t.dataset.qmFace!==undefined){const faces=(this.state?.menu?.faces||[]).map(f=>({...f}));const [i,k]=t.dataset.qmFace.split(':');if(faces[i]){faces[i][k]=t.value;this.configure({menuFaces:faces});}return true;}
     if(t.dataset.qmRole!==undefined){this.configure({menuControls:{[t.dataset.qmRole]:t.value}});return true;}
     if(t.dataset.qmThen!==undefined){const path=t.dataset.qmThen;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i].then=t.value;});return true;}
     if(t.dataset.qmWhat!==undefined){const path=t.dataset.qmWhat;this.editMenu(en=>{const [l,i]=Au05Panel.locate(en,path);if(l[i])l[i]=this.entryFor(t.value,l[i]);});return true;}

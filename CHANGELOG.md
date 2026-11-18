@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.1.0 — 2026-11-18
+
+Several quick menus. K2 now shows the next menu and K3 closes the menu
+(both still changeable under "In the menu"; if you had the old defaults,
+K2 select and K3 back, they move to the new ones once). The shipped menus
+are your profile's menu as a dial and "Recent sessions", a plain drop list
+of every open Claude session with the one you last spoke to first and its
+project next to it. The "Menus" list on the Vibe Key page adds, renames,
+reorders and removes menus and sets each one's style (Dial or List) and
+what it shows. The menu opens on the menu you last used. Tab does the same
+in the menu window.
+
+The dial is now one helix. The highlighted entry sits at the top; the
+entries after it wind anticlockwise and deeper, the ones before it grow
+outward and fade. Every turn turns and grows the whole spiral one step, so
+the next entry comes up from the depth. Going into a sub-menu the spiral
+spins and sinks into the middle while the new level spins in from outside;
+Back does the reverse. There is no end marker and no eight-entry window any
+more: a long list simply goes deeper. Labels are fitted where each segment
+rests, upright.
+
+A thin bar under the caption runs down to the automatic close (8 s without
+input). The hint line is gone.
+
+The 1.0.0 folding into "More" is now off unless you pick a time ("Fold
+sessions after", default Never).
+
 ## 1.0.0 — 2026-11-18
 
 The quick menu's Claude sessions put what you use first. At every level
