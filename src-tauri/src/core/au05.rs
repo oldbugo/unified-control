@@ -1887,6 +1887,34 @@ impl Au05 {
             })
     }
 
+    /// 1.2.4 (real key 2026-11-19: knob left held UC's F24; every disable waited the whole 8 s and ended "no
+    /// time left", the buttons working through UC until then): the controls that keep the offline layer off the
+    /// key only because UC may not write them before "Set up". Empty while anything else is still to do.
+    fn offline_needs_set_up(&self) -> Vec<&'static str> {
+        let s = self.status.lock_or_recover();
+        let l = self.layers.lock_or_recover();
+        if !l.target_offline || s.sync.pending || s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending") {
+            return Vec::new();
+        }
+        let mut stuck = Vec::new();
+        for (i, (name, id)) in LAYER_CONTROLS.iter().enumerate() {
+            let idx = id.index() as usize;
+            let on = match s.known.keys[idx].as_ref() {
+                Some(k) => *k == l.offline[i],
+                None => l.echo[i].as_ref().is_none_or(|e| *e == l.offline[i]),
+            };
+            if on {
+                continue;
+            }
+            match s.jobs[idx].as_ref() {
+                // The job recomputed for the offline layer (not one left from the live layer).
+                Some(j) if j.state == "check" && j.typing == l.offline[i] => stuck.push(*name),
+                _ => return Vec::new(),
+            }
+        }
+        stuck
+    }
+
     /// Switch the key to its offline layer and wait (at most `budget`) until it is stored. Only an awake key
     /// is written. A key-typing command already sent is always waited for within the budget; when the budget
     /// runs out no new one is started, and one still unanswered is recorded (the next run waits before its
@@ -1898,6 +1926,11 @@ impl Au05 {
             if self.offline_on_key() {
                 self.log.line("layer: offline layer is on the key");
                 return true;
+            }
+            let unchecked = self.offline_needs_set_up();
+            if !unchecked.is_empty() {
+                self.log.line(&format!("layer: offline layer not stored ({} still types UC's code and is not checked on the real key: Set up on the page)", unchecked.join(", ")));
+                return false;
             }
             let (state, pending, blocked) = {
                 let s = self.status.lock_or_recover();
@@ -2272,15 +2305,16 @@ impl Worker {
                 if let Some(held) = s.known.keys[id.index() as usize].clone() {
                     l.seed(i, &held);
                     let typing = l.offline[i].clone();
-                    seeds.push((name.to_string(), typing.is_factory(), typing.label(*id)));
+                    seeds.push((name.to_string(), typing.is_factory(), typing.label(*id), held.label(*id)));
                 }
             }
         }
         if self.exiting.load(Ordering::SeqCst) {
             return;
         }
-        for (name, factory, label) in seeds {
-            self.log.line(&format!("layer: {name} offline typing taken from the key ({})", if factory { "factory" } else { "keys" }));
+        for (name, factory, label, held) in seeds {
+            // 1.2.4: what the key held too (UC's own codes are taken as factory).
+            self.log.line(&format!("layer: {name} offline typing taken from the key ({}; it holds {held})", if factory { "factory" } else { "keys" }));
             let patch = if factory {
                 json!({"offline": {"control": name, "mode": "factory", "seed": true}})
             } else {
@@ -4197,6 +4231,35 @@ mod tests {
         }
         assert_eq!(au.shutdown(), Some(false), "UC's code is still on the key");
         assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
+    }
+
+    /// 1.2.4 (real key 2026-11-19): knob left holds UC's F24 and was never set up, so UC may not write it.
+    /// Turning the Vibe Key off writes the rest and says at once that knob left needs Set up, instead of
+    /// waiting the whole budget and ending "no time left".
+    #[test]
+    fn going_offline_names_a_control_that_needs_set_up_instead_of_running_out_of_time() {
+        let au = worker();
+        let dir = log_dir("needs-set-up");
+        au.set_log_dir(dir.clone());
+        let fake = au.fake_handle().unwrap().clone();
+        let left = KeyId::KnobLeft.index() as usize;
+        fake.lock().typing[left] = KeyTyping::own_code(KeyId::KnobLeft);
+        au.configure(&json!({"enabled": true, "layers": 1, "knobTurn": "uc", "actions": {"k1": {"kind": "claudeDictation"}}}));
+        wait_for(&au, |s| s["keys"][0]["mode"] == "uc");
+        let end = Instant::now() + Duration::from_secs(5);
+        while let Err(e) = au.read_key(KeyId::KnobLeft) {
+            assert!(Instant::now() < end, "{e}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let start = Instant::now();
+        assert_eq!(au.shutdown_within(Some(Duration::from_secs(4))), Some(false), "not stored: knob left still types F24");
+        assert!(start.elapsed() < Duration::from_secs(2), "said at once, not after the budget: {:?}", start.elapsed());
+        assert_eq!(fake.lock().typing[0], KeyTyping::factory(), "K1 got its factory key back");
+        assert_eq!(fake.lock().typing[left], KeyTyping::own_code(KeyId::KnobLeft), "knob left is not written before Set up");
+        let log = log_text(&dir);
+        assert!(log.contains("offline layer not stored (knobLeft still types UC's code"), "{log}");
+        assert!(!log.contains("no time left"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An unchecked control UC needs to write always shows "Needs a check" (also while key changes are

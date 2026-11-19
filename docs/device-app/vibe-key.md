@@ -457,6 +457,22 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### A control that needs Set up is named at once, 1.2.4 (real key 2026-11-19)
+
+Log after 1.2.3: at a disable the five checked controls were written back (all "ok"), then "offline layer not
+stored (no time left)" 8 s later. Knob left had been read (seeded as factory: UC's own code counts as factory) and
+still held F24; it is not checked on the real key, so UC never writes it before "Set up". The user saw the
+buttons work for about 10 s after turning the Vibe Key off, then nothing.
+
+- `Au05::offline_needs_set_up`: with the offline target, nothing pending, waiting or sending, and every other
+  control on its offline typing, the controls whose only job is "check" for their offline typing.
+  `store_offline` stops at once when there are any: "offline layer not stored (knobLeft still types UC's code and
+  is not checked on the real key: Set up on the page)".
+- The seed log line names what the key held ("it holds F24").
+- Test: `going_offline_names_a_control_that_needs_set_up_instead_of_running_out_of_time` (fails without it).
+- Lag: the user power-cycled the key (off and on, not sleep) and the lag was gone; replies came within 250 ms
+  again. The same lag on another PC had pointed to the key, not UC.
+
 ### The offline layer really goes back on the key, 1.2.3 (user report 2026-11-19)
 
 User: with the Vibe Key off in UC, "all the physical button's not working ... I don't think it's responding".

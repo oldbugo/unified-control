@@ -1,6 +1,6 @@
 {
   "name": "unified-control",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "description": "Unified Control: one Windows tray app for the user's devices (Ulanzi D200H dock first)",
   "scripts": {

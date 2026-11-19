@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.4 — 2026-11-19
+
+Turning the Vibe Key off no longer hangs on for 8 seconds when one control
+can't be handed back. A control UC hasn't checked on the real key yet (such as
+knob left) is never written until you press Set up for it on the Vibe Key page.
+If that control still types UC's code, UC used to keep waiting until its time
+ran out, with the buttons still working through UC, and then stopped with
+"no time left". Now it hands back everything else, stops at once and names the
+control that needs Set up. The log also shows what the key held when UC first
+read a control.
+
 ## 1.2.3 — 2026-11-19
 
 Turning the Vibe Key off in UC (or quitting) gives the key its own settings
