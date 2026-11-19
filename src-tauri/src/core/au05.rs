@@ -1870,16 +1870,20 @@ impl Au05 {
     }
 
     /// Does the key hold the offline layer? Every known list equals its offline typing, no key job waits or is
-    /// being sent, no key-typing command is pending, and no earlier write is in doubt. Unknown lists count as
-    /// stored (UC did not change them in this run).
+    /// being sent, no key-typing command is pending, and no earlier write is in doubt. A list not read in this
+    /// run counts as stored only when the last list the key confirmed (`keyEcho`, saved) is its offline typing
+    /// or unknown. 1.2.3 (user report 2026-11-19: with the Vibe Key off, K1-K3 and the knob did nothing): before,
+    /// every unread list counted as stored, so a disable right after a stall logged "offline layer is on the
+    /// key" and stopped at once while the key still typed UC's own codes (F19-F23).
     fn offline_on_key(&self) -> bool {
         let s = self.status.lock_or_recover();
         let l = self.layers.lock_or_recover();
         !s.sync.pending
             && !s.sync.uncertain.iter().any(|u| *u)
             && !s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending")
-            && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| {
-                s.known.keys[id.index() as usize].as_ref().is_none_or(|k| *k == l.offline[i])
+            && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| match s.known.keys[id.index() as usize].as_ref() {
+                Some(k) => *k == l.offline[i],
+                None => l.echo[i].as_ref().is_none_or(|e| *e == l.offline[i]),
             })
     }
 
@@ -2418,7 +2422,10 @@ impl Worker {
             if s.sync.blocked || s.sync.no_new {
                 continue;
             }
-            if known.is_none() {
+            // 1.2.3: going offline, a control whose confirmed list is UC's own code is written straight back
+            // (no read first: a key-typing read can stall, and UC knows what it left there).
+            let own_left = l.target_offline && l.seeded[i] && l.echo[i].as_ref() == Some(&KeyTyping::own_code(*id));
+            if known.is_none() && !own_left {
                 s.sync.read_tried[idx] = true;
                 self.log.line(&format!("layer sync: read {name} first"));
                 s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None, read: true });
@@ -4153,6 +4160,45 @@ mod tests {
     }
 
     /// Real-key bug on 0.24.0: the knob press with "Open quick menu" kept typing Backspace and showed nothing.
+    /// 1.2.3 (user report 2026-11-19: with the Vibe Key off, K1-K3 and the knob did nothing): UC left its own
+    /// codes on the key in an earlier run (saved in `keyEcho`) and read nothing in this one. Disabling must
+    /// still give the key its offline typing back, written straight away (no read first); with the key
+    /// asleep it is reported as not stored instead of "on the key".
+    #[test]
+    fn going_offline_writes_back_uc_codes_left_on_the_key_by_an_earlier_run() {
+        let settings = json!({"enabled": true, "layers": 1, "actions": {"k1": {"kind": "claudeDictation"}},
+            "offline": {"k1": {"mode": "factory"}}, "offlineSet": {"k1": true},
+            "keyEcho": {"k1": KeyTyping::own_code(KeyId::K1).label(KeyId::K1)}});
+        let k1_cmds = |f: &FakeHandle, op: u8| f.received().into_iter().filter(|p| p[2] == 0x50 && p[3] == op && p.get(4).copied() == Some(0)).count();
+
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().typing[0] = KeyTyping::own_code(KeyId::K1);
+        au.configure(&settings);
+        wait_for(&au, |s| s["state"] == "connected");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(k1_cmds(&fake, 0x01) + k1_cmds(&fake, 0x00), 0, "live: the confirmed list is what UC wants, nothing sent");
+        assert_eq!(au.shutdown(), Some(true));
+        assert_eq!(fake.lock().typing[0], KeyTyping::factory(), "K1 types its factory key again");
+        assert_eq!(k1_cmds(&fake, 0x01), 0, "written straight back, not read first");
+        assert_eq!(k1_cmds(&fake, 0x00), 1);
+
+        // Asleep at quit: nothing written, and not reported as stored.
+        let au = worker();
+        au.fake_handle().unwrap().lock().standby_s = 2;
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().typing[0] = KeyTyping::own_code(KeyId::K1);
+        au.configure(&settings);
+        wait_for(&au, |s| s["state"] == "connected");
+        fake.sleep();
+        let end = Instant::now() + Duration::from_secs(20);
+        while au.status()["state"] != "asleep" && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(au.shutdown(), Some(false), "UC's code is still on the key");
+        assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
+    }
+
     /// An unchecked control UC needs to write always shows "Needs a check" (also while key changes are
     /// paused), is logged once, and is never written; Set up reads it, then sets it, once.
     #[test]

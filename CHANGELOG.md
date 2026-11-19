@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.3 — 2026-11-19
+
+Turning the Vibe Key off in UC (or quitting) gives the key its own settings
+back again. Before, if UC had not read the key yet in that run, it assumed the
+key already had its own settings, said so, and stopped. The key kept typing
+UC's codes, and with UC not listening the buttons and the knob did nothing.
+Now UC uses what it last confirmed on the key: where its own code is still
+there, it writes the key's own setting back straight away. If the key is
+asleep and can't be written, UC says the key's own settings are not stored
+instead of claiming they are.
+
 ## 1.2.2 — 2026-11-19
 
 The Vibe Key no longer lags right after it wakes. UC used to wait for the key

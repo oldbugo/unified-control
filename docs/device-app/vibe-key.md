@@ -457,6 +457,20 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### The offline layer really goes back on the key, 1.2.3 (user report 2026-11-19)
+
+User: with the Vibe Key off in UC, "all the physical button's not working ... I don't think it's responding".
+Settings: `keyEcho` k1 F20, k2 F21, k3 F22, knobPress F19, knobRight F23; offline all factory. Log: "page enabled =
+false", "layer: offline layer is on the key", then only "read ... first" lines and "worker stop".
+
+- Cause: `offline_on_key` counted every list not read in this run as stored. `store_offline` checks it before the
+  worker has queued any job, so after a stall (nothing read yet) it returned at once.
+- `offline_on_key`: an unread list counts as stored only when its `keyEcho` is its offline typing or absent.
+- `sync_layers`: going offline, a seeded control whose `keyEcho` is UC's own code is written straight back (no
+  key-typing read first). Asleep at quit or disable: "offline layer not stored (key not awake)", as for a list
+  known in this run.
+- Test: `going_offline_writes_back_uc_codes_left_on_the_key_by_an_earlier_run` (fails without the fix).
+
 ### Nothing sent while the key is in use, 1.2.2 (user report 2026-11-19)
 
 User: "the reaction, it's very laggy right now". Log: the key woke from switched off, UC restarted the settings
