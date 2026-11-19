@@ -457,6 +457,19 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Nothing sent while the key is in use, 1.2.2 (user report 2026-11-19)
+
+User: "the reaction, it's very laggy right now". Log: the key woke from switched off, UC restarted the settings
+reads while K1 was being pressed, `GetBattery` got no reply twice and sending paused 30 s.
+
+- `Worker::settled` now also counts `MenuCtl::key_seen` (a hotkey from the key's own codes: K1-K6 and the knob),
+  not only the wake and private control events. Key typing, page changes, held changes and "Read from key" wait
+  for the settle time (1.5 s) after the last press or turn.
+- `Worker::idle_for_reads`: the automatic settings reads also wait until the key has not been pressed or turned
+  for `READ_QUIET_SETTLES` (4) x the settle time (6 s) and no dictate & send is running. The page's "Read all
+  settings" is not held back. No new command and no change to the USB sequence.
+- Test: `nothing_is_sent_to_the_key_while_it_is_in_use`.
+
 ### Gentler shakes, fast turns, a list that keeps up, 1.2.1 (user feedback 2026-11-19)
 
 User: the twist is "in the right direction. But just make it a bit more gentle"; "if I hit the end and keep

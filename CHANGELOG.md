@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2 — 2026-11-19
+
+The Vibe Key no longer lags right after it wakes. UC used to wait for the key
+to be quiet before asking it for its settings (battery, timers, light, mic),
+but it did not count your presses and knob turns, so it could ask while you
+were using the key. The key then missed a reply and UC paused for 30 seconds.
+Now every press and turn counts: UC sends the key nothing of its own while you
+use it, and the automatic settings reads wait until you have left the key
+alone for 6 seconds and no dictation is running.
+
 ## 1.2.1 — 2026-11-19
 
 The dial shakes less. The twist on each turn is gentler again (2.5°), and

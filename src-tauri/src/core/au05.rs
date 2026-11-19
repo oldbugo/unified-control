@@ -103,6 +103,8 @@ pub const TOUCH_WAIT: Duration = Duration::from_secs(60);
 pub const STANDBY_MARGIN: Duration = Duration::from_secs(10);
 /// The read burst after the key wakes is capped by total time; reads still queued then are dropped.
 const READ_BURST_LIMIT: Duration = Duration::from_secs(10);
+/// The automatic settings reads wait until the key has not been pressed or turned for this many settle times.
+const READ_QUIET_SETTLES: u32 = 4;
 
 /// The Windows virtual key of each key's own code.
 pub fn own_vk(key: KeyId) -> u16 {
@@ -2432,8 +2434,23 @@ impl Worker {
     /// guard holds key typing back.
     /// The settle time has passed since the key woke and since its last control event (the driver applies it to
     /// sets only; UC applies it to key-typing reads too).
+    /// 1.2.2 (user report 2026-11-19, "very laggy" right after the key woke): a press or knob turn from the key's
+    /// own codes counts too. Those report nothing privately, so before this UC sent its reads while the key was
+    /// in use; one got no reply and sending paused for 30 s.
     fn settled(&self) -> bool {
-        self.quiet_from.lock_or_recover().is_none_or(|t| t.elapsed() >= self.config.settle)
+        let quiet = *self.quiet_from.lock_or_recover();
+        let used = *self.menu.key_seen.lock_or_recover();
+        [quiet, used].into_iter().flatten().max().is_none_or(|t| t.elapsed() >= self.config.settle)
+    }
+
+    /// 1.2.2: the automatic settings reads (nothing the user asked for) wait longer: not during a dictation, and
+    /// not until the key has not been pressed or turned for `READ_QUIET_SETTLES` × the settle time (6 s).
+    fn idle_for_reads(&self) -> bool {
+        if self.menu.dictate_busy.load(Ordering::SeqCst) {
+            return false;
+        }
+        let used = *self.menu.key_seen.lock_or_recover();
+        used.is_none_or(|t| t.elapsed() >= self.config.settle * READ_QUIET_SETTLES)
     }
 
     fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>, awake: bool) {
@@ -2728,7 +2745,8 @@ impl Worker {
             // The settings reads: awake for twice the settle time and settled since the last control event.
             let ready = awake
                 && awake_since.is_some_and(|t| t.elapsed() >= self.config.settle * 2)
-                && self.settled();
+                && self.settled()
+                && self.idle_for_reads();
             let cycle = reads.cycle;
             let batch = reads.next(ready);
             if !batch.is_empty() {
@@ -3607,6 +3625,29 @@ mod tests {
         let s = wait_for(&au, |s| s["standbyS"].is_number());
         assert!(start.elapsed() >= Duration::from_millis(900), "read after 2 × settle, not at once: {:?}", start.elapsed());
         assert!(s["micNr"].is_object() || wait_for(&au, |s| s["micNr"].is_object())["micNr"].is_object());
+        au.shutdown();
+    }
+
+    /// 1.2.2 (user report 2026-11-19: "very laggy" right after the key woke; the reads went out while K1 was
+    /// being pressed and stalled): while the key is pressed or turned, UC sends it nothing of its own. The reads
+    /// wait until it has not been used for 4 × the settle time.
+    #[test]
+    fn nothing_is_sent_to_the_key_while_it_is_in_use() {
+        let settle = Duration::from_millis(150);
+        let au = Au05::with_config(true, None, SessionConfig { settle, ..quick() });
+        au.fake_handle().unwrap().lock().status_period = Some(Duration::from_millis(100));
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k2": {"kind": "enter"}}}));
+        assert!(desk.press(hotkey::VK_F21), "K2 is claimed");
+        let using = Instant::now();
+        while using.elapsed() < Duration::from_millis(1500) {
+            desk.press(hotkey::VK_F21);
+            assert!(!au.status()["standbyS"].is_number(), "no settings read while K2 is being pressed");
+            std::thread::sleep(Duration::from_millis(80));
+        }
+        let stopped = Instant::now();
+        wait_for(&au, |s| s["standbyS"].is_number());
+        assert!(stopped.elapsed() >= Duration::from_millis(550), "read once it was left alone: {:?}", stopped.elapsed());
         au.shutdown();
     }
 
