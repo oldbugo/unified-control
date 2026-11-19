@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.1 — 2026-11-19
+
+The dial shakes less. The twist on each turn is gentler again (2.5°), and
+twists and bumps that follow each other quickly, such as turning on against the
+end of a list, get weaker each time (full, then about half, then a third...)
+and are full again after a short pause.
+
+Turned fast, a long dial list still flows. Before, every turn restarted the
+motion, so quick turns jumped straight to the end; now the ring chases where it
+should be at up to 20 entries a second, so the motion is always seen.
+
+The Recent sessions list keeps up when you scroll back and forth. It no longer
+uses the browser's smooth scrolling (which restarted and fell behind on every
+step) and is no longer rebuilt on every move: the highlight moves in place and
+the list follows quickly.
+
 ## 1.2.0 — 2026-11-19
 
 Long lists on the dial flow now. Instead of dashed edges, the last block

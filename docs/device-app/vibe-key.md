@@ -457,6 +457,22 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### Gentler shakes, fast turns, a list that keeps up, 1.2.1 (user feedback 2026-11-19)
+
+User: the twist is "in the right direction. But just make it a bit more gentle"; "if I hit the end and keep
+scrolling through ... it just keeps shaking around ... the first few ones are ... whatever it is, but subsequent
+ones it gets less and less"; turned fast "it almost happens instantly ... I do scroll really fast and it still
+doesn't completely miss that animation" (a speed cap, "pretty high"); the Recent list "feels a little bit laggy
+... lagging behind".
+
+- **Shake** (`shakeStrength`): twist 2.5° (240 ms), bump 4 px; each twist or bump within 600 ms of the last is
+  0.55 × the one before; full again after 600 ms quiet. The last strength is in `data-shake`.
+- **Flow chase** (`flow`, `flowPos`): the ring's drawn offset chases the target with a 75 ms time constant,
+  at least 4 and at most 20 slots per second. A new turn continues from where the ring is drawn; every row that
+  passes the visible slots on the way is drawn. The flow runs on its own (a bump at the end does not cut it).
+- **List** (`renderList`, `scrollListTo`): rebuilt only when its rows change; a move only moves the highlight and
+  the group mark. Scrolling follows the latest target with a 45 ms time constant; CSS `scroll-behavior` is auto.
+
 ### Long lists flow; the Recent list grouped, 1.2.0 (user feedback 2026-11-19)
 
 User: the twist is "the right one ... just a little too much"; for long lists "instead of using a dashed line,

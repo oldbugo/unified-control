@@ -76,7 +76,7 @@ html, body { margin: 0; height: 100%; background: transparent; color: var(--text
 .qm-list-title { padding: 10px 14px; font-size: var(--fs-body); }
 .qm-list-title .qm-face { font-size: var(--fs-small); }
 .qm-list-pos { margin-left: auto; font-size: var(--fs-small); color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.qm-list { padding: 6px 8px 10px; scroll-behavior: smooth; }
+.qm-list { padding: 6px 8px 10px; scroll-behavior: auto; }
 .qm-group { position: sticky; top: -6px; z-index: 1; display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; padding: 6px 10px 4px; background: var(--surface-1); font-size: var(--fs-small); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
 .qm-group:first-child { margin-top: 0; }
 .qm-group[data-current="true"] { color: var(--accent); border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent); }

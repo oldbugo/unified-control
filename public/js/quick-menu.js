@@ -22,13 +22,30 @@ const SEP='␟', ANIM_MS=320, BUMP_MS=120, GAP=1.2;
 /** 1.1.1 (user feedback 2026-11-18: the old dial's design, turning to the right, with the whole circle moving):
  * each move twists the whole ring this far in the turn's direction (clockwise for the next entry) and it settles
  * back; a level change adds a spin of SPIN degrees to the grow or shrink. */
-const TWIST=4, TWIST_MS=260, SPIN=70;
+const TWIST=2.5, TWIST_MS=240, SPIN=70, BUMP_PX=4;
+/** 1.2.1 (user feedback 2026-11-19: turning on against the end "just keeps shaking around"): twists and bumps that
+ * follow each other quickly get weaker each time (the first full, then 55 %, 30 %...), and are full again after a
+ * short pause. */
+const SHAKE_DECAY=0.55, SHAKE_RESET_MS=600;
+let shake={n:0,at:0};
+function shakeStrength(){
+  const now=performance.now();
+  if(now-shake.at>SHAKE_RESET_MS)shake.n=0;
+  shake={n:shake.n+1,at:now};
+  const k=Math.pow(SHAKE_DECAY,shake.n-1);
+  const d=document.getElementById('qm-dial');if(d)d.dataset.shake=k.toFixed(3);
+  return k;
+}
 /** 1.2.0 (user request 2026-11-19): a list longer than the ring flows. Instead of dashed "more" edges, the tail
  * fades along the line and the next entry peeks out from under the top block (Close/Back); with entries before the
  * window the top block fades toward its other side and the previous entry peeks out there. When the window moves,
  * every block slides along the circle (anticlockwise going toward the tail), the one leaving tucks under the top
  * block and the new one comes out from under it. */
-const FLOW_MS=260, RIM=7, STEP_DEG=360/MAX_SLOTS;
+const RIM=7, STEP_DEG=360/MAX_SLOTS;
+/** 1.2.1 (user feedback 2026-11-19: turned fast, "it almost happens instantly"): the ring chases its target instead
+ * of restarting a fixed animation on every turn. It closes in with a time constant of FLOW_TAU ms, never slower
+ * than FLOW_MIN and never faster than FLOW_MAX slots per second, so even fast turns are seen flowing. */
+const FLOW_TAU=75, FLOW_MIN=4, FLOW_MAX=20;
 const GLYPH={close:'✕',back:'‹'};
 
 // Text widths for fitting the labels (the label font, semibold so the highlight fits too).
@@ -175,36 +192,49 @@ function longLabelsSvg(m){
   }).join('');
 }
 
-/** The window moved: every row slides from its old place to its new one along the circle. */
-let flowFrame=0;
+/** The window moved: every row slides along the circle from where it is drawn now (`flowPos`, a fraction while
+ * moving) toward the new offset, chasing it when turns come faster than the motion. */
+let flowFrame=0, flowPos=null, flowKey='';
+function placeFlow(m,p,parts){
+  const {slots,labs,peeks}=parts;
+  for(const g of slots){
+    const row=Number(g.dataset.row),s=row-p,op=flowOpacity(s);
+    if(op<=0){g.setAttribute('display','none');continue;}
+    g.removeAttribute('display');
+    g.querySelector('path').setAttribute('d',flowGeom(m,s,row).d);
+    g.setAttribute('opacity',op.toFixed(3));
+  }
+  for(const l of labs){
+    const row=Number(l.dataset.row),s=row-p,sc=Number(l.dataset.sc),op=flowOpacity(s);
+    if(op<=0){l.setAttribute('display','none');continue;}
+    l.removeAttribute('display');
+    const [cx,cy]=centroid(flowBox(m,sc,row)),[px,py]=centroid(flowBox(m,s,row));
+    l.setAttribute('transform',`translate(${(px-cx).toFixed(2)} ${(py-cy).toFixed(2)})`);
+    l.setAttribute('opacity',(op*op).toFixed(3));
+  }
+  const settle=Math.max(0,1-Math.abs(m.offset-p));
+  for(const k of peeks)k.setAttribute('opacity',settle.toFixed(3));
+}
 function flow(m,from){
   cancelAnimationFrame(flowFrame);
   const svg=$('qm-dial'),ring=svg.querySelector('.qm-ring[data-flow="true"]');
-  if(!ring)return;
+  if(!ring){flowPos=m.offset;return;}
   svg.dataset.flows=String(Number(svg.dataset.flows||0)+1);
-  const slots=[...ring.querySelectorAll('.qm-slot')].filter(g=>g.dataset.row!=='0');
-  const labs=[...svg.querySelectorAll('.qm-labels .qm-lab')].filter(g=>g.dataset.row!=='0');
-  const peeks=[...ring.querySelectorAll('.qm-peek')];
+  const parts={slots:[...ring.querySelectorAll('.qm-slot')].filter(g=>g.dataset.row!=='0'),
+    labs:[...svg.querySelectorAll('.qm-labels .qm-lab')].filter(g=>g.dataset.row!=='0'),peeks:[...ring.querySelectorAll('.qm-peek')]};
   const fills=[...ring.querySelectorAll('[data-fill]')];
   for(const f of fills)f.style.fill='';
-  const t0=performance.now(),ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+  flowPos=from;
+  placeFlow(m,flowPos,parts); // drawn where it was at once: no flash of the end state
+  let t0=performance.now();
   const tick=now=>{
-    const t=Math.min((now-t0)/FLOW_MS,1),p=from+(m.offset-from)*ease(t);
-    for(const g of slots){
-      const row=Number(g.dataset.row),s=row-p,op=flowOpacity(s);
-      g.querySelector('path').setAttribute('d',flowGeom(m,s,row).d);
-      g.setAttribute('opacity',op.toFixed(3));
-      if(op<=0)g.setAttribute('display','none');else g.removeAttribute('display');
-    }
-    for(const l of labs){
-      const row=Number(l.dataset.row),s=row-p,sc=Number(l.dataset.sc),op=flowOpacity(s);
-      const [cx,cy]=centroid(flowBox(m,sc,row)),[px,py]=centroid(flowBox(m,s,row));
-      l.setAttribute('transform',`translate(${(px-cx).toFixed(2)} ${(py-cy).toFixed(2)})`);
-      l.setAttribute('opacity',(op*op).toFixed(3));
-      if(op<=0)l.setAttribute('display','none');else l.removeAttribute('display');
-    }
-    for(const k of peeks)k.setAttribute('opacity',t.toFixed(3));
-    if(t<1)flowFrame=requestAnimationFrame(tick);
+    const dt=Math.min(now-t0,50);t0=now;
+    const d=m.offset-flowPos,dist=Math.abs(d);
+    const step=Math.min(dist,Math.max(dist*(1-Math.exp(-dt/FLOW_TAU)),FLOW_MIN*dt/1000),FLOW_MAX*dt/1000);
+    flowPos+=Math.sign(d)*step;
+    if(Math.abs(m.offset-flowPos)<1e-3)flowPos=m.offset;
+    placeFlow(m,flowPos,parts);
+    if(flowPos!==m.offset)flowFrame=requestAnimationFrame(tick);
     else for(const f of fills)f.style.fill=f.dataset.fill;
   };
   flowFrame=requestAnimationFrame(tick);
@@ -274,13 +304,14 @@ function animate(groups,labels){
 let twistFrame=0;
 function twist(dir){
   cancelAnimationFrame(twistFrame);
+  const k=shakeStrength();
   const els=[...$('qm-dial').querySelectorAll('.qm-rings,.qm-labels')];
   const t0=performance.now();
   $('qm-dial').dataset.twists=String(Number($('qm-dial').dataset.twists||0)+1);
   const tick=now=>{
     const t=Math.min((now-t0)/TWIST_MS,1);
     // Out quickly, back with a soft settle.
-    const a=dir*TWIST*Math.sin(Math.PI*Math.min(t*1.6,1))*(1-t*0.35)*(t<1?1:0);
+    const a=dir*TWIST*k*Math.sin(Math.PI*Math.min(t*1.6,1))*(1-t*0.35)*(t<1?1:0);
     for(const el of els)el.setAttribute('transform',`rotate(${a.toFixed(2)})`);
     if(t<1)twistFrame=requestAnimationFrame(tick);
   };
@@ -297,10 +328,10 @@ function bump(dir){
   const a=m?.angles[m.shown.indexOf(row)];
   if(!a)return;
   const [px,py]=[0,0],[tx,ty]=tangent(a.mid);
-  const t0=performance.now();
+  const t0=performance.now(),amp=BUMP_PX*shakeStrength();
   $('qm-dial').dataset.bumps=String(Number($('qm-dial').dataset.bumps||0)+1);
   const tick=now=>{
-    const t=Math.min((now-t0)/BUMP_MS,1),k=Math.sin(t*Math.PI)*6*dir;
+    const t=Math.min((now-t0)/BUMP_MS,1),k=Math.sin(t*Math.PI)*amp*dir;
     const tr=`translate(${(px+tx*k).toFixed(2)} ${(py+ty*k).toFixed(2)})`;
     g.setAttribute('transform',tr);lab?.setAttribute('transform',tr);
     if(t<1)requestAnimationFrame(tick);
@@ -310,11 +341,49 @@ function bump(dir){
 
 /** The list style (1.1.0; 1.2.0, user request 2026-11-19: grouped by project, no Close row, bigger and easier to
  * follow). Rows that carry a `project` get a heading per project; the highlighted row stays near the middle. */
+let listSig='', scrollFrame=0;
+/** 1.2.1 (user feedback 2026-11-19: scrolling the list "feels a little bit laggy ... lagging behind"): no browser
+ * smooth scrolling (it restarted on every step); the list follows the latest target quickly (time constant 45 ms)
+ * and is only rebuilt when its rows change. */
+function scrollListTo(list,want){
+  cancelAnimationFrame(scrollFrame);
+  let t0=performance.now();
+  const tick=now=>{
+    const dt=Math.min(now-t0,50);t0=now;
+    const d=want-list.scrollTop;
+    if(Math.abs(d)<1){list.scrollTop=want;return;}
+    list.scrollTop+=d*(1-Math.exp(-dt/45));
+    scrollFrame=requestAnimationFrame(tick);
+  };
+  scrollFrame=requestAnimationFrame(tick);
+}
+function listTarget(list){
+  const el=list.querySelector('[data-hl]');if(!el)return null;
+  // Keep the highlight near the middle (with its heading in view when it is the first of its project).
+  const head=el.previousElementSibling?.classList.contains('qm-group')?el.previousElementSibling:null;
+  const top=(head||el).offsetTop, want=top-list.clientHeight/2+el.offsetHeight;
+  return Math.max(0,Math.min(want,list.scrollHeight-list.clientHeight));
+}
 function renderList(v){
   const rows=Array.isArray(v.rows)?v.rows:[];
   const sel=Math.max(0,Math.min(v.highlight|0,rows.length-1));
   const list=$('qm-list');
   const first=v.noClose?1:0;
+  const sig=JSON.stringify([first,rows.map(r=>[r.label,r.detail,r.project,r.type,r.working])]);
+  if(sig===listSig){
+    // The same rows: move the highlight only (no rebuild), then scroll quickly to it.
+    for(const e of list.querySelectorAll('[data-hl]')){e.removeAttribute('data-hl');e.removeAttribute('aria-selected');}
+    const el=list.querySelector(`.qm-row[data-row="${sel}"]`);
+    if(el){el.dataset.hl='true';el.setAttribute('aria-selected','true');}
+    for(const g of list.querySelectorAll('.qm-group')){
+      const a=Number(g.dataset.from),b=Number(g.dataset.to);
+      if(sel>=a&&sel<b)g.dataset.current='true';else delete g.dataset.current;
+    }
+    const want=listTarget(list);if(want!==null)scrollListTo(list,want);
+    listHeader(v,rows,sel,first);
+    return;
+  }
+  listSig=sig;
   let html='',group=null;
   const count=rows.length-first;
   for(let i=first;i<rows.length;i++){
@@ -324,7 +393,7 @@ function renderList(v){
       group=project;
       const n=rows.slice(i).filter(x=>x.project===project).length;
       const has=sel>=i&&sel<i+n;
-      html+=`<li class="qm-group" role="presentation"${has?' data-current="true"':''}><span class="qm-group-name">${esc(project||'Other')}</span><span class="qm-group-count">${n}</span></li>`;
+      html+=`<li class="qm-group" role="presentation" data-from="${i}" data-to="${i+n}"${has?' data-current="true"':''}><span class="qm-group-name">${esc(project||'Other')}</span><span class="qm-group-count">${n}</span></li>`;
     }
     const glyph=GLYPH[r.type];
     const hl=i===sel?' data-hl="true" aria-selected="true"':'';
@@ -332,14 +401,13 @@ function renderList(v){
     html+=`<li class="qm-row${project!==null?' qm-in-group':''}" role="option" data-row="${i}" data-kind="${kind(r)}"${hl}>${glyph?`<span class="qm-glyph">${glyph}</span>`:dot}<span class="qm-row-text"><span class="qm-row-name">${esc(r.label)}</span>${r.detail?`<span class="qm-row-detail">${esc(r.detail)}</span>`:''}</span>${r.type==='submenu'?'<span class="qm-glyph">›</span>':''}</li>`;
   }
   list.innerHTML=html;
-  const into=()=>{
-    const el=list.querySelector('[data-hl]');if(!el)return;
-    // Keep the highlight near the middle (with its heading in view when it is the first of its project).
-    const head=el.previousElementSibling?.classList.contains('qm-group')?el.previousElementSibling:null;
-    const top=(head||el).offsetTop, want=top-list.clientHeight/2+el.offsetHeight;
-    list.scrollTop=Math.max(0,Math.min(want,list.scrollHeight-list.clientHeight));
-  };
+  // A new list: straight to the highlight (and again once laid out).
+  const into=()=>{const want=listTarget(list);if(want!==null)list.scrollTop=want;};
   into();requestAnimationFrame(into);
+  listHeader(v,rows,sel,first);
+}
+function listHeader(v,rows,sel,first){
+  const count=rows.length-first;
   const faces=Array.isArray(v.faces)?v.faces:[];
   const face=faces.length>1?`<span class="qm-face">${(v.faceIndex|0)+1}/${faces.length} ${esc(v.face||'')}</span>`:'';
   const title=Array.isArray(v.title)?v.title:[];
@@ -360,7 +428,7 @@ function timer(v){
 }
 
 export function render(v){
-  if(!v||v.open===false){last={open:false,depth:0,rings:new Map(),bump:last.bump};cancelAnimationFrame(frame);return;}
+  if(!v||v.open===false){last={open:false,depth:0,rings:new Map(),bump:last.bump};cancelAnimationFrame(frame);cancelAnimationFrame(flowFrame);flowPos=null;flowKey='';listSig='';return;}
   const style=v.style==='list'?'list':'dial';
   $('qm').dataset.style=style;
   timer(v);
@@ -385,8 +453,16 @@ export function render(v){
   const leaving=moved?[...last.rings.values()].filter(p=>!m.some(r=>r.level===p.level)):[];
   // The window moved on the same level (1.2.0): the rows that pass through are drawn too, and everything flows.
   const act=m.at(-1),prev=last.open&&!moved?last.rings.get(depth):null;
-  const flowFrom=prev&&act.count>MAX_SLOTS&&prev.count===act.count&&prev.offset!==act.offset?prev.offset:null;
-  if(flowFrom!==null)act.transit=prev.shown.slice(1).filter(r=>!act.shown.includes(r));
+  const key=`${faceKey}${SEP}${(Array.isArray(v.title)?v.title:[]).join(SEP)}`;
+  const same=prev&&act.count>MAX_SLOTS&&prev.count===act.count&&key===flowKey&&flowPos!==null;
+  const flowFrom=same&&Math.abs(flowPos-act.offset)>1e-3?flowPos:null;
+  if(!same){cancelAnimationFrame(flowFrame);flowPos=act.count>MAX_SLOTS?act.offset:null;}
+  flowKey=key;
+  if(flowFrom!==null){
+    // Every row that passes through the visible slots on the way is drawn too.
+    const lo=Math.floor(Math.min(flowFrom,act.offset))+1,hi=Math.min(act.count-1,Math.ceil(Math.max(flowFrom,act.offset))+MAX_SLOTS-1);
+    act.transit=[];for(let r=lo;r<=hi;r++)if(!act.shown.includes(r))act.transit.push(r);
+  }
   svg.innerHTML=`<g class="qm-rings">${leaving.map(ringSvg).join('')}${m.map(ringSvg).join('')}</g><g class="qm-labels" id="qm-labels">${m.filter(r=>!r.active).map(parentLabel).join('')}${m.filter(r=>r.active).map(labelsSvg).join('')}</g>`;
   const groups=[];
   if(moved){
@@ -406,10 +482,11 @@ export function render(v){
   const hl=v.highlight|0;
   last={open:true,depth,rings:new Map(m.map(r=>[r.level,r])),bump:n,hl,face:faceKey};
   // A turn past an end since the last render (not on opening).
+  // The window moved: the ring flows (1.2.1: on its own, so a bump at the end never cuts it short).
+  if(flowFrom!==null)flow(act,flowFrom);
   if(wasOpen&&n>bumpBefore&&!moved)bump(v.bump.dir>0?1:-1);
   // A move on the same level: the whole dial twists the way it went (right for the next entry).
-  else if(flowFrom!==null)flow(act,flowFrom);
-  else if(wasOpen&&!moved&&before!==undefined&&hl!==before)twist(hl>before?1:-1);
+  else if(flowFrom===null&&wasOpen&&!moved&&before!==undefined&&hl!==before)twist(hl>before?1:-1);
 }
 
 // ---- Dragging (0.35.0). Windows' own move loop takes focus from the page while the window is dragged by its

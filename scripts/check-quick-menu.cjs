@@ -292,6 +292,32 @@ const views={
   assert.deepEqual(await page.locator('.qm-peek').evaluateAll(e=>e.map(x=>x.dataset.side)),['before'],'only the peek before');
   await shoot('31-end',2);
 
+  // 1.2.1: turned fast, the ring still flows: it chases the target instead of jumping. Four turns 20 ms apart:
+  // shortly after the last one the window is still on its way, then it settles at the last offset.
+  const pathOf=r=>ring(1).locator(`.qm-slot[data-row="${r}"] path`).getAttribute('d');
+  await show('many',{fresh:true,extra:{highlight:1}});
+  await show('many',{extra:{highlight:7}});
+  await page.waitForTimeout(400);
+  const fl0=await flows();
+  for(const h of [8,9,10,11]){await show('many',{extra:{highlight:h}});await page.waitForTimeout(20);}
+  await page.waitForTimeout(40);
+  const midPath=await pathOf(9);
+  assert.equal(await flows(),fl0+4,'every turn keeps the flow going');
+  await page.waitForTimeout(900);
+  const endPath=await pathOf(9);
+  assert.notEqual(midPath,endPath,'fast turns: still flowing shortly after the last turn');
+  assert.equal(await ring(1).locator('.qm-slot[data-row="4"]').getAttribute('display'),'none','settled four slots on');
+  assert.equal(await visible().count(),8,'eight blocks once settled');
+
+  // 1.2.1: bumps (and twists) that follow each other quickly get weaker; after a pause they are full again.
+  await show('many',{fresh:true,extra:{highlight:31,bump:{dir:1,n:10}}});
+  const shakes=[];
+  for(let i=11;i<=14;i++){await show('many',{extra:{highlight:31,bump:{dir:1,n:i}}});shakes.push(Number(await page.evaluate(()=>document.getElementById('qm-dial').dataset.shake)));await page.waitForTimeout(60);}
+  for(let i=1;i<shakes.length;i++)assert.ok(shakes[i]<shakes[i-1],`each quick bump weaker: ${shakes}`);
+  await page.waitForTimeout(700);
+  await show('many',{extra:{highlight:31,bump:{dir:1,n:15}}});
+  assert.equal(Number(await page.evaluate(()=>document.getElementById('qm-dial').dataset.shake)),1,'full again after a pause');
+
   // 3 entries (and Back): four quarter segments with the taper.
   await show('three',{fresh:true});
   assert.equal(await ring(1).locator('.qm-seg').count(),4);
@@ -321,14 +347,14 @@ const views={
   await page.waitForTimeout(70);
   const rot=await page.evaluate(()=>document.querySelector('.qm-rings').getAttribute('transform'));
   const deg=Number(/rotate\((-?[\d.]+)\)/.exec(rot||'')?.[1]);
-  assert.ok(deg>2,`turning right twists the dial clockwise mid-way: ${rot}`);
+  assert.ok(deg>1,`turning right twists the dial clockwise mid-way: ${rot}`);
   assert.equal(await page.evaluate(()=>document.querySelector('.qm-labels').getAttribute('transform')),rot,'labels turn with it');
   await page.waitForTimeout(400);
   assert.match(await page.evaluate(()=>document.querySelector('.qm-rings').getAttribute('transform')),/rotate\((-?0\.00)\)/,'settled');
   await show('top',{extra:{highlight:2}});
   await page.waitForTimeout(70);
   const back=Number(/rotate\((-?[\d.]+)\)/.exec(await page.evaluate(()=>document.querySelector('.qm-rings').getAttribute('transform')))?.[1]);
-  assert.ok(back<-2,`turning left twists it anticlockwise: ${back}`);
+  assert.ok(back<-0.4,`turning left twists it anticlockwise (weaker, it came quickly): ${back}`);
   assert.equal(await twists(),t0+2,'one twist per move');
   // A level change spins: mid-way the new ring is turned away from where it ends.
   await page.waitForTimeout(400);
@@ -364,6 +390,18 @@ const views={
   const middle=await page.evaluate(()=>{const l=document.getElementById('qm-list'),r=l.querySelector('[data-hl]').getBoundingClientRect(),b=l.getBoundingClientRect();return {inView:r.top>=b.top-1&&r.bottom<=b.bottom+1,off:Math.abs((r.top+r.bottom)/2-(b.top+b.bottom)/2)/b.height};});
   assert.ok(middle.inView&&middle.off<0.3,`the highlight near the middle: ${JSON.stringify(middle)}`);
   assert.equal(await page.locator('.qm-group[data-current="true"] .qm-group-name').textContent(),'CoolerScreen');
+  // 1.2.1: the same rows: the highlight moves in place (no rebuild) and the list keeps up when turned fast.
+  await page.evaluate(()=>{document.querySelector('.qm-row[data-row="2"]').dataset.mark='kept';});
+  for(const h of [13,14,15,14,13,12,11,10,11,12]){await list(h);await page.waitForTimeout(25);}
+  assert.equal(await page.locator('.qm-row[data-mark="kept"]').count(),1,'rows are not rebuilt for a move');
+  assert.equal(await page.locator('.qm-row[data-hl="true"]').count(),1,'one highlight');
+  await page.waitForTimeout(250);
+  const kept=await page.evaluate(()=>{const l=document.getElementById('qm-list'),r=l.querySelector('[data-hl]').getBoundingClientRect(),b=l.getBoundingClientRect();return {row:l.querySelector('[data-hl]').dataset.row,off:Math.abs((r.top+r.bottom)/2-(b.top+b.bottom)/2)/b.height};});
+  assert.equal(kept.row,"12");
+  assert.ok(kept.off<0.3,`caught up within 250 ms: ${JSON.stringify(kept)}`);
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('qm-list')).scrollBehavior),'auto','no browser smooth scrolling');
+  await list(12);
+  await page.waitForTimeout(300);
   await page.evaluate(()=>{window.__inputs=[];});
   await page.locator('.qm-row[data-row="13"]').click();
   assert.deepEqual(await page.evaluate(()=>window.__inputs),[{op:'pick',index:13}]);
