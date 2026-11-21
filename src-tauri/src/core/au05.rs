@@ -37,6 +37,10 @@ pub const OFF_MESSAGE: &str = "Receiver connected · Vibe Key probably switched 
 pub const AWAKE_MESSAGE: &str = "Receiver connected · Vibe Key awake";
 pub const ASLEEP_MESSAGE: &str = "Receiver connected · Vibe Key asleep. Press a key or turn the knob to wake it";
 pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the knob to wake the Vibe Key";
+/// 1.3.0 (real receiver 2026-11-21): nothing at all since the receiver was opened. Either the key is switched off,
+/// or the receiver is stuck (after Windows started from a Fast Startup shutdown it passed nothing on until it was
+/// replugged). UC cannot tell these apart, so it says both and offers Restart receiver.
+pub const SILENT_MESSAGE: &str = "Receiver connected · nothing from the Vibe Key since the receiver was opened. Switch the key on; if it is on, the receiver may be stuck: Restart receiver";
 
 /// The standby time used before the key's own was read (0.36.0): the last one read (kept in the settings),
 /// else 300 s.
@@ -72,7 +76,7 @@ pub fn shown_state(
         Some(_) => ("asleep", ASLEEP_MESSAGE),
         // Nothing since the connection opened: waiting, then (past standby + 2 minutes) probably off.
         None if state == SessionState::Awake => ("connected", AWAKE_MESSAGE),
-        None if since_open > standby + Duration::from_secs(120) => ("off", OFF_MESSAGE),
+        None if since_open > standby + Duration::from_secs(120) => ("silent", SILENT_MESSAGE),
         None => ("waiting", WAITING_MESSAGE),
     }
 }
@@ -2017,6 +2021,30 @@ impl Au05 {
         tx.send(Cmd::Reconnect).map_err(|_| "The Vibe Key worker is unavailable".to_string())
     }
 
+    /// The page's Restart receiver (1.3.0): Windows restarts the receiver's USB device (it asks for permission),
+    /// then the worker reconnects. Only when the user clicks it; the fake key only logs it.
+    pub fn restart_receiver(&self) -> Result<(), String> {
+        if self.tx.lock_or_recover().is_none() {
+            return Err("Enable the Vibe Key first".into());
+        }
+        self.log.line("page restart receiver: asking Windows");
+        let result = if self.fake.is_some() {
+            Ok("fake receiver".to_string())
+        } else if super::buildinfo::fake_device().is_some() {
+            Err("Test mode never restarts the real receiver".to_string())
+        } else {
+            super::au05_receiver::restart()
+        };
+        match &result {
+            Ok(id) => self.log.line(&format!("receiver restarted by Windows ({id})")),
+            Err(e) => self.log.line(&format!("receiver not restarted: {e}")),
+        }
+        result?;
+        // The receiver goes away and comes back: open it again from a clean state.
+        let _ = self.reconnect();
+        Ok(())
+    }
+
     /// The hotkeys UC holds now (the Input tester marks these key presses: other apps never get them).
     pub fn claimed_hotkeys(&self) -> Vec<u16> {
         self.hotkeys.lock_or_recover().iter().filter(|(_, r)| r.is_ok()).map(|(vk, _)| *vk).collect()
@@ -2063,6 +2091,7 @@ impl Au05 {
                             ("waiting", "paused") => "Waiting: sending is paused after a slow reply".to_string(),
                             ("waiting", "suspended") => "Stopped after slow replies: use Reconnect".to_string(),
                             ("waiting", "off") => "Waiting: the key seems switched off. Hold its power button 2–3 s".to_string(),
+                            ("waiting", "silent") => "Waiting: nothing from the key. Switch it on, or restart the receiver".to_string(),
                             ("waiting", _) => "Waiting for the key: press any key to wake it".to_string(),
                             ("sending", _) => "Sending to the key (it can take up to 20 seconds)".to_string(),
                             ("done", _) => "Done".to_string(),
@@ -2730,7 +2759,7 @@ impl Worker {
                 *self.quiet_from.lock_or_recover() = Some(Instant::now());
                 awake_since = Some(Instant::now());
                 // Woke from "probably switched off": its values may have changed while it was off.
-                if last_state.is_some_and(|(s, _)| s == "off") {
+                if last_state.is_some_and(|(s, _)| s == "off" || s == "silent") {
                     self.log.line("woke from switched off: reading the settings again");
                     reads.restart();
                     self.status.lock_or_recover().reads_failed = false;
@@ -3384,7 +3413,7 @@ mod tests {
         assert_eq!(shown_state(SessionState::Asleep, Some(s(9000)), s(9000), sb, None).0, "asleep", "power-off not known");
         assert_eq!(shown_state(SessionState::Awake, Some(s(400)), s(400), sb, po), ("connected", AWAKE_MESSAGE), "a message: awake at once");
         assert_eq!(shown_state(SessionState::WaitingForKey, None, s(10), sb, po).0, "waiting");
-        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(421), sb, po).0, "off", "nothing since the connection opened");
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(421), sb, po).0, "silent", "nothing since the connection opened (1.3.0)");
         assert_eq!(shown_state(SessionState::Paused, Some(s(1)), s(30), sb, po).0, "paused");
         // The times are kept in the settings (used before the key answers after a start).
         let mut au = sanitize(&json!({"knownTimes": {"standbyS": 0, "sleepS": 99_999}}));

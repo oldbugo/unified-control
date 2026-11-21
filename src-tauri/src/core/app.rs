@@ -862,6 +862,12 @@ impl App {
         au05.reconnect().map_err(CoreError::new)?;
         Ok(self.au05_state())
     }
+    /// The page's Restart receiver (1.3.0): Windows asks for permission, then restarts the receiver.
+    pub fn au05_restart_receiver(&self) -> CoreResult<Value> {
+        let au05 = self.au05.get().ok_or_else(|| CoreError::new("The Vibe Key worker is unavailable"))?;
+        au05.restart_receiver().map_err(CoreError::new)?;
+        Ok(self.au05_state())
+    }
     /// Debug fake instances only.
     pub fn au05_test_control(&self, patch: &Value) -> CoreResult<Value> {
         if !cfg!(debug_assertions) || super::buildinfo::fake_device().is_none() {

@@ -457,6 +457,28 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### No signal, and Restart receiver, 1.3.0 (real receiver 2026-11-21)
+
+User: the page said "probably off" though the receiver's light was solid; "if this is a recurring issue, that
+doesn't make this device very usable". Log: from the receiver being opened at 10:15 (after Windows started from
+a Fast Startup shutdown: one boot ID, "returned from a low power state") no message and no press for 1.5 h, also
+after the key was power-cycled; a replug brought it back at once. Fast Startup stays on (user's choice), so:
+"Message + restart button".
+
+- New state `silent` (`shown_state`): nothing since the receiver was opened, past standby + 2 minutes (was
+  "off"). UC cannot tell a switched-off key from a stuck receiver, so the message says both. A wake from
+  `silent` reads the settings again, as from `off`. "off" (was talking, then quiet past its power-off time) is
+  shown as "Vibe Key off: no signal".
+- Restart receiver (`au05_receiver.rs`, command `au05_restart_receiver`): finds the one present
+  `USB\VID_FFF1&PID_00DD\<serial>` (the composite device, not an interface; none or several: not restarted),
+  checks its characters, and runs `%SystemRoot%\System32\pnputil.exe /restart-device "<id>"` with the `runas`
+  verb (the Windows permission prompt, no console window), waiting at most a minute; declined prompt, exit code
+  3010 or another code are reported. Then the worker reconnects. Only from the page's button (in the status line
+  for `silent`/`off`, and under Device); the fake key only logs it; test mode refuses. Nothing is sent to the
+  key or the receiver by UC itself.
+- Not yet tried on a stuck receiver: whether a device restart clears it as a replug does is known only the next
+  time it happens.
+
 ### A control that needs Set up is named at once, 1.2.4 (real key 2026-11-19)
 
 Log after 1.2.3: at a disable the five checked controls were written back (all "ok"), then "offline layer not

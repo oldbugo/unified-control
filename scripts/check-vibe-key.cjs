@@ -65,6 +65,7 @@ const server=http.createServer((req,res)=>{
       if(command==='au05_read_all'){window.__writes.push({command});return structuredClone(window.__au05);}
       if(command==='au05_read_key'){window.__writes.push({command,...args});const k=window.__au05.keys.find(k=>k.key===args.key);k.mode='factory';k.label=`Factory default (${k.factory})`;return structuredClone(window.__au05);}
       if(command==='au05_reconnect'){window.__writes.push({command});return structuredClone(window.__au05);}
+      if(command==='au05_restart_receiver'){window.__writes.push({command});return structuredClone(window.__au05);}
       if(command==='settings_update')return {appVersion:'fixture',page:args.patch.page||'home',fake:true};
       return {};
     }};
@@ -248,14 +249,20 @@ const server=http.createServer((req,res)=>{
   const shots=process.env.UC_VK_SHOTS||path.join(os.tmpdir(),'uc-vibe-key-preview');fs.mkdirSync(shots,{recursive:true});
   const status=page.locator('#au05-status');
   const showState=async st=>{await page.evaluate(st=>{window.__au05.state=st;},st);await page.getByRole('button',{name:'Reconnect'}).click();await page.waitForFunction(st=>document.querySelector('#au05-status')?.dataset.state===st,st);};
-  for(const [st,text,action] of [['connected',/Receiver connected\s*Vibe Key awake\s*30 %/,null],['asleep',/Vibe Key asleep/,null],['off',/Vibe Key probably off/,/Hold the power button 2–3 s/]]){
+  for(const [st,text,action] of [['connected',/Receiver connected\s*Vibe Key awake\s*30 %/,null],['asleep',/Vibe Key asleep/,null],['off',/Vibe Key off: no signal/,/Hold the power button 2–3 s/],['silent',/No signal from the Vibe Key/,/If it is on, the receiver may be stuck/]]){
     await showState(st);
     assert.match(await status.textContent(),text,st);
     if(action)assert.match(await page.locator('.au05-st-action').textContent(),action);else assert.equal(await page.locator('.au05-st-action').count(),0);
     await status.screenshot({path:path.join(shots,`uc-vibe-key-status-${st}.png`)});
     if(st==='connected')assert.ok(await page.locator('.au05-st-row').evaluate(e=>e.getBoundingClientRect().height<40),'one line when awake');
   }
-  assert.equal(await page.locator('.au05-st .au05-status-dot.warn').count(),1,'amber for probably off');
+  assert.equal(await page.locator('.au05-st .au05-status-dot.warn').count(),1,'amber for no signal');
+  // 1.3.0: no signal since the receiver was opened: Restart receiver in the status line, only on a click.
+  assert.equal(await page.locator('.au05-st-action [data-au05="restart-receiver"]').count(),1,'Restart receiver beside the no-signal line');
+  assert.ok(!(await page.evaluate(()=>window.__writes.some(w=>w.command==='au05_restart_receiver'))),'never on its own');
+  await page.locator('.au05-st-action [data-au05="restart-receiver"]').click();
+  await page.waitForFunction(()=>window.__writes.some(w=>w.command==='au05_restart_receiver'));
+  await page.waitForFunction(()=>/Receiver restarted/.test(document.getElementById('au05-page')?.textContent||''));
   await showState('connected');
   const body=await page.locator('#au05-page').textContent();
   assert.equal((body.match(/Vibe Key awake/g)||[]).length,1,'the state is shown once');

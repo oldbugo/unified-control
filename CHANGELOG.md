@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0 — 2026-11-21
+
+A stuck Vibe Key receiver can be restarted from the Vibe Key page. After
+Windows starts from a Fast Startup shutdown, the receiver can stay connected
+with its light on but pass nothing on until it is unplugged. When nothing at
+all has come from the key since the receiver was opened, the page now says
+"No signal from the Vibe Key: switch the key on. If it is on, the receiver may
+be stuck", with a Restart receiver button beside it (also under Device). The
+button asks Windows to restart the receiver, which is like unplugging it;
+Windows shows its permission prompt first. It runs only when you click it.
+
+The key's own "switched off" state now reads "Vibe Key off: no signal"
+instead of "probably off".
+
 ## 1.2.4 — 2026-11-19
 
 Turning the Vibe Key off no longer hangs on for 8 seconds when one control

@@ -434,7 +434,7 @@ export class Au05Panel{
 
     // ---- status (0.36.0: one block): receiver, Vibe Key and battery, each with a dot; the action, if any, in
     // one short line. Battery: icon with fill level, percent, low warning, last known while asleep, details on hover.
-    const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting'||s.state==='off';
+    const b=s.battery,pct=b?.percent,asleep=s.state==='asleep'||s.state==='waiting'||s.state==='off'||s.state==='silent';
     const low=pct!=null&&pct<=15;
     const fill=pct==null?0:Math.max(3,Math.min(100,pct));
     const bTime=b?.at?new Date(b.at).toLocaleTimeString('en-AU',{hour12:false}):'';
@@ -443,9 +443,11 @@ export class Au05Panel{
     const st=s.enabled?s.state:'disabled';
     const RX={not_found:['bad','No receiver','Plug in the Vibe Key receiver'],error:['bad','Receiver error','Use Reconnect'],disabled:['off','Disabled','Turn the Vibe Key on in General']};
     const KEY={waiting:['off','Vibe Key waiting','Press a key or turn the knob to wake it'],connected:['ok','Vibe Key awake',''],asleep:['off','Vibe Key asleep','Press a key or turn the knob to wake it'],
-      off:['warn','Vibe Key probably off','Hold the power button 2–3 s'],paused:['warn','Sending paused','A reply was slow; it resumes in 30 s'],suspended:['bad','Sending stopped','Use Reconnect'],starting:['off','Starting','']};
+      off:['warn','Vibe Key off: no signal','Hold the power button 2–3 s'],
+      // 1.3.0: nothing since the receiver was opened: the key is off, or the receiver is stuck (after a Fast Startup).
+      silent:['warn','No signal from the Vibe Key','Switch the key on. If it is on, the receiver may be stuck'],paused:['warn','Sending paused','A reply was slow; it resumes in 30 s'],suspended:['bad','Sending stopped','Use Reconnect'],starting:['off','Starting','']};
     const rx=RX[st]||['ok','Receiver connected',''],key=RX[st]?null:KEY[st]||['off','Vibe Key',''];
-    const action=key&&key[0]!=='ok'&&['off','suspended','paused'].includes(st)?key[2]:RX[st]?rx[2]:'';
+    const action=key&&key[0]!=='ok'&&['off','silent','suspended','paused'].includes(st)?key[2]:RX[st]?rx[2]:'';
     const dot=(c,text,title)=>`<span class="au05-st" title="${esc(title||text)}"><span class="au05-status-dot ${c}" aria-hidden="true"></span>${esc(text)}</span>`;
     const batteryMarkup=`<div class="au05-statusbar" id="au05-status" data-state="${esc(st)}" role="status">
       <div class="au05-st-row">${dot(rx[0],rx[1],rx[2])}${key?dot(key[0],key[1],key[2]):''}
@@ -453,7 +455,7 @@ export class Au05Panel{
       <svg class="au05-batt-icon" viewBox="0 0 44 22" aria-hidden="true"><rect x="1.5" y="2.5" width="36" height="17" rx="4" class="shell"/><rect x="39" y="8" width="3.5" height="6" rx="1.2" class="tip"/>
         <rect x="4.5" y="5.5" width="${(30*fill/100).toFixed(1)}" height="11" rx="2" class="level"/>${b?.charging===true?'<path d="M21 4.5 15.5 12h4.5l-1.5 5.5 6-8h-4.5l1.5-5z" class="bolt"/>':''}</svg>
       <span id="au05-battery" class="au05-batt-text" aria-label="${esc(bTitle)}">${esc(bText)}</span></span></div>
-      ${action?`<div class="au05-st-action${st==='off'||st==='not_found'||st==='suspended'?' attention':''}">${esc(action)}</div>`:''}</div>`;
+      ${action?`<div class="au05-st-action${st==='off'||st==='silent'||st==='not_found'||st==='suspended'?' attention':''}">${esc(action)}${st==='silent'||st==='off'?' <button class="btn" data-au05="restart-receiver" type="button" title="Windows asks for permission, then restarts the receiver (like unplugging it)">Restart receiver</button>':''}</div>`:''}</div>`;
 
     // ---- profiles and target app ----
     const profiles=m.profiles||[];
@@ -564,7 +566,7 @@ export class Au05Panel{
     const brightness=`<span class="au05-slider"><input type="range" min="0" max="${Math.max(range.brightnessMax,light.brightness??0)}" step="1" value="${brightNow??0}" data-au05-set="lightBrightness" aria-label="All-on brightness"${brightNow==null?' disabled':dis}><span class="au05-value">${brightNow??'—'}</span></span>`;
     const notRead=v=>v==null?opt('','Not read','') :'';
     const deviceCard=(icon,title,body,wide=false)=>`<section class="au05-box au05-set-card${wide?' au05-wide':''}"><h3 class="au05-box-title"><span class="au05-box-icon">${icon}</span>${esc(title)}</h3>${body}</section>`;
-    const device=`<div class="au05-section-head"><h2>Device</h2><div class="au05-box-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button></div></div>
+    const device=`<div class="au05-section-head"><h2>Device</h2><div class="au05-box-actions"><button class="btn" data-au05="read-all" type="button">Read all settings</button><button class="btn" data-au05="reconnect" type="button">Reconnect</button><button class="btn" data-au05="restart-receiver" type="button" title="Windows asks for permission, then restarts the receiver (like unplugging it)">Restart receiver</button></div></div>
       ${s.readsFailed?`<div class="au05-reads-failed" role="status"><span>${esc(s.readsFailed)}</span><button class="btn" data-au05="read-all" type="button">Read again</button></div>`:''}
       <div class="au05-settings-grid">
       ${deviceCard(IC.power,'Power',
@@ -749,6 +751,12 @@ export class Au05Panel{
     }
     if(e.type==='click'&&t.closest?.('[data-au05="reconnect"]')){
       this.invoke('au05_reconnect').then(s=>{this.state=s;this.setNote('Reconnecting.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
+      return true;
+    }
+    if(e.type==='click'&&t.closest?.('[data-au05="restart-receiver"]')){
+      // 1.3.0: only on this click. Windows shows its permission prompt; the restart is like unplugging the receiver.
+      this.setNote('Windows asks for permission, then restarts the receiver.');
+      this.invoke('au05_restart_receiver').then(s=>{this.state=s;this.setNote('Receiver restarted. Press a key or turn the knob on the Vibe Key.');this.paint(true);}).catch(error=>this.setNote(errorText(error),true));
       return true;
     }
     if(e.type==='click'&&t.closest?.('[data-au05="read-all"]')){
