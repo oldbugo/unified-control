@@ -251,3 +251,40 @@ export function fitLabel(text,{siblings=[],box,measure,prefix='',suffix='',max=F
   if(small)return {...small,short:true};
   return {lines:[`${w.slice(0,half)}-`,w.slice(half)],size:WORD_MIN,x,y,lh:Math.round(WORD_MIN*1.2),short:true};
 }
+
+// ---- The helix (1.0, user request 2026-11-18: "the whole thing is drilling down ... similar to a drill drilling into
+// wood ... that helix motion towards inside"). One logarithmic spiral of segments: row k steps from the highlighted
+// row is turned k × HELIX_STEP anticlockwise and scaled by HELIX_G^-k, so every segment is the same shape, the next
+// one deeper in. Moving the highlight turns and grows the whole spiral; there is no end marker and no window: a
+// long list simply goes deeper. ----
+
+/** Degrees between neighbouring rows, the growth per row, the highlighted segment's band, and how far the spiral
+ * is drawn: HELIX_PAST rows before the highlight (larger, fading out), HELIX_DEEP after it (smaller), labels to
+ * HELIX_LABELS. */
+export const HELIX_STEP=40, HELIX_G=1.05, HELIX_RI=150, HELIX_RO=218, HELIX_PAST=2, HELIX_DEEP=16, HELIX_LABELS=9;
+/** Half the gap between segments (degrees at the canonical size). */
+export const HELIX_GAP=1.6;
+/** The window: the dial's diameter (the largest drawn row, half a step out, plus a margin) and the caption. */
+export function helixDiameter(){return 2*Math.ceil(HELIX_RO*Math.pow(HELIX_G,HELIX_PAST-0.5)+18);}
+
+/** The outer and inner edge radius of the canonical segment (row k = 0) at angle a (degrees, clockwise from 12):
+ * the clockwise side is larger, so neighbours meet along one spiral. */
+export function helixEdge(r,a){return r*Math.pow(HELIX_G,a/HELIX_STEP);}
+/** The canonical segment's path (centred at 12 o'clock). */
+export function helixSegmentPath(){
+  const a0=-HELIX_STEP/2+HELIX_GAP,a1=HELIX_STEP/2-HELIX_GAP,steps=16,out=[],inn=[];
+  for(let i=0;i<=steps;i++){const a=a0+(a1-a0)*i/steps;out.push(point(helixEdge(HELIX_RO,a),a));inn.push(point(helixEdge(HELIX_RI,a),a));}
+  const p=([x,y])=>`${x.toFixed(2)} ${y.toFixed(2)}`;
+  return `M ${out.map(p).join(' L ')} L ${inn.reverse().map(p).join(' L ')} Z`;
+}
+/** The box a label is fitted in (the canonical segment, as a ring sector). */
+export function helixBox(){return {r0:HELIX_RI,r1:HELIX_RO,a0:-HELIX_STEP/2+HELIX_GAP,a1:HELIX_STEP/2-HELIX_GAP};}
+/** Where row k (a fraction while moving) is drawn: its turn (degrees), scale and opacity; `null` when not drawn. */
+export function helixPlace(k){
+  if(k<-HELIX_PAST-0.5||k>HELIX_DEEP)return null;
+  const scale=Math.pow(HELIX_G,-k);
+  let opacity=1;
+  if(k<0)opacity=Math.max(0,1+k/(HELIX_PAST+0.5))*0.8;
+  else if(k>HELIX_DEEP-4)opacity=Math.max(0,(HELIX_DEEP-k)/4);
+  return {rot:-k*HELIX_STEP,scale,opacity,label:k>=-HELIX_PAST&&k<=HELIX_LABELS};
+}

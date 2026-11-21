@@ -1,5 +1,147 @@
 # Changelog
 
+## 1.3.0 — 2026-11-21
+
+A stuck Vibe Key receiver can be restarted from the Vibe Key page. After
+Windows starts from a Fast Startup shutdown, the receiver can stay connected
+with its light on but pass nothing on until it is unplugged. When nothing at
+all has come from the key since the receiver was opened, the page now says
+"No signal from the Vibe Key: switch the key on. If it is on, the receiver may
+be stuck", with a Restart receiver button beside it (also under Device). The
+button asks Windows to restart the receiver, which is like unplugging it;
+Windows shows its permission prompt first. It runs only when you click it.
+
+The key's own "switched off" state now reads "Vibe Key off: no signal"
+instead of "probably off".
+
+## 1.2.4 — 2026-11-19
+
+Turning the Vibe Key off no longer hangs on for 8 seconds when one control
+can't be handed back. A control UC hasn't checked on the real key yet (such as
+knob left) is never written until you press Set up for it on the Vibe Key page.
+If that control still types UC's code, UC used to keep waiting until its time
+ran out, with the buttons still working through UC, and then stopped with
+"no time left". Now it hands back everything else, stops at once and names the
+control that needs Set up. The log also shows what the key held when UC first
+read a control.
+
+## 1.2.3 — 2026-11-19
+
+Turning the Vibe Key off in UC (or quitting) gives the key its own settings
+back again. Before, if UC had not read the key yet in that run, it assumed the
+key already had its own settings, said so, and stopped. The key kept typing
+UC's codes, and with UC not listening the buttons and the knob did nothing.
+Now UC uses what it last confirmed on the key: where its own code is still
+there, it writes the key's own setting back straight away. If the key is
+asleep and can't be written, UC says the key's own settings are not stored
+instead of claiming they are.
+
+## 1.2.2 — 2026-11-19
+
+The Vibe Key no longer lags right after it wakes. UC used to wait for the key
+to be quiet before asking it for its settings (battery, timers, light, mic),
+but it did not count your presses and knob turns, so it could ask while you
+were using the key. The key then missed a reply and UC paused for 30 seconds.
+Now every press and turn counts: UC sends the key nothing of its own while you
+use it, and the automatic settings reads wait until you have left the key
+alone for 6 seconds and no dictation is running.
+
+## 1.2.1 — 2026-11-19
+
+The dial shakes less. The twist on each turn is gentler again (2.5°), and
+twists and bumps that follow each other quickly, such as turning on against the
+end of a list, get weaker each time (full, then about half, then a third...)
+and are full again after a short pause.
+
+Turned fast, a long dial list still flows. Before, every turn restarted the
+motion, so quick turns jumped straight to the end; now the ring chases where it
+should be at up to 20 entries a second, so the motion is always seen.
+
+The Recent sessions list keeps up when you scroll back and forth. It no longer
+uses the browser's smooth scrolling (which restarted and fell behind on every
+step) and is no longer rebuilt on every move: the highlight moves in place and
+the list follows quickly.
+
+## 1.2.0 — 2026-11-19
+
+Long lists on the dial flow now. Instead of dashed edges, the last block
+before the top fades out along the line when more entries follow, and the
+next entry peeks out from under the top block (Close or Back). When there are
+entries before the window, the top block fades toward its other side and the
+previous entry peeks out there. When the window moves, every block slides
+along the circle (anticlockwise as you go toward the end): the one leaving
+tucks under the top block and the new one comes out from under it. The twist
+on each turn is gentler (4° instead of 9°).
+
+The Recent sessions list is grouped by project, with a heading per project.
+The project you spoke to last comes first with all its recent sessions, and
+inside a project the newest session comes first. The list has no Close row any
+more (K3 closes it). It is larger and easier to follow: bigger names on up to
+two lines, the age under each name, a clear highlight with a marker, the
+current project's heading lit, the position (for example "3 / 16") at the top,
+and the highlight kept near the middle as you scroll.
+
+## 1.1.1 — 2026-11-18
+
+The old dial is back: Close or Back at the top, the entries going clockwise to
+the right, the nautilus edge and the eight-segment window. What is new is the
+motion: every knob turn twists the whole dial a little the way you turned
+(clockwise for the next entry) and it settles, and going into or out of a
+sub-menu the rings spin as they grow or shrink. Everything else from 1.1.0
+stays: several menus with K2, K3 closes, the Recent sessions list and the time
+bar. The helix from 1.1.0 is gone.
+
+The Recent sessions list now scrolls inside its box so the highlighted row is
+always in view.
+
+## 1.1.0 — 2026-11-18
+
+Several quick menus. K2 now shows the next menu and K3 closes the menu
+(both still changeable under "In the menu"; if you had the old defaults,
+K2 select and K3 back, they move to the new ones once). The shipped menus
+are your profile's menu as a dial and "Recent sessions", a plain drop list
+of every open Claude session with the one you last spoke to first and its
+project next to it. The "Menus" list on the Vibe Key page adds, renames,
+reorders and removes menus and sets each one's style (Dial or List) and
+what it shows. The menu opens on the menu you last used. Tab does the same
+in the menu window.
+
+The dial is now one helix. The highlighted entry sits at the top; the
+entries after it wind anticlockwise and deeper, the ones before it grow
+outward and fade. Every turn turns and grows the whole spiral one step, so
+the next entry comes up from the depth. Going into a sub-menu the spiral
+spins and sinks into the middle while the new level spins in from outside;
+Back does the reverse. There is no end marker and no eight-entry window any
+more: a long list simply goes deeper. Labels are fitted where each segment
+rests, upright.
+
+A thin bar under the caption runs down to the automatic close (8 s without
+input). The hint line is gone.
+
+The 1.0.0 folding into "More" is now off unless you pick a time ("Fold
+sessions after", default Never).
+
+## 1.0.0 — 2026-11-18
+
+The quick menu's Claude sessions put what you use first. At every level
+(projects, sessions, sub-sessions) the one you last spoke to comes first, so
+going back and forth between two projects stays one or two turns away. "Spoke
+to" means you sent the session a message (Claude's hook event; with Live working
+status off, Claude's own last-activity time is used). Projects now follow this
+order instead of the Claude sidebar order.
+
+Sessions you have not used for a while fold into a "More (n)" entry at the end
+of their list; open it and they are all there, in the same order. At least
+three stay shown, a working session is never folded, and a single old entry is
+never folded on its own. "Fold sessions after" (In the menu) picks 1 hour, 4
+hours, 8 hours (default), 1 day, 3 days or Never.
+
+Fixed: lists on the Vibe Key page lost your choice when the page refreshed
+while the list was open (the battery and Claude session counts refresh it every
+few seconds). This is why noise reduction levels 0, 2 and 3 never reached the
+key: only one change, to level 1, was ever sent. The page now waits while a list
+is in use.
+
 ## 0.38.0 — 2026-11-17
 
 The quick menu dial is one spiral now, like a nautilus shell. The outer edge

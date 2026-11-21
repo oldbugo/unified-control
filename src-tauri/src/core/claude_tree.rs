@@ -236,19 +236,80 @@ fn folder_name(p: &str) -> String {
     if n.is_empty() { "Other".into() } else { n }
 }
 
-/// The menu tree. With the sidebar groups (`groups`): the groups at the top in sidebar order, each with its
-/// sessions; a session goes under its assigned group, a sub-session without one under its parent's group
-/// (still as its parent's child); sessions in no group go in a last "Other sessions" entry, by folder. Without
-/// the groups: the projects (the `originCwd` folder) at the top, newest activity first. Inside each, the
-/// sessions without a (visible) parent there, newest first, and under every session its spawned sessions, any
-/// depth. Archived sessions are hidden. A session with children is a sub-menu whose first entry opens the
-/// session itself; every node carries a session, so K1 can dictate into it. `working` is the hooks' live list
-/// (desktop ids reported working). Empty groups are left out.
+/// How the menu orders and folds sessions (1.0, user request 2026-11-18: "an exposed view of the most recent
+/// ones that we have spoken to ... alongside the rest of the list"; things not used for a while "collapse"
+/// into an entry that shows them all).
+#[derive(Clone, Debug, Default)]
+pub struct Recent {
+    /// Desktop id -> when the user last sent it a message (the hooks' UserPromptSubmit).
+    pub spoke: HashMap<String, u64>,
+    /// Entries not used within this long go into a "More" entry at the end of their level. `None`: never.
+    pub fold_ms: Option<u64>,
+}
+
+/// At least this many entries stay visible at each level before anything is folded.
+pub const KEEP_SHOWN: usize = 3;
+pub const MORE: &str = "More";
+
+impl Recent {
+    /// When the user last used a session: their last message if the hooks saw one, else Claude's own time.
+    pub fn at(&self, s: &DesktopSession) -> u64 {
+        match self.spoke.get(&s.id) {
+            Some(t) => *t,
+            None => s.last_activity.max(s.last_turn.unwrap_or(0)),
+        }
+    }
+}
+
+/// Fold one level (sorted newest first; every entry carries `at`): entries used within `fold_ms`, working
+/// ones and the first [`KEEP_SHOWN`] stay; the rest go, in the same order, into a last "More" sub-menu.
+/// Nothing is folded when it would hide only one entry. `fixed` leading entries (a session's "Open: ...") are
+/// never folded or counted.
+pub fn fold(entries: Vec<Value>, fixed: usize, r: &Recent, now_ms: u64) -> Vec<Value> {
+    let Some(window) = r.fold_ms else { return entries };
+    let (head, rest) = entries.split_at(fixed.min(entries.len()));
+    let mut shown = Vec::new();
+    let mut folded = Vec::new();
+    for e in rest {
+        let fresh = now_ms.saturating_sub(e["at"].as_u64().unwrap_or(0)) < window;
+        if fresh || e["working"] == true || shown.len() < KEEP_SHOWN {
+            shown.push(e.clone());
+        } else {
+            folded.push(e.clone());
+        }
+    }
+    if folded.len() < 2 {
+        return entries;
+    }
+    let newest = folded.iter().filter_map(|e| e["at"].as_u64()).max().unwrap_or(0);
+    let mut out = head.to_vec();
+    out.extend(shown);
+    out.push(json!({"type": "submenu", "more": true, "label": format!("{MORE} ({})", folded.len()),
+                    "detail": format!("not used for {}", super::au05_menu::age_text(now_ms.saturating_sub(newest))),
+                    "at": newest, "entries": folded}));
+    out
+}
+
+/// The menu tree, newest first at every level (1.0). With the sidebar groups (`groups`): the groups are the
+/// projects, each with its sessions; a session goes under its assigned group, a sub-session without one under
+/// its parent's group (still as its parent's child); sessions in no group go in an "Other sessions" entry, by
+/// folder. Without the groups: the projects are the `originCwd` folders. Inside each, the sessions without a
+/// (visible) parent there, and under every session its spawned sessions, any depth. Every level is ordered by
+/// when the user last used it (a project or a session counts its newest session below it), and what was not
+/// used within `recent.fold_ms` is folded into a last "More" entry ([`fold`]). Archived sessions are hidden.
+/// A session with children is a sub-menu whose first entry opens the session itself; every node carries a
+/// session, so K1 can dictate into it. `working` is the hooks' live list (desktop ids reported working).
+/// Empty groups are left out.
 pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[String], then: &Value, now_ms: u64) -> Vec<Value> {
+    tree_with(sessions, groups, working, then, now_ms, &Recent::default())
+}
+
+pub fn tree_with(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[String], then: &Value, now_ms: u64, recent: &Recent) -> Vec<Value> {
     let visible: Vec<&DesktopSession> = sessions.iter().filter(|s| !s.archived).collect();
     let row = |s: &DesktopSession| {
         let working = working.contains(&s.id) || now_ms.saturating_sub(s.last_activity) < WORKING_MS;
-        let since = now_ms.saturating_sub(s.last_activity);
+        let at = recent.at(s);
+        let since = now_ms.saturating_sub(at);
         let label = if !s.title.is_empty() { s.title.clone() } else { s.worktree.clone().unwrap_or_else(|| folder_name(&s.cwd)) };
         let mut detail = String::new();
         if working {
@@ -258,10 +319,11 @@ pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[Str
             detail.push_str(&format!("{w} · "));
         }
         detail.push_str(&super::au05_menu::age_text(since));
-        json!({"type": "claudeSession", "label": label, "session": s.id, "then": then, "working": working, "detail": detail})
+        json!({"type": "claudeSession", "label": label, "session": s.id, "then": then, "working": working, "detail": detail, "at": at})
     };
+    let cx = Cx { row: &row, recent, now_ms };
     let Some(groups) = groups else {
-        return folders(&visible, &row);
+        return fold(folders(&visible, &cx), 0, recent, now_ms);
     };
     // Each session's group: its own assignment, else its parent's (through archived parents too).
     let group_of = |s: &DesktopSession| -> Option<(String, String)> {
@@ -285,7 +347,7 @@ pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[Str
             let mine: Vec<&DesktopSession> =
                 tagged.iter().filter(|(_, g)| g.as_ref().is_some_and(|(sc, id)| sc == scope && id == gid)).map(|(s, _)| *s).collect();
             if !mine.is_empty() {
-                let mut p = project(name, &mine, &row);
+                let mut p = project(name, &mine, &cx);
                 p["group"] = json!(gid); // a stable id for the menu's memory
                 out.push(p);
             }
@@ -293,12 +355,77 @@ pub fn tree(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[Str
     }
     let rest: Vec<&DesktopSession> = tagged.iter().filter(|(_, g)| g.is_none()).map(|(s, _)| *s).collect();
     if !rest.is_empty() {
-        let entries = folders(&rest, &row);
+        let entries = fold(folders(&rest, &cx), 0, recent, now_ms);
         let working = entries.iter().any(|e| e["working"] == true);
-        out.push(json!({"type": "submenu", "label": OTHER, "project": true, "working": working,
+        let at = entries.iter().filter_map(|e| e["at"].as_u64()).max().unwrap_or(0);
+        out.push(json!({"type": "submenu", "label": OTHER, "project": true, "working": working, "at": at,
                         "detail": if working { "● working" } else { "" }, "entries": entries}));
     }
-    out
+    // Newest first (a stable sort keeps the sidebar order between equals).
+    out.sort_by_key(|e| std::cmp::Reverse(e["at"].as_u64().unwrap_or(0)));
+    fold(out, 0, recent, now_ms)
+}
+
+struct Cx<'a> {
+    row: &'a dyn Fn(&DesktopSession) -> Value,
+    recent: &'a Recent,
+    now_ms: u64,
+}
+
+/// Every open Claude session as one list for the "Recent sessions" menu, grouped by project (1.2.0, user request
+/// 2026-11-19: "always be grouped by their folder structure"; touching one session moves "that project and its
+/// entire recent sessions up"): the project with the session spoken to last comes first, and inside each project
+/// the sessions newest first. Each row carries its `project` (the window draws a heading per project); its detail
+/// is the age (and worktree).
+pub fn recent_list(sessions: &[DesktopSession], groups: Option<&Groups>, working: &[String], now_ms: u64, recent: &Recent) -> Vec<Value> {
+    let r = Recent { fold_ms: None, ..recent.clone() };
+    let t = tree_with(sessions, groups, working, &json!("none"), now_ms, &r);
+    let mut rows: Vec<Value> = Vec::new();
+    fn walk(e: &Value, project: &str, rows: &mut Vec<Value>) {
+        if e["type"] == "claudeSession" && !e["label"].as_str().unwrap_or("").starts_with("Open: ") {
+            if !rows.iter().any(|x| x["session"] == e["session"]) {
+                let mut x = e.clone();
+                let rest = e["detail"].as_str().unwrap_or("");
+                x["project"] = json!(project);
+                x["detail"] = json!(rest);
+                rows.push(x);
+            }
+        }
+        if e["type"] == "submenu" && e["project"] != true && e["session"].is_string() {
+            // A session with sub-sessions: the session itself, then its children.
+            let me = e["entries"].as_array().and_then(|a| a.first()).cloned();
+            if let Some(mut m) = me {
+                m["label"] = e["label"].clone();
+                m["detail"] = e["detail"].clone();
+                walk(&m, project, rows);
+            }
+        }
+        for c in e["entries"].as_array().into_iter().flatten() {
+            walk(c, project, rows);
+        }
+    }
+    for p in &t {
+        if p["label"] == OTHER {
+            for f in p["entries"].as_array().into_iter().flatten() {
+                walk(f, f["label"].as_str().unwrap_or(""), &mut rows);
+            }
+        } else {
+            walk(p, p["label"].as_str().unwrap_or(""), &mut rows);
+        }
+    }
+    // Each project's newest session decides the project's place.
+    let mut newest: HashMap<String, u64> = HashMap::new();
+    for r in &rows {
+        let p = r["project"].as_str().unwrap_or("").to_string();
+        let at = r["at"].as_u64().unwrap_or(0);
+        let e = newest.entry(p).or_insert(0);
+        *e = (*e).max(at);
+    }
+    rows.sort_by(|a, b| {
+        let (pa, pb) = (a["project"].as_str().unwrap_or(""), b["project"].as_str().unwrap_or(""));
+        newest[pb].cmp(&newest[pa]).then_with(|| pa.cmp(pb)).then_with(|| b["at"].as_u64().cmp(&a["at"].as_u64()))
+    });
+    rows
 }
 
 /// The live summary for the page's Claude sessions card (0.36.0): open sessions, projects (as the menu groups
@@ -345,44 +472,48 @@ pub fn summary(d: &Desktop, working: &[String], now_ms: u64, recent: usize) -> V
     })
 }
 
-/// Newest activity of a session and everything below it (within `all`).
-fn newest(s: &DesktopSession, all: &[&DesktopSession], depth: usize) -> u64 {
-    let own = s.last_activity.max(s.last_turn.unwrap_or(0));
+/// When the user last used a session or anything below it (within `all`).
+fn newest(s: &DesktopSession, all: &[&DesktopSession], depth: usize, r: &Recent) -> u64 {
+    let own = r.at(s);
     if depth >= MAX_DEPTH {
         return own;
     }
-    all.iter().filter(|c| c.parent.as_deref() == Some(&s.id) && c.id != s.id).map(|c| newest(c, all, depth + 1)).fold(own, u64::max)
+    all.iter().filter(|c| c.parent.as_deref() == Some(&s.id) && c.id != s.id).map(|c| newest(c, all, depth + 1, r)).fold(own, u64::max)
 }
 
-fn node(s: &DesktopSession, all: &[&DesktopSession], depth: usize, row: &dyn Fn(&DesktopSession) -> Value) -> Value {
+fn node(s: &DesktopSession, all: &[&DesktopSession], depth: usize, cx: &Cx) -> Value {
     let mut kids: Vec<&&DesktopSession> = all.iter().filter(|c| c.parent.as_deref() == Some(&s.id) && c.id != s.id).collect();
-    kids.sort_by_key(|c| std::cmp::Reverse(newest(c, all, depth + 1)));
-    let me = row(s);
+    kids.sort_by_key(|c| std::cmp::Reverse(newest(c, all, depth + 1, cx.recent)));
+    let mut me = (cx.row)(s);
+    me["at"] = json!(newest(s, all, depth, cx.recent));
     if kids.is_empty() || depth >= MAX_DEPTH {
         return me;
     }
     let mut entries = vec![json!({"type": "claudeSession", "label": format!("Open: {}", me["label"].as_str().unwrap_or("")),
-                                  "session": s.id, "then": me["then"], "detail": "this session"})];
-    entries.extend(kids.into_iter().map(|c| node(c, all, depth + 1, row)));
+                                  "session": s.id, "then": me["then"], "detail": "this session", "at": cx.recent.at(s)})];
+    entries.extend(kids.into_iter().map(|c| node(c, all, depth + 1, cx)));
+    let entries = fold(entries, 1, cx.recent, cx.now_ms);
     // Working when it or anything below it works.
     let working = me["working"] == true || entries.iter().any(|e| e["working"] == true);
-    json!({"type": "submenu", "label": me["label"], "session": s.id, "working": working, "detail": me["detail"], "entries": entries})
+    json!({"type": "submenu", "label": me["label"], "session": s.id, "working": working, "detail": me["detail"],
+           "at": me["at"], "entries": entries})
 }
 
 /// A project (a sidebar group or a folder): its sessions without a parent among `all`, newest first, as trees.
-fn project(label: &str, all: &[&DesktopSession], row: &dyn Fn(&DesktopSession) -> Value) -> Value {
+/// It carries its newest session (K1 dictates there) and that session's time.
+fn project(label: &str, all: &[&DesktopSession], cx: &Cx) -> Value {
     let mut roots: Vec<&DesktopSession> =
         all.iter().copied().filter(|s| s.parent.as_deref().is_none_or(|p| !all.iter().any(|x| x.id == p))).collect();
-    roots.sort_by_key(|s| std::cmp::Reverse(newest(s, all, 0)));
-    let entries: Vec<Value> = roots.iter().map(|s| node(s, all, 0, row)).collect();
+    roots.sort_by_key(|s| std::cmp::Reverse(newest(s, all, 0, cx.recent)));
+    let at = roots.first().map(|s| newest(s, all, 0, cx.recent)).unwrap_or(0);
+    let entries = fold(roots.iter().map(|s| node(s, all, 0, cx)).collect(), 0, cx.recent, cx.now_ms);
     let working = entries.iter().any(|e| e["working"] == true);
     json!({"type": "submenu", "label": label, "project": true, "session": roots.first().map(|s| s.id.clone()),
-           "working": working, "detail": if working { "● working" } else { "" }, "entries": entries})
+           "working": working, "detail": if working { "● working" } else { "" }, "at": at, "entries": entries})
 }
 
-/// The sessions by folder (`originCwd`, else `cwd`), newest activity first. A sub-session goes with its tree's
-/// root.
-fn folders(all: &[&DesktopSession], row: &dyn Fn(&DesktopSession) -> Value) -> Vec<Value> {
+/// The sessions by folder (`originCwd`, else `cwd`), newest first. A sub-session goes with its tree's root.
+fn folders(all: &[&DesktopSession], cx: &Cx) -> Vec<Value> {
     let place = |s: &DesktopSession| folder_name(if s.origin_cwd.is_empty() { &s.cwd } else { &s.origin_cwd });
     let root_of = |s: &DesktopSession| {
         let mut cur = s;
@@ -397,7 +528,7 @@ fn folders(all: &[&DesktopSession], row: &dyn Fn(&DesktopSession) -> Value) -> V
     let mut names: Vec<(String, u64)> = Vec::new();
     for s in all {
         let p = root_of(s);
-        let n = s.last_activity.max(s.last_turn.unwrap_or(0));
+        let n = cx.recent.at(s);
         match names.iter_mut().find(|(q, _)| q.eq_ignore_ascii_case(&p)) {
             Some(e) => e.1 = e.1.max(n),
             None => names.push((p, n)),
@@ -408,7 +539,7 @@ fn folders(all: &[&DesktopSession], row: &dyn Fn(&DesktopSession) -> Value) -> V
         .into_iter()
         .map(|(p, _)| {
             let mine: Vec<&DesktopSession> = all.iter().copied().filter(|s| root_of(s).eq_ignore_ascii_case(&p)).collect();
-            project(&p, &mine, row)
+            project(&p, &mine, cx)
         })
         .collect()
 }
@@ -525,9 +656,9 @@ mod tests {
 
         let t = tree(&d.sessions, Some(&g), &[], &json!("none"), 1_000_000);
         let labels: Vec<&str> = t.iter().map(|p| p["label"].as_str().unwrap()).collect();
-        assert_eq!(labels, ["Unified Control", "Project Nocturne", OTHER], "sidebar order; empty groups left out; Other last");
+        assert_eq!(labels, [OTHER, "Unified Control", "Project Nocturne"], "newest first (1.0); empty groups left out");
         // Unified Control: S1 > S2 > S3 (S4 is in its own group).
-        let uc = &t[0];
+        let uc = &t[1];
         assert_eq!(uc["session"], id(1), "a group carries its newest session");
         assert_eq!(uc["entries"].as_array().unwrap().len(), 1);
         let s1 = &uc["entries"][0];
@@ -536,11 +667,11 @@ mod tests {
         assert_eq!(s1["entries"][1]["entries"][1]["session"], id(3), "and so does its child");
         assert_eq!(s1["entries"].as_array().unwrap().len(), 2, "S4 is not here");
         // Project Nocturne: S4 (own assignment) and S7 (its archived parent's group).
-        let noc: Vec<&str> = t[1]["entries"].as_array().unwrap().iter().map(|e| e["session"].as_str().unwrap()).collect();
+        let noc: Vec<&str> = t[2]["entries"].as_array().unwrap().iter().map(|e| e["session"].as_str().unwrap()).collect();
         assert_eq!(noc, [id(4).as_str(), id(7).as_str()]);
         // Other sessions: S5 (assigned to a group that does not exist) by folder.
-        assert_eq!(t[2]["entries"][0]["label"], "vault");
-        assert_eq!(t[2]["entries"][0]["entries"][0]["session"], id(5));
+        assert_eq!(t[0]["entries"][0]["label"], "vault");
+        assert_eq!(t[0]["entries"][0]["entries"][0]["session"], id(5));
         assert!(!json!(t).to_string().contains(&id(6)), "archived sessions stay hidden");
 
         // Fallbacks: no key, a broken file, an oversized file: folders, with a note.
@@ -553,5 +684,87 @@ mod tests {
             assert_eq!(labels, ["vault", "CoolerScreen", "Nocturne"], "folders, a sub-session with its root");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn session(n: u32, parent: Option<u32>, origin: &str, last: u64) -> DesktopSession {
+        parse(file(n, parent, origin, false, last).as_bytes()).unwrap()
+    }
+
+    /// 1.0 (user request 2026-11-18): every level is ordered by when the user last spoke to it (the hooks'
+    /// time wins over Claude's own), and what was not used within the fold time goes into a last "More"
+    /// entry, keeping at least three shown, working ones always shown, never folding a single entry.
+    #[test]
+    fn recent_first_and_old_ones_fold_into_more() {
+        const H: u64 = 3600 * 1000;
+        let now = 100 * H;
+        // Project A: five sessions of different ages; A2 has two sub-sessions. Project B: one old session that
+        // the user spoke to a minute ago (the hooks know it), so B comes first.
+        let mut all = vec![
+            session(1, None, "A", now - H),
+            session(2, None, "A", now - 2 * H),
+            session(3, None, "A", now - 30 * H),
+            session(4, None, "A", now - 40 * H),
+            session(5, None, "A", now - 50 * H),
+            session(6, None, "B", now - 60 * H),
+            session(7, Some(2), "A", now - 20 * H),
+            session(8, Some(2), "A", now - 21 * H),
+        ];
+        all.push(session(9, None, "C", now - 90 * H));
+        all.push(session(10, None, "D", now - 91 * H));
+        let recent = Recent { spoke: HashMap::from([(id(6), now - 60_000)]), fold_ms: Some(8 * H) };
+        let t = tree_with(&all, None, &[], &json!("none"), now, &recent);
+        let labels: Vec<&str> = t.iter().map(|p| p["label"].as_str().unwrap()).collect();
+        assert_eq!(labels, ["B", "A", "C", "D"], "four projects, none folded: three are kept and one alone is never folded");
+        // A: S1, S2 (fresh), S3 (the third kept), then More with S4 and S5, oldest last.
+        let a: Vec<String> = t[1]["entries"].as_array().unwrap().iter().map(|e| e["label"].as_str().unwrap().to_string()).collect();
+        assert_eq!(a, ["S1", "S2", "S3", "More (2)"]);
+        let more = &t[1]["entries"][3];
+        assert_eq!((more["type"].as_str(), more["more"].as_bool()), (Some("submenu"), Some(true)));
+        let inside: Vec<&str> = more["entries"].as_array().unwrap().iter().map(|e| e["session"].as_str().unwrap()).collect();
+        assert_eq!(inside, [id(4).as_str(), id(5).as_str()], "all there when opened, in order");
+        assert_eq!(super::super::au05_menu::entry_key(more), "more", "a stable id for the menu's memory");
+        // S2's sub-sessions: "Open" stays first, two children are not folded (fewer than three).
+        let s2 = &t[1]["entries"][1];
+        assert_eq!(s2["entries"][0]["session"], id(2));
+        assert_eq!(s2["entries"].as_array().unwrap().len(), 3);
+        // A working session is never folded.
+        let t = tree_with(&all, None, &[id(5)], &json!("none"), now, &recent);
+        let a: Vec<&str> = t[1]["entries"].as_array().unwrap().iter().map(|e| e["label"].as_str().unwrap()).collect();
+        assert_eq!(a, ["S1", "S2", "S3", "S4", "S5"], "S5 works, so only S4 would fold: nothing is folded");
+        // Never fold: everything shown, still newest first.
+        let t = tree_with(&all, None, &[], &json!("none"), now, &Recent { fold_ms: None, ..recent.clone() });
+        assert_eq!(t[1]["entries"].as_array().unwrap().len(), 5);
+        assert_eq!(t[0]["label"], "B");
+    }
+
+    /// 1.2.0: the Recent sessions list is grouped by project; speaking to any one session of a project moves the
+    /// whole project (all its recent sessions) to the top; inside a project the newest first; sub-sessions are
+    /// listed too; the detail is the age, the project is its own field.
+    #[test]
+    fn the_recent_list_groups_by_project_and_the_project_used_last_comes_first() {
+        const H: u64 = 3600 * 1000;
+        let now = 100 * H;
+        let all = vec![
+            session(1, None, "UnifiedControl", now - 5 * H),
+            session(2, None, "UnifiedControl", now - 6 * H),
+            session(3, Some(2), "UnifiedControl", now - 7 * H),
+            session(4, None, "GazeBrowser", now - H),
+            session(5, None, "GazeBrowser", now - 9 * H),
+            session(6, None, "vault", now - 2 * H),
+        ];
+        let order = |r: &Recent| -> Vec<(String, String)> {
+            recent_list(&all, None, &[], now, r).iter().map(|e| (e["project"].as_str().unwrap().to_string(), e["label"].as_str().unwrap().to_string())).collect()
+        };
+        let plain = Recent::default();
+        let o = order(&plain);
+        let s = |p: &str, l: &str| (p.to_string(), l.to_string());
+        assert_eq!(o, [s("GazeBrowser", "S4"), s("GazeBrowser", "S5"), s("vault", "S6"), s("UnifiedControl", "S1"), s("UnifiedControl", "S2"), s("UnifiedControl", "S3")]);
+        // Speaking to the old sub-session S3 brings the whole project up, S3 first within it.
+        let spoke = Recent { spoke: HashMap::from([(id(3), now - 60_000)]), fold_ms: None };
+        let o = order(&spoke);
+        assert_eq!(o[..3], [s("UnifiedControl", "S3"), s("UnifiedControl", "S1"), s("UnifiedControl", "S2")]);
+        assert_eq!(o[3], s("GazeBrowser", "S4"));
+        let row = &recent_list(&all, None, &[], now, &plain)[0];
+        assert!(!row["detail"].as_str().unwrap().contains("GazeBrowser"), "the project is a heading, not in the detail: {row}");
     }
 }

@@ -457,6 +457,179 @@ one key opens a menu.
 - **Fallback**: if the folder or format is missing, the menu uses the hook list (folders, as before) and the
   Claude sessions card says so. The list works without Connect; Connect adds the live working state.
 
+### No signal, and Restart receiver, 1.3.0 (real receiver 2026-11-21)
+
+User: the page said "probably off" though the receiver's light was solid; "if this is a recurring issue, that
+doesn't make this device very usable". Log: from the receiver being opened at 10:15 (after Windows started from
+a Fast Startup shutdown: one boot ID, "returned from a low power state") no message and no press for 1.5 h, also
+after the key was power-cycled; a replug brought it back at once. Fast Startup stays on (user's choice), so:
+"Message + restart button".
+
+- New state `silent` (`shown_state`): nothing since the receiver was opened, past standby + 2 minutes (was
+  "off"). UC cannot tell a switched-off key from a stuck receiver, so the message says both. A wake from
+  `silent` reads the settings again, as from `off`. "off" (was talking, then quiet past its power-off time) is
+  shown as "Vibe Key off: no signal".
+- Restart receiver (`au05_receiver.rs`, command `au05_restart_receiver`): finds the one present
+  `USB\VID_FFF1&PID_00DD\<serial>` (the composite device, not an interface; none or several: not restarted),
+  checks its characters, and runs `%SystemRoot%\System32\pnputil.exe /restart-device "<id>"` with the `runas`
+  verb (the Windows permission prompt, no console window), waiting at most a minute; declined prompt, exit code
+  3010 or another code are reported. Then the worker reconnects. Only from the page's button (in the status line
+  for `silent`/`off`, and under Device); the fake key only logs it; test mode refuses. Nothing is sent to the
+  key or the receiver by UC itself.
+- Not yet tried on a stuck receiver: whether a device restart clears it as a replug does is known only the next
+  time it happens.
+
+### A control that needs Set up is named at once, 1.2.4 (real key 2026-11-19)
+
+Log after 1.2.3: at a disable the five checked controls were written back (all "ok"), then "offline layer not
+stored (no time left)" 8 s later. Knob left had been read (seeded as factory: UC's own code counts as factory) and
+still held F24; it is not checked on the real key, so UC never writes it before "Set up". The user saw the
+buttons work for about 10 s after turning the Vibe Key off, then nothing.
+
+- `Au05::offline_needs_set_up`: with the offline target, nothing pending, waiting or sending, and every other
+  control on its offline typing, the controls whose only job is "check" for their offline typing.
+  `store_offline` stops at once when there are any: "offline layer not stored (knobLeft still types UC's code and
+  is not checked on the real key: Set up on the page)".
+- The seed log line names what the key held ("it holds F24").
+- Test: `going_offline_names_a_control_that_needs_set_up_instead_of_running_out_of_time` (fails without it).
+- Lag: the user power-cycled the key (off and on, not sleep) and the lag was gone; replies came within 250 ms
+  again. The same lag on another PC had pointed to the key, not UC.
+
+### The offline layer really goes back on the key, 1.2.3 (user report 2026-11-19)
+
+User: with the Vibe Key off in UC, "all the physical button's not working ... I don't think it's responding".
+Settings: `keyEcho` k1 F20, k2 F21, k3 F22, knobPress F19, knobRight F23; offline all factory. Log: "page enabled =
+false", "layer: offline layer is on the key", then only "read ... first" lines and "worker stop".
+
+- Cause: `offline_on_key` counted every list not read in this run as stored. `store_offline` checks it before the
+  worker has queued any job, so after a stall (nothing read yet) it returned at once.
+- `offline_on_key`: an unread list counts as stored only when its `keyEcho` is its offline typing or absent.
+- `sync_layers`: going offline, a seeded control whose `keyEcho` is UC's own code is written straight back (no
+  key-typing read first). Asleep at quit or disable: "offline layer not stored (key not awake)", as for a list
+  known in this run.
+- Test: `going_offline_writes_back_uc_codes_left_on_the_key_by_an_earlier_run` (fails without the fix).
+
+### Nothing sent while the key is in use, 1.2.2 (user report 2026-11-19)
+
+User: "the reaction, it's very laggy right now". Log: the key woke from switched off, UC restarted the settings
+reads while K1 was being pressed, `GetBattery` got no reply twice and sending paused 30 s.
+
+- `Worker::settled` now also counts `MenuCtl::key_seen` (a hotkey from the key's own codes: K1-K6 and the knob),
+  not only the wake and private control events. Key typing, page changes, held changes and "Read from key" wait
+  for the settle time (1.5 s) after the last press or turn.
+- `Worker::idle_for_reads`: the automatic settings reads also wait until the key has not been pressed or turned
+  for `READ_QUIET_SETTLES` (4) x the settle time (6 s) and no dictate & send is running. The page's "Read all
+  settings" is not held back. No new command and no change to the USB sequence.
+- Test: `nothing_is_sent_to_the_key_while_it_is_in_use`.
+
+### Gentler shakes, fast turns, a list that keeps up, 1.2.1 (user feedback 2026-11-19)
+
+User: the twist is "in the right direction. But just make it a bit more gentle"; "if I hit the end and keep
+scrolling through ... it just keeps shaking around ... the first few ones are ... whatever it is, but subsequent
+ones it gets less and less"; turned fast "it almost happens instantly ... I do scroll really fast and it still
+doesn't completely miss that animation" (a speed cap, "pretty high"); the Recent list "feels a little bit laggy
+... lagging behind".
+
+- **Shake** (`shakeStrength`): twist 2.5° (240 ms), bump 4 px; each twist or bump within 600 ms of the last is
+  0.55 × the one before; full again after 600 ms quiet. The last strength is in `data-shake`.
+- **Flow chase** (`flow`, `flowPos`): the ring's drawn offset chases the target with a 75 ms time constant,
+  at least 4 and at most 20 slots per second. A new turn continues from where the ring is drawn; every row that
+  passes the visible slots on the way is drawn. The flow runs on its own (a bump at the end does not cut it).
+- **List** (`renderList`, `scrollListTo`): rebuilt only when its rows change; a move only moves the highlight and
+  the group mark. Scrolling follows the latest target with a 45 ms time constant; CSS `scroll-behavior` is auto.
+
+### Long lists flow; the Recent list grouped, 1.2.0 (user feedback 2026-11-19)
+
+User: the twist is "the right one ... just a little too much"; for long lists "instead of using a dashed line,
+but maintaining the overall shape structure ... the tail of the line fades ... tuck a little bit of the content
+underneath the biggest block on top", "I want the block to flow out ... along the perimeter of the circle ... the
+entire thing starts moving around anti-clockwise", and "the back button would actually go into some sort of
+fading". For the Recent list: "always be grouped by their folder structure", a touched project moves up "and its
+entire recent sessions"; bigger, "it feels really cramped"; no Close row ("we have ... a physical close button";
+the dial keeps it).
+
+- **Dial, lists over 8 rows** (`longRingSvg`, `longLabelsSvg`, `flow` in `quick-menu.js`): a row's place is a slot
+  fraction `s = row - offset`; 1..7 visible, below 1 tucked under the top block's clockwise side, above 7 under
+  its other side (opacity falls to 0 there). The top block is drawn last. Tail fade: the slot-7 block (not when
+  highlighted) gets an inline gradient fill toward the top block when more follow; the top block (not when
+  highlighted) fades toward its clockwise side when rows are before the window. Peeks: the next/previous row as a
+  7 px rim outside the top block's edge on that side, half transparent. A window move animates `s` for every row
+  (260 ms; rows passing through are drawn as `m.transit`), labels follow along the circle and fade. Short lists
+  (8 rows or fewer) are drawn as before. The twist is 4° over 260 ms and does not run with a flow.
+- **Recent list** (`claude_tree::recent_list`): sorted by each project's newest session, then the project name,
+  then newest first; each row has `project`, its detail is the age (and worktree). The window draws a sticky
+  heading per project (count; the highlighted row's project in the accent), names at body + 3 px on up to two
+  lines, the highlight with an outline and a side marker, "n / total" in the header; the highlight is kept near
+  the middle. Window 500 x 660 logical.
+- **No Close row in list menus** (`MenuState::no_close`, set from the menu's style; view `noClose`): opens on the
+  first entry, Prev at the first entry bumps, row 0 cannot be picked; K3 (Close) and Esc close.
+
+### The old dial again, with motion, 1.1.1 (user feedback 2026-11-18)
+
+User: "I like the design of the old dial, especially to rotate to right hand side"; asked to choose, they picked
+"old dial + spinning motion". The 0.38.0 dial drawing is back (`quick-menu.js` rings, the taper spiral, the
+8-slot window, `quick_menu::dial_size` by rings; the list keeps `LIST_SIZE`). Added: each move on the same level
+twists the rings and labels groups up to 9° in the move's direction over 280 ms and settles (`twist`, counted in
+`data-twists`); a level change adds a 70° spin to the existing grow/shrink (320 ms; clockwise going deeper). The
+helix code stays in `quick-menu-dial.js` but is unused. The 1.1.0 helix notes below are history.
+
+### Several menus, list style, helix dial, 1.1.0 (user requests 2026-11-18)
+
+User: "can we also create a version that is just a drop list of all the recent ones ... a button that will
+transition between the round quick menu into the square ... the key mechanic here is allowing multiple quick
+menus"; "K2 is switch menu, switch to the next one. And then K3 is closing it altogether ... we'll leave it
+configurable"; no "More" to mark the end, "let it keep scrolling"; "I do want to see the whole circle moving ...
+like a drill drilling into wood ... that helix motion towards inside"; the idle close as a bar, and "remove that
+subtext".
+
+- **Menus** (`au05.menuFaces`, `au05_menu::sanitize_faces`): 1 to 6 entries `{name, style: dial|list, source:
+  menu|recent}`. Defaults: "Quick menu" (dial, the profile's menu) and "Recent sessions" (list, every open Claude
+  session from `claude_tree::recent_list`, newest spoken-to first, detail "project · age"). Not per profile; the
+  "menu" source is always the current profile's menu.
+- **K2 next menu** (role `nextMenu`, `Input::NextMenu`, `Au05::next_menu`): after the last, the first again. The
+  spot in each menu is remembered per profile and menu (`MenuState::switch`, scope `<profile>#<index>`). The
+  menu opens on the last menu used when "Reopen where I left off" is on, else on the first. Defaults (version 3 of
+  `menuControls`): K2 nextMenu, K3 close, knob press select; saved old defaults (K2 select, K3 back) move once.
+  Back from a sub-menu: the Back row (row 0), or the arrow key / Backspace in the window.
+- **Helix dial** (`quick-menu-dial.js` `helix*`, `quick-menu.js`): row k steps from the highlight is the canonical
+  segment turned −40·k° and scaled 1.05^−k (a logarithmic spiral, so neighbours meet along one edge). Drawn: 2 rows
+  before (larger, fading), 16 after, labels to 9 after. Moves animate the highlight position (200 ms); a level change
+  animates the old level a full turn deeper with a fade and the new one in from a turn outside (460 ms); Back is the
+  reverse. Labels are fitted for the angle each segment rests at. No window, no "more" fades, no end stop; the
+  core still stops at the first and last row.
+- **Window**: dial 506 x 602, list 440 x 560 logical (`quick_menu::style_size`), around the saved centre.
+- **Time bar**: the view carries `leftMs` and `closeAfterMs`; the bar runs down linearly and restarts on each
+  input. The hint line is removed (the view still has `hints`).
+- `sessionFoldHours` (renamed from 1.0.0's `sessionFoldH`) defaults to 0, never.
+
+### Recent first and folding, 1.0.0 (user request 2026-11-18)
+
+User: with sessions in project A and project B, "trying to switch to project B, it's always a pain"; wanted the
+most recent ones "alongside with the rest of the list", not a separate Recent list, and things not used for a
+while to "collapse" into an entry that shows everything when opened. "Just build it first, and let's see how it
+feels."
+
+- **Order** (`claude_tree::tree_with`, `Recent`): every level is newest first by when the user last spoke to it.
+  A session's time is the hooks' `spoke` (set on UserPromptSubmit, kept in `claude-sessions.json`, expires with
+  the hook entry after 24 h idle), else Claude's own `lastActivityAt`/`lastTurnEdgeAt`. A project or a session with
+  sub-sessions counts its newest session below it. Projects (sidebar groups and "Other sessions") follow this
+  order, not the sidebar order.
+- **Folding** (`claude_tree::fold`): at each level, entries used within the fold time, working entries and the
+  first three stay; the rest go, in order, into a last `{"type":"submenu","more":true}` entry "More (n)" with
+  "not used for …". Nothing folds when only one entry would. A session's "Open: …" row is never folded. The
+  menu memory key of a More entry is `more`.
+- **Setting** `au05.sessionFoldH`: 1, 4, 8 (default), 24, 72 hours or 0 (never), "Fold sessions after" in the
+  "In the menu" row. The hook-only fallback list (no Claude session files) is not folded.
+- Known limit: Claude's own files cannot tell the user's messages from Claude's own turns, so without the hooks a
+  session where only Claude worked also moves up.
+
+### Page lists keep their choice, 1.0.0
+
+The page re-rendered every few seconds (battery, Claude session counts) even while a list was open, which
+replaced the list and lost the choice. The log showed only one noise reduction change ever sent (level 1,
+2026-11-17 09:14Z); the user's later 0, 2 and 3 never reached UC's core. The page now waits while a list has
+focus and catches up when it loses focus. Not yet checked on the installed app.
+
 ### The dial (0.34.0, user request 2026-11-17)
 
 User: "let's make it a dial, like a round thing ... make a full circle ... like pieces of a pie ... the top one

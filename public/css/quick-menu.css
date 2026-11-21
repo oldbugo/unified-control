@@ -38,3 +38,55 @@ html, body { margin: 0; height: 100%; background: transparent; color: var(--text
 .qm-foot { margin-top: 6px; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-tiny); line-height: var(--lh-tiny); color: var(--text-muted); background: color-mix(in srgb, var(--surface-1) 80%, transparent); max-width: calc(100% - 24px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qm-foot.note { color: var(--warn); }
 .qm-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+
+/* 1.0: the helix (levels spin in and out), the list style, the time bar. */
+.qm-level .qm-slot { transform-box: view-box; }
+.qm-level .qm-seg[data-hl="true"] { fill: var(--accent); stroke: var(--accent-hover); }
+.qm-level .qm-seg:hover { fill: var(--surface-3); stroke: var(--accent); }
+.qm-level .qm-seg[data-hl="true"]:hover { fill: var(--accent); }
+.qm-level .qm-label { pointer-events: none; }
+.qm-out { pointer-events: none; }
+.qm[data-style="dial"] .qm-panel { display: none; }
+.qm[data-style="list"] .qm-wheel { display: none; }
+.qm[data-style="list"] .qm-caption { display: none; }
+.qm-panel { width: calc(100% - 16px); margin-top: 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-1); box-shadow: 0 8px 24px rgba(0,0,0,.35); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
+.qm-list-title { display: flex; align-items: center; gap: var(--s2); padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: var(--fs-small); color: var(--text-muted); cursor: move; }
+.qm-crumb { font-weight: 600; color: var(--text); }
+.qm-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; scrollbar-width: thin; min-height: 0; flex: 1 1 auto; }
+.qm-row { display: flex; align-items: center; gap: var(--s2); padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.qm-row:hover { background: var(--surface-2); }
+.qm-row[data-hl="true"] { background: var(--accent); color: var(--accent-ink); }
+.qm-row[data-kind="nav"] { color: var(--text-muted); }
+.qm-row[data-hl="true"][data-kind="nav"] { color: var(--accent-ink); }
+.qm-row-name { font-weight: 600; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qm-row-detail { flex: none; max-width: 45%; font-size: var(--fs-tiny); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qm-glyph { flex: none; width: 14px; text-align: center; }
+.qm-face { flex: none; font-size: var(--fs-tiny); color: var(--text-muted); padding-right: var(--s2); border-right: 1px solid var(--border); white-space: nowrap; }
+.qm-note { color: var(--warn); }
+.qm-timer { width: min(240px, calc(100% - 32px)); height: 4px; margin-top: 8px; border-radius: 2px; background: color-mix(in srgb, var(--surface-2) 80%, transparent); overflow: hidden; }
+.qm-bar { height: 100%; width: 100%; background: var(--accent); transform-origin: left center; }
+
+/* 1.2.0: a long list flows; the peeks stand out from under the top block, faded. */
+.qm-peek { opacity: 1; }
+.qm-peek-seg { opacity: .5; cursor: default; stroke: var(--border); }
+.qm-seg.qm-tail, .qm-seg.qm-topfade { stroke-opacity: .5; }
+
+/* 1.2.0: the list is grouped by project, larger and easier to follow. */
+.qm-panel { border-radius: 14px; }
+.qm-list-title { padding: 10px 14px; font-size: var(--fs-body); }
+.qm-list-title .qm-face { font-size: var(--fs-small); }
+.qm-list-pos { margin-left: auto; font-size: var(--fs-small); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.qm-list { padding: 6px 8px 10px; scroll-behavior: auto; }
+.qm-group { position: sticky; top: -6px; z-index: 1; display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; padding: 6px 10px 4px; background: var(--surface-1); font-size: var(--fs-small); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.qm-group:first-child { margin-top: 0; }
+.qm-group[data-current="true"] { color: var(--accent); border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.qm-group-count { font-weight: 600; letter-spacing: 0; color: var(--text-faint); }
+.qm-row { position: relative; padding: 10px 14px; margin: 2px 0; border-radius: 10px; gap: 10px; }
+.qm-row.qm-in-group { margin-left: 8px; }
+.qm-row-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+.qm-row .qm-row-name { font-size: calc(var(--fs-body) + 3px); line-height: 1.25; font-weight: 600; white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.qm-row .qm-row-detail { max-width: none; font-size: var(--fs-small); opacity: .75; }
+.qm-row[data-hl="true"] { box-shadow: 0 0 0 2px var(--accent-hover), 0 4px 14px rgba(0,0,0,.35); }
+.qm-row[data-hl="true"]::before { content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 4px; border-radius: 2px; background: var(--accent); }
+.qm-row[data-hl="true"] .qm-row-name { font-weight: 700; }
+.qm-row:not([data-hl="true"]) { opacity: .88; }

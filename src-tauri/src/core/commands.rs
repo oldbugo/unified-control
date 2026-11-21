@@ -257,6 +257,10 @@ pub async fn au05_reconnect(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |app| app.au05_reconnect()).await
 }
 #[tauri::command]
+pub async fn au05_restart_receiver(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |app| app.au05_restart_receiver()).await
+}
+#[tauri::command]
 pub async fn au05_test_control(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
     run(&core, move |app| app.au05_test_control(&patch)).await
 }

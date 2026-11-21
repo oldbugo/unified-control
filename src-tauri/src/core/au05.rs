@@ -37,10 +37,18 @@ pub const OFF_MESSAGE: &str = "Receiver connected · Vibe Key probably switched 
 pub const AWAKE_MESSAGE: &str = "Receiver connected · Vibe Key awake";
 pub const ASLEEP_MESSAGE: &str = "Receiver connected · Vibe Key asleep. Press a key or turn the knob to wake it";
 pub const WAITING_MESSAGE: &str = "Receiver connected · press a key or turn the knob to wake the Vibe Key";
+/// 1.3.0 (real receiver 2026-11-21): nothing at all since the receiver was opened. Either the key is switched off,
+/// or the receiver is stuck (after Windows started from a Fast Startup shutdown it passed nothing on until it was
+/// replugged). UC cannot tell these apart, so it says both and offers Restart receiver.
+pub const SILENT_MESSAGE: &str = "Receiver connected · nothing from the Vibe Key since the receiver was opened. Switch the key on; if it is on, the receiver may be stuck: Restart receiver";
 
 /// The standby time used before the key's own was read (0.36.0): the last one read (kept in the settings),
 /// else 300 s.
 pub const DEFAULT_STANDBY_S: u32 = 300;
+/// The quick menu's fold times for Claude sessions, in hours (0 = never fold), and the default (1.0).
+pub const SESSION_FOLD_H: [u64; 6] = [0, 1, 4, 8, 24, 72];
+/// 1.0 (user feedback 2026-11-18): no "More" folding unless the user picks a time; long lists keep scrolling.
+pub const SESSION_FOLD_DEFAULT_H: u64 = 0;
 
 /// The state the page shows (0.36.0, deterministic: the key's own timers run from its last input). Display
 /// only: sending still follows the session's own 11 s gate. `quiet`: since the last input, which is the latest
@@ -68,7 +76,7 @@ pub fn shown_state(
         Some(_) => ("asleep", ASLEEP_MESSAGE),
         // Nothing since the connection opened: waiting, then (past standby + 2 minutes) probably off.
         None if state == SessionState::Awake => ("connected", AWAKE_MESSAGE),
-        None if since_open > standby + Duration::from_secs(120) => ("off", OFF_MESSAGE),
+        None if since_open > standby + Duration::from_secs(120) => ("silent", SILENT_MESSAGE),
         None => ("waiting", WAITING_MESSAGE),
     }
 }
@@ -99,6 +107,8 @@ pub const TOUCH_WAIT: Duration = Duration::from_secs(60);
 pub const STANDBY_MARGIN: Duration = Duration::from_secs(10);
 /// The read burst after the key wakes is capped by total time; reads still queued then are dropped.
 const READ_BURST_LIMIT: Duration = Duration::from_secs(10);
+/// The automatic settings reads wait until the key has not been pressed or turned for this many settle times.
+const READ_QUIET_SETTLES: u32 = 4;
 
 /// The Windows virtual key of each key's own code.
 pub fn own_vk(key: KeyId) -> u16 {
@@ -345,6 +355,10 @@ pub fn sanitize(v: &Value) -> Value {
         "menuControlsVersion": MENU_CONTROLS_VERSION,
         // "Reopen where I left off" (user request 2026-11-17): the menu opens where it was closed.
         "reopenWhereLeft": v["reopenWhereLeft"].as_bool().unwrap_or(true),
+        // Claude sessions not used for this many hours fold into "More" in the quick menu (1.0; 0 = never).
+        "sessionFoldHours": v["sessionFoldHours"].as_u64().filter(|h| SESSION_FOLD_H.contains(h)).unwrap_or(SESSION_FOLD_DEFAULT_H),
+        // The menus K2 cycles through (1.0).
+        "menuFaces": menu::sanitize_faces(&v["menuFaces"]),
         // "factory": the knob scrolls by itself (stored on the key). "uc": it types F23/F24 and UC moves the
         // menu or runs `knobTurnAction` (scroll by default).
         // Set only by Connect / Disconnect on the page (they also edit Claude's settings).
@@ -424,7 +438,7 @@ fn profile_id(name: &str, profiles: &[Value]) -> String {
 ///   profileEdit?: {op: add|rename|remove, id?, name?}}`
 /// The menu controls' settings version. 2 (0.31.0): a knob press "close" saved from the old default becomes
 /// "select", once (user feedback 2026-11-17); after that a user who picks "close" keeps it.
-pub const MENU_CONTROLS_VERSION: u64 = 2;
+pub const MENU_CONTROLS_VERSION: u64 = 3;
 
 /// The one-time menu controls migration on the raw Vibe Key settings. True when it changed anything (the
 /// marker included), so the caller saves it.
@@ -432,8 +446,19 @@ pub fn migrate_menu_controls(au: &mut Value) -> bool {
     if !au.is_object() || au["menuControlsVersion"].as_u64().unwrap_or(0) >= MENU_CONTROLS_VERSION {
         return false;
     }
-    if au["menuControls"]["knobPress"] == "close" {
+    let from = au["menuControlsVersion"].as_u64().unwrap_or(0);
+    if from < 2 && au["menuControls"]["knobPress"] == "close" {
         au["menuControls"]["knobPress"] = json!("select");
+    }
+    // 1.0: K2 next menu and K3 close are the new defaults; the old defaults (select, back) move to them once.
+    // A role the user chose (anything else) is kept.
+    if from < 3 && au["menuControls"].is_object() {
+        if au["menuControls"]["k2"] == "select" {
+            au["menuControls"]["k2"] = json!("nextMenu");
+        }
+        if au["menuControls"]["k3"] == "back" {
+            au["menuControls"]["k3"] = json!("close");
+        }
     }
     au["menuControlsVersion"] = json!(MENU_CONTROLS_VERSION);
     true
@@ -597,6 +622,23 @@ pub fn apply_patch(au: &mut Value, patch: &Value) -> Result<Vec<String>, String>
             }
         }
         au["menuControls"] = next;
+    }
+    if let Some(v) = patch.get("menuFaces") {
+        let faces = v.as_array().ok_or("Invalid menus")?;
+        if faces.is_empty() || faces.len() > menu::MAX_FACES {
+            return Err(format!("Keep between 1 and {} menus", menu::MAX_FACES));
+        }
+        let clean = menu::sanitize_faces(v);
+        if clean.as_array().map_or(0, |a| a.len()) != faces.len() {
+            return Err("Choose a style and what each menu shows".into());
+        }
+        au["menuFaces"] = clean;
+        lines.push(format!("page menus = {}", faces.len()));
+    }
+    if let Some(v) = patch.get("sessionFoldHours") {
+        let h = v.as_u64().filter(|h| SESSION_FOLD_H.contains(h)).ok_or("Choose one of the offered times")?;
+        au["sessionFoldHours"] = json!(h);
+        lines.push(format!("page menu session fold = {h} h"));
     }
     if let Some(v) = patch.get("reopenWhereLeft") {
         let v = v.as_bool().ok_or("Invalid Vibe Key setting")?;
@@ -917,6 +959,8 @@ pub struct MenuCtl {
     claude_data: Mutex<Option<std::path::PathBuf>>,
     /// The menu as shown, frozen while it is open (a changing session list never moves the highlight).
     frozen: Mutex<Option<Value>>,
+    /// The menu shown (index into `menuFaces`, 1.0); kept between openings when "Reopen where I left off" is on.
+    face: Mutex<usize>,
     /// Where the last session list came from (for the page).
     session_source: Mutex<Value>,
 }
@@ -982,11 +1026,63 @@ impl MenuCtl {
                            "project": s["project"], "working": s["state"] == "working", "at": s["last"]})).collect::<Vec<_>>()})
             }
         };
-        menu::expand(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok())
+        let fold = settings["sessionFoldHours"].as_u64().filter(|h| *h > 0).map(|h| h * 3600 * 1000);
+        let face = self.face_of(settings);
+        if face["source"] == "recent" {
+            return match &desktop {
+                Ok(d) => {
+                    let working: Vec<String> =
+                        list.iter().filter(|s| s["state"] == "working").filter_map(|s| s["desktopId"].as_str().map(str::to_string)).collect();
+                    let recent = super::claude_tree::Recent {
+                        spoke: list.iter().filter_map(|s| Some((s["desktopId"].as_str()?.to_string(), s["spoke"].as_u64()?))).collect(),
+                        fold_ms: None,
+                    };
+                    let rows = super::claude_tree::recent_list(&d.sessions, d.groups.as_ref().ok(), &working, now_ms(), &recent);
+                    if rows.is_empty() { json!([{"type": "note", "label": "No open Claude sessions"}]) } else { Value::Array(rows) }
+                }
+                Err(_) => {
+                    let rows = menu::session_tree(&list, &json!("none"), now_ms());
+                    let flat: Vec<Value> = rows.iter().flat_map(|p| p["entries"].as_array().cloned().unwrap_or_default()).collect();
+                    if flat.is_empty() { json!([{"type": "note", "label": "No Claude sessions yet"}]) } else { Value::Array(flat) }
+                }
+            };
+        }
+        menu::expand_with(&settings["menu"], &list, connected, now_ms(), desktop.as_ref().ok(), fold)
+    }
+
+    /// The current menu (`menuFaces`), clamped.
+    fn face_of(&self, settings: &Value) -> Value {
+        let faces = settings["menuFaces"].as_array().cloned().unwrap_or_default();
+        let i = *self.face.lock_or_recover();
+        faces.get(i).or(faces.first()).cloned().unwrap_or_else(|| menu::default_faces()[0].clone())
+    }
+    /// The memory scope of the current menu: per profile for its own menu, shared for the recent list.
+    fn scope_of(&self, settings: &Value) -> String {
+        let i = *self.face.lock_or_recover();
+        format!("{}#{i}", settings["profile"].as_str().unwrap_or(""))
+    }
+    /// The view with the current menu's style and the list of menus (for the window).
+    fn with_face(&self, settings: &Value, mut view: Value) -> Value {
+        let faces = settings["menuFaces"].as_array().cloned().unwrap_or_default();
+        let face = self.face_of(settings);
+        view["style"] = face["style"].clone();
+        view["face"] = face["name"].clone();
+        view["faceIndex"] = json!((*self.face.lock_or_recover()).min(faces.len().saturating_sub(1)));
+        view["faces"] = json!(faces.iter().map(|f| f["name"].clone()).collect::<Vec<_>>());
+        if face["source"] == "recent" {
+            view["title"] = json!([face["name"]]);
+        }
+        view
     }
 
     pub fn input(self: &Arc<Self>, input: Input, source: &str) {
         let settings = self.settings();
+        if input == Input::NextMenu {
+            return self.next_menu(&settings, source);
+        }
+        if !self.is_open() && input == Input::Toggle && settings["reopenWhereLeft"] == false {
+            *self.face.lock_or_recover() = 0;
+        }
         // Read once when the menu opens; kept while it is open.
         let frozen = self.frozen.lock_or_recover().clone();
         let shown = match frozen {
@@ -1002,11 +1098,12 @@ impl MenuCtl {
             let was = st.open;
             st.remember = settings["reopenWhereLeft"] != false;
             if !was {
-                // The memory is per profile menu.
-                st.scope = settings["profile"].as_str().unwrap_or("").to_string();
+                // The memory is per profile menu (and per menu, 1.0).
+                st.scope = self.scope_of(&settings);
             }
+            st.no_close = self.face_of(&settings)["style"] == "list";
             let o = st.step(&shown, input, Instant::now());
-            (o, was, st.view(&settings, &shown))
+            (o, was, self.with_face(&settings, st.view(&settings, &shown)))
         };
         let open = view["open"] == true;
         if !open {
@@ -1045,6 +1142,31 @@ impl MenuCtl {
             }
             Outcome::Unavailable(m) => self.log.line(&format!("menu: {m}")),
             Outcome::Nothing | Outcome::Moved => {}
+        }
+    }
+
+    /// K2 while open (1.0): show the next menu (after the last, the first again), where it was left.
+    fn next_menu(self: &Arc<Self>, settings: &Value, source: &str) {
+        if !self.is_open() {
+            return;
+        }
+        let faces = settings["menuFaces"].as_array().map_or(1, |a| a.len().max(1));
+        let before = self.shown_menu(settings);
+        {
+            let mut f = self.face.lock_or_recover();
+            *f = (*f + 1) % faces;
+        }
+        let shown = self.fresh_menu(settings);
+        *self.frozen.lock_or_recover() = Some(shown.clone());
+        let view = {
+            let mut st = self.state.lock_or_recover();
+            st.no_close = self.face_of(settings)["style"] == "list";
+            st.switch(&before, &shown, self.scope_of(settings), Instant::now());
+            self.with_face(settings, st.view(settings, &shown))
+        };
+        self.log.line(&format!("menu next: {} ({source})", view["face"].as_str().unwrap_or("")));
+        if let Some(v) = self.view.lock_or_recover().clone() {
+            v.show(&view, false);
         }
     }
 
@@ -1237,6 +1359,7 @@ impl MenuCtl {
                 "select" => return self.input(Input::Choose, name),
                 "back" => return self.input(Input::Back, name),
                 "close" => return self.input(Input::Close, name),
+                "nextMenu" => return self.input(Input::NextMenu, name),
                 _ => {}
             }
         }
@@ -1276,8 +1399,10 @@ impl MenuCtl {
         let settings = self.settings();
         let shown = self.shown_menu(&settings);
         let view = self.state.lock_or_recover().view(&settings, &shown);
+        let view = self.with_face(&settings, view);
         json!({
             "view": view,
+            "faces": settings["menuFaces"],
             "entries": settings["menu"],
             "profiles": settings["profiles"].as_array().map(|ps| ps.iter().map(|p| json!({"id": p["id"], "name": p["name"]})).collect::<Vec<_>>()),
             "profile": settings["profile"],
@@ -1287,6 +1412,7 @@ impl MenuCtl {
             "knobTurnAction": settings["knobTurnAction"],
             "controls": settings["menuControls"],
             "reopenWhereLeft": settings["reopenWhereLeft"] != false,
+            "sessionFoldHours": settings["sessionFoldHours"].as_u64().unwrap_or(SESSION_FOLD_DEFAULT_H),
             "sessions": self.session_source.lock_or_recover().clone(),
             "closeAfterS": menu::CLOSE_AFTER.as_secs(),
             "windowAvailable": self.view.lock_or_recover().is_some(),
@@ -1385,6 +1511,7 @@ impl Au05 {
                 fake || std::env::var("UC_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0"),
             )),
             frozen: Mutex::new(None),
+            face: Mutex::new(0),
             session_source: Mutex::new(Value::Null),
             dictate_busy: Arc::new(AtomicBool::new(false)),
             dictate_last: Mutex::new(None),
@@ -1451,6 +1578,7 @@ impl Au05 {
             "choose" => Some(Input::Choose),
             "back" => Some(Input::Back),
             "close" => Some(Input::Close),
+            "nextMenu" => Some(Input::NextMenu),
             "toggle" => Some(Input::Toggle),
             "pick" => Some(Input::Pick(index.ok_or("Choose a row")?)),
             "hold" => Some(Input::Hold),
@@ -1746,17 +1874,49 @@ impl Au05 {
     }
 
     /// Does the key hold the offline layer? Every known list equals its offline typing, no key job waits or is
-    /// being sent, no key-typing command is pending, and no earlier write is in doubt. Unknown lists count as
-    /// stored (UC did not change them in this run).
+    /// being sent, no key-typing command is pending, and no earlier write is in doubt. A list not read in this
+    /// run counts as stored only when the last list the key confirmed (`keyEcho`, saved) is its offline typing
+    /// or unknown. 1.2.3 (user report 2026-11-19: with the Vibe Key off, K1-K3 and the knob did nothing): before,
+    /// every unread list counted as stored, so a disable right after a stall logged "offline layer is on the
+    /// key" and stopped at once while the key still typed UC's own codes (F19-F23).
     fn offline_on_key(&self) -> bool {
         let s = self.status.lock_or_recover();
         let l = self.layers.lock_or_recover();
         !s.sync.pending
             && !s.sync.uncertain.iter().any(|u| *u)
             && !s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending")
-            && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| {
-                s.known.keys[id.index() as usize].as_ref().is_none_or(|k| *k == l.offline[i])
+            && LAYER_CONTROLS.iter().enumerate().all(|(i, (_, id))| match s.known.keys[id.index() as usize].as_ref() {
+                Some(k) => *k == l.offline[i],
+                None => l.echo[i].as_ref().is_none_or(|e| *e == l.offline[i]),
             })
+    }
+
+    /// 1.2.4 (real key 2026-11-19: knob left held UC's F24; every disable waited the whole 8 s and ended "no
+    /// time left", the buttons working through UC until then): the controls that keep the offline layer off the
+    /// key only because UC may not write them before "Set up". Empty while anything else is still to do.
+    fn offline_needs_set_up(&self) -> Vec<&'static str> {
+        let s = self.status.lock_or_recover();
+        let l = self.layers.lock_or_recover();
+        if !l.target_offline || s.sync.pending || s.jobs.iter().flatten().any(|j| j.state == "waiting" || j.state == "sending") {
+            return Vec::new();
+        }
+        let mut stuck = Vec::new();
+        for (i, (name, id)) in LAYER_CONTROLS.iter().enumerate() {
+            let idx = id.index() as usize;
+            let on = match s.known.keys[idx].as_ref() {
+                Some(k) => *k == l.offline[i],
+                None => l.echo[i].as_ref().is_none_or(|e| *e == l.offline[i]),
+            };
+            if on {
+                continue;
+            }
+            match s.jobs[idx].as_ref() {
+                // The job recomputed for the offline layer (not one left from the live layer).
+                Some(j) if j.state == "check" && j.typing == l.offline[i] => stuck.push(*name),
+                _ => return Vec::new(),
+            }
+        }
+        stuck
     }
 
     /// Switch the key to its offline layer and wait (at most `budget`) until it is stored. Only an awake key
@@ -1770,6 +1930,11 @@ impl Au05 {
             if self.offline_on_key() {
                 self.log.line("layer: offline layer is on the key");
                 return true;
+            }
+            let unchecked = self.offline_needs_set_up();
+            if !unchecked.is_empty() {
+                self.log.line(&format!("layer: offline layer not stored ({} still types UC's code and is not checked on the real key: Set up on the page)", unchecked.join(", ")));
+                return false;
             }
             let (state, pending, blocked) = {
                 let s = self.status.lock_or_recover();
@@ -1856,6 +2021,30 @@ impl Au05 {
         tx.send(Cmd::Reconnect).map_err(|_| "The Vibe Key worker is unavailable".to_string())
     }
 
+    /// The page's Restart receiver (1.3.0): Windows restarts the receiver's USB device (it asks for permission),
+    /// then the worker reconnects. Only when the user clicks it; the fake key only logs it.
+    pub fn restart_receiver(&self) -> Result<(), String> {
+        if self.tx.lock_or_recover().is_none() {
+            return Err("Enable the Vibe Key first".into());
+        }
+        self.log.line("page restart receiver: asking Windows");
+        let result = if self.fake.is_some() {
+            Ok("fake receiver".to_string())
+        } else if super::buildinfo::fake_device().is_some() {
+            Err("Test mode never restarts the real receiver".to_string())
+        } else {
+            super::au05_receiver::restart()
+        };
+        match &result {
+            Ok(id) => self.log.line(&format!("receiver restarted by Windows ({id})")),
+            Err(e) => self.log.line(&format!("receiver not restarted: {e}")),
+        }
+        result?;
+        // The receiver goes away and comes back: open it again from a clean state.
+        let _ = self.reconnect();
+        Ok(())
+    }
+
     /// The hotkeys UC holds now (the Input tester marks these key presses: other apps never get them).
     pub fn claimed_hotkeys(&self) -> Vec<u16> {
         self.hotkeys.lock_or_recover().iter().filter(|(_, r)| r.is_ok()).map(|(vk, _)| *vk).collect()
@@ -1902,6 +2091,7 @@ impl Au05 {
                             ("waiting", "paused") => "Waiting: sending is paused after a slow reply".to_string(),
                             ("waiting", "suspended") => "Stopped after slow replies: use Reconnect".to_string(),
                             ("waiting", "off") => "Waiting: the key seems switched off. Hold its power button 2–3 s".to_string(),
+                            ("waiting", "silent") => "Waiting: nothing from the key. Switch it on, or restart the receiver".to_string(),
                             ("waiting", _) => "Waiting for the key: press any key to wake it".to_string(),
                             ("sending", _) => "Sending to the key (it can take up to 20 seconds)".to_string(),
                             ("done", _) => "Done".to_string(),
@@ -2144,15 +2334,16 @@ impl Worker {
                 if let Some(held) = s.known.keys[id.index() as usize].clone() {
                     l.seed(i, &held);
                     let typing = l.offline[i].clone();
-                    seeds.push((name.to_string(), typing.is_factory(), typing.label(*id)));
+                    seeds.push((name.to_string(), typing.is_factory(), typing.label(*id), held.label(*id)));
                 }
             }
         }
         if self.exiting.load(Ordering::SeqCst) {
             return;
         }
-        for (name, factory, label) in seeds {
-            self.log.line(&format!("layer: {name} offline typing taken from the key ({})", if factory { "factory" } else { "keys" }));
+        for (name, factory, label, held) in seeds {
+            // 1.2.4: what the key held too (UC's own codes are taken as factory).
+            self.log.line(&format!("layer: {name} offline typing taken from the key ({}; it holds {held})", if factory { "factory" } else { "keys" }));
             let patch = if factory {
                 json!({"offline": {"control": name, "mode": "factory", "seed": true}})
             } else {
@@ -2294,7 +2485,10 @@ impl Worker {
             if s.sync.blocked || s.sync.no_new {
                 continue;
             }
-            if known.is_none() {
+            // 1.2.3: going offline, a control whose confirmed list is UC's own code is written straight back
+            // (no read first: a key-typing read can stall, and UC knows what it left there).
+            let own_left = l.target_offline && l.seeded[i] && l.echo[i].as_ref() == Some(&KeyTyping::own_code(*id));
+            if known.is_none() && !own_left {
                 s.sync.read_tried[idx] = true;
                 self.log.line(&format!("layer sync: read {name} first"));
                 s.jobs[idx] = Some(KeyJob { typing: want, state: "waiting", message: String::new(), next: None, read: true });
@@ -2310,8 +2504,23 @@ impl Worker {
     /// guard holds key typing back.
     /// The settle time has passed since the key woke and since its last control event (the driver applies it to
     /// sets only; UC applies it to key-typing reads too).
+    /// 1.2.2 (user report 2026-11-19, "very laggy" right after the key woke): a press or knob turn from the key's
+    /// own codes counts too. Those report nothing privately, so before this UC sent its reads while the key was
+    /// in use; one got no reply and sending paused for 30 s.
     fn settled(&self) -> bool {
-        self.quiet_from.lock_or_recover().is_none_or(|t| t.elapsed() >= self.config.settle)
+        let quiet = *self.quiet_from.lock_or_recover();
+        let used = *self.menu.key_seen.lock_or_recover();
+        [quiet, used].into_iter().flatten().max().is_none_or(|t| t.elapsed() >= self.config.settle)
+    }
+
+    /// 1.2.2: the automatic settings reads (nothing the user asked for) wait longer: not during a dictation, and
+    /// not until the key has not been pressed or turned for `READ_QUIET_SETTLES` × the settle time (6 s).
+    fn idle_for_reads(&self) -> bool {
+        if self.menu.dictate_busy.load(Ordering::SeqCst) {
+            return false;
+        }
+        let used = *self.menu.key_seen.lock_or_recover();
+        used.is_none_or(|t| t.elapsed() >= self.config.settle * READ_QUIET_SETTLES)
     }
 
     fn start_jobs(&self, session: &mut Session<Box<dyn Transport>>, tickets: &mut HashMap<u64, Purpose>, awake: bool) {
@@ -2550,7 +2759,7 @@ impl Worker {
                 *self.quiet_from.lock_or_recover() = Some(Instant::now());
                 awake_since = Some(Instant::now());
                 // Woke from "probably switched off": its values may have changed while it was off.
-                if last_state.is_some_and(|(s, _)| s == "off") {
+                if last_state.is_some_and(|(s, _)| s == "off" || s == "silent") {
                     self.log.line("woke from switched off: reading the settings again");
                     reads.restart();
                     self.status.lock_or_recover().reads_failed = false;
@@ -2606,7 +2815,8 @@ impl Worker {
             // The settings reads: awake for twice the settle time and settled since the last control event.
             let ready = awake
                 && awake_since.is_some_and(|t| t.elapsed() >= self.config.settle * 2)
-                && self.settled();
+                && self.settled()
+                && self.idle_for_reads();
             let cycle = reads.cycle;
             let batch = reads.next(ready);
             if !batch.is_empty() {
@@ -3203,7 +3413,7 @@ mod tests {
         assert_eq!(shown_state(SessionState::Asleep, Some(s(9000)), s(9000), sb, None).0, "asleep", "power-off not known");
         assert_eq!(shown_state(SessionState::Awake, Some(s(400)), s(400), sb, po), ("connected", AWAKE_MESSAGE), "a message: awake at once");
         assert_eq!(shown_state(SessionState::WaitingForKey, None, s(10), sb, po).0, "waiting");
-        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(421), sb, po).0, "off", "nothing since the connection opened");
+        assert_eq!(shown_state(SessionState::WaitingForKey, None, s(421), sb, po).0, "silent", "nothing since the connection opened (1.3.0)");
         assert_eq!(shown_state(SessionState::Paused, Some(s(1)), s(30), sb, po).0, "paused");
         // The times are kept in the settings (used before the key answers after a start).
         let mut au = sanitize(&json!({"knownTimes": {"standbyS": 0, "sleepS": 99_999}}));
@@ -3485,6 +3695,29 @@ mod tests {
         let s = wait_for(&au, |s| s["standbyS"].is_number());
         assert!(start.elapsed() >= Duration::from_millis(900), "read after 2 × settle, not at once: {:?}", start.elapsed());
         assert!(s["micNr"].is_object() || wait_for(&au, |s| s["micNr"].is_object())["micNr"].is_object());
+        au.shutdown();
+    }
+
+    /// 1.2.2 (user report 2026-11-19: "very laggy" right after the key woke; the reads went out while K1 was
+    /// being pressed and stalled): while the key is pressed or turned, UC sends it nothing of its own. The reads
+    /// wait until it has not been used for 4 × the settle time.
+    #[test]
+    fn nothing_is_sent_to_the_key_while_it_is_in_use() {
+        let settle = Duration::from_millis(150);
+        let au = Au05::with_config(true, None, SessionConfig { settle, ..quick() });
+        au.fake_handle().unwrap().lock().status_period = Some(Duration::from_millis(100));
+        let desk = au.fake_desktop().unwrap().clone();
+        au.configure(&json!({"enabled": true, "actions": {"k2": {"kind": "enter"}}}));
+        assert!(desk.press(hotkey::VK_F21), "K2 is claimed");
+        let using = Instant::now();
+        while using.elapsed() < Duration::from_millis(1500) {
+            desk.press(hotkey::VK_F21);
+            assert!(!au.status()["standbyS"].is_number(), "no settings read while K2 is being pressed");
+            std::thread::sleep(Duration::from_millis(80));
+        }
+        let stopped = Instant::now();
+        wait_for(&au, |s| s["standbyS"].is_number());
+        assert!(stopped.elapsed() >= Duration::from_millis(550), "read once it was left alone: {:?}", stopped.elapsed());
         au.shutdown();
     }
 
@@ -3990,6 +4223,74 @@ mod tests {
     }
 
     /// Real-key bug on 0.24.0: the knob press with "Open quick menu" kept typing Backspace and showed nothing.
+    /// 1.2.3 (user report 2026-11-19: with the Vibe Key off, K1-K3 and the knob did nothing): UC left its own
+    /// codes on the key in an earlier run (saved in `keyEcho`) and read nothing in this one. Disabling must
+    /// still give the key its offline typing back, written straight away (no read first); with the key
+    /// asleep it is reported as not stored instead of "on the key".
+    #[test]
+    fn going_offline_writes_back_uc_codes_left_on_the_key_by_an_earlier_run() {
+        let settings = json!({"enabled": true, "layers": 1, "actions": {"k1": {"kind": "claudeDictation"}},
+            "offline": {"k1": {"mode": "factory"}}, "offlineSet": {"k1": true},
+            "keyEcho": {"k1": KeyTyping::own_code(KeyId::K1).label(KeyId::K1)}});
+        let k1_cmds = |f: &FakeHandle, op: u8| f.received().into_iter().filter(|p| p[2] == 0x50 && p[3] == op && p.get(4).copied() == Some(0)).count();
+
+        let au = worker();
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().typing[0] = KeyTyping::own_code(KeyId::K1);
+        au.configure(&settings);
+        wait_for(&au, |s| s["state"] == "connected");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(k1_cmds(&fake, 0x01) + k1_cmds(&fake, 0x00), 0, "live: the confirmed list is what UC wants, nothing sent");
+        assert_eq!(au.shutdown(), Some(true));
+        assert_eq!(fake.lock().typing[0], KeyTyping::factory(), "K1 types its factory key again");
+        assert_eq!(k1_cmds(&fake, 0x01), 0, "written straight back, not read first");
+        assert_eq!(k1_cmds(&fake, 0x00), 1);
+
+        // Asleep at quit: nothing written, and not reported as stored.
+        let au = worker();
+        au.fake_handle().unwrap().lock().standby_s = 2;
+        let fake = au.fake_handle().unwrap().clone();
+        fake.lock().typing[0] = KeyTyping::own_code(KeyId::K1);
+        au.configure(&settings);
+        wait_for(&au, |s| s["state"] == "connected");
+        fake.sleep();
+        let end = Instant::now() + Duration::from_secs(20);
+        while au.status()["state"] != "asleep" && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(au.shutdown(), Some(false), "UC's code is still on the key");
+        assert_eq!(fake.lock().typing[0], KeyTyping::own_code(KeyId::K1));
+    }
+
+    /// 1.2.4 (real key 2026-11-19): knob left holds UC's F24 and was never set up, so UC may not write it.
+    /// Turning the Vibe Key off writes the rest and says at once that knob left needs Set up, instead of
+    /// waiting the whole budget and ending "no time left".
+    #[test]
+    fn going_offline_names_a_control_that_needs_set_up_instead_of_running_out_of_time() {
+        let au = worker();
+        let dir = log_dir("needs-set-up");
+        au.set_log_dir(dir.clone());
+        let fake = au.fake_handle().unwrap().clone();
+        let left = KeyId::KnobLeft.index() as usize;
+        fake.lock().typing[left] = KeyTyping::own_code(KeyId::KnobLeft);
+        au.configure(&json!({"enabled": true, "layers": 1, "knobTurn": "uc", "actions": {"k1": {"kind": "claudeDictation"}}}));
+        wait_for(&au, |s| s["keys"][0]["mode"] == "uc");
+        let end = Instant::now() + Duration::from_secs(5);
+        while let Err(e) = au.read_key(KeyId::KnobLeft) {
+            assert!(Instant::now() < end, "{e}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let start = Instant::now();
+        assert_eq!(au.shutdown_within(Some(Duration::from_secs(4))), Some(false), "not stored: knob left still types F24");
+        assert!(start.elapsed() < Duration::from_secs(2), "said at once, not after the budget: {:?}", start.elapsed());
+        assert_eq!(fake.lock().typing[0], KeyTyping::factory(), "K1 got its factory key back");
+        assert_eq!(fake.lock().typing[left], KeyTyping::own_code(KeyId::KnobLeft), "knob left is not written before Set up");
+        let log = log_text(&dir);
+        assert!(log.contains("offline layer not stored (knobLeft still types UC's code"), "{log}");
+        assert!(!log.contains("no time left"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An unchecked control UC needs to write always shows "Needs a check" (also while key changes are
     /// paused), is logged once, and is never written; Set up reads it, then sets it, once.
     #[test]
@@ -4167,7 +4468,11 @@ mod tests {
         list.lock_or_recover().push(json!({"desktopId": "local_0123abcd-0000-4000-8000-000000000001", "project": "P", "last": now_ms()}));
         au.menu_input("next", None).unwrap();
         au.menu_input("prev", None).unwrap();
-        assert_eq!(au.status()["menu"]["view"], before, "frozen while open");
+        let still = |mut v: Value| {
+            v["leftMs"] = Value::Null; // the idle bar's time left moves on
+            v
+        };
+        assert_eq!(still(au.status()["menu"]["view"].clone()), still(before), "frozen while open");
         au.shutdown();
     }
 
@@ -4231,7 +4536,8 @@ mod tests {
         let mut old = json!({"enabled": true, "menuControls": {"k2": "select", "k3": "back", "knobPress": "close"}});
         assert_eq!(sanitize(&old)["menuControls"]["knobPress"], "select", "applies before it is saved too");
         assert!(migrate_menu_controls(&mut old));
-        assert_eq!(old["menuControls"], json!({"k2": "select", "k3": "back", "knobPress": "select"}));
+        // 1.0: the old defaults K2 select and K3 back also move to the new ones (next menu, close).
+        assert_eq!(old["menuControls"], json!({"k2": "nextMenu", "k3": "close", "knobPress": "select"}));
         assert_eq!(old["menuControlsVersion"], MENU_CONTROLS_VERSION);
         assert!(!migrate_menu_controls(&mut old), "only once");
         // The user picks Close again: kept, through sanitising and further patches.
@@ -4294,9 +4600,22 @@ mod tests {
         assert!(!open(&au));
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(desk.ran.lock_or_recover().len(), 1, "nothing ran");
-        // Open; K2 selects the first entry (Claude dictation), which runs after the menu closes.
+        // 1.0: K2 shows the next menu (the recent sessions list) and the menu stays open; K3 closes.
+        let face = |au: &Au05| au.status()["menu"]["view"]["faceIndex"].as_u64();
         desk.press(hotkey::VK_F20);
         desk.press(hotkey::VK_F21);
+        assert!(open(&au));
+        assert_eq!(face(&au), Some(1));
+        assert_eq!(au.status()["menu"]["view"]["style"], "list");
+        desk.press(hotkey::VK_F22);
+        assert!(!open(&au));
+        // It opens on the menu it was left on; K2 again goes round to the first; the knob press selects the first
+        // entry (Claude dictation), which runs after the menu closes.
+        desk.press(hotkey::VK_F20);
+        assert_eq!(face(&au), Some(1));
+        desk.press(hotkey::VK_F21);
+        assert_eq!(face(&au), Some(0));
+        desk.press(hotkey::VK_F19);
         assert!(!open(&au));
         assert_eq!(ran(4)[1..], ["focus claude.exe", "message box claude.exe", "press Ctrl + D"]);
         // Closed again: K2 types Enter (its factory typing).

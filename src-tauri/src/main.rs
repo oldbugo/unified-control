@@ -141,6 +141,7 @@ fn main() {
             cc::au05_configure,
             cc::au05_change,
             cc::au05_reconnect,
+            cc::au05_restart_receiver,
             cc::au05_read_key,
             cc::au05_read_all,
             cc::au05_test_control,

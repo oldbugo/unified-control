@@ -14,8 +14,12 @@
     <svg class="qm-dial" id="qm-dial" role="listbox" aria-label="Quick menu" width="380" height="380" viewBox="-190 -190 380 380"></svg>
     <div class="qm-handle" id="qm-handle" data-tauri-drag-region title="Drag to move the menu" aria-hidden="true"></div>
   </div>
+  <section class="qm-panel" aria-label="Quick menu list">
+    <header class="qm-list-title" id="qm-list-title" data-tauri-drag-region title="Drag to move the menu"></header>
+    <ul class="qm-list" id="qm-list" role="listbox"></ul>
+  </section>
   <div class="qm-caption" id="qm-caption" role="status"></div>
-  <div class="qm-foot" id="qm-foot">Turn: move</div>
+  <div class="qm-timer" aria-hidden="true"><div class="qm-bar" id="qm-bar"></div></div>
 </main>
 </body>
 </html>

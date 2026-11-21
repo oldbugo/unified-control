@@ -71,6 +71,7 @@ fn main() {
         "au05_configure",
         "au05_change",
         "au05_reconnect",
+        "au05_restart_receiver",
         "au05_read_key",
         "au05_read_all",
         "au05_test_control",

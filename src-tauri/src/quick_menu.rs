@@ -21,7 +21,7 @@ const LABEL: &str = "quickmenu";
 const MARGIN: f64 = 24.0;
 /// The dial window's logical size for this many rings (1 to 3): the active ring's outer radius (225, 254,
 /// 305; 0.37.0: a thicker band), Close/Back's taper (12), the push-out of the highlighted segment (10) and a
-/// margin (14) each side, at least 380 wide, plus the caption and hints (96). Matches `dialSize` in
+/// margin (14) each side, at least 380 wide, plus the caption and the time bar (96). Matches `dialSize` in
 /// public/js/quick-menu-dial.js. On a smaller work area the window is clamped and the page draws the dial
 /// smaller.
 pub fn dial_size(rings: usize) -> (f64, f64) {
@@ -29,15 +29,22 @@ pub fn dial_size(rings: usize) -> (f64, f64) {
     let d = 2.0 * (outer + 12.0 + 10.0 + 14.0);
     (f64::max(d, 380.0), d + 96.0)
 }
-/// The caption and hints under the dial take 96 logical pixels: the window's centre is half of that below the
-/// dial's centre (physical pixels at this scale).
-fn half_caption(scale: f64) -> i64 {
-    (48.0 * scale).round() as i64
+/// The list style's window (1.1.0; 1.2.0: larger, user feedback "it feels really cramped").
+pub const LIST_SIZE: (f64, f64) = (500.0, 660.0);
+/// The window's logical size for a view: the list, or the dial with its rings.
+pub fn view_size(view: &Value) -> (f64, f64) {
+    if view["style"] == "list" { LIST_SIZE } else { dial_size(rings(view)) }
 }
 /// The rings a view shows: its level and up to two above it.
 fn rings(view: &Value) -> usize {
     view["levels"].as_array().map_or(0, |l| l.len().min(2)) + 1
 }
+/// The caption under the dial takes 96 logical pixels: the window's centre is half of that below the dial's
+/// centre (physical pixels at this scale).
+fn half_caption(scale: f64) -> i64 {
+    (48.0 * scale).round() as i64
+}
+
 
 pub fn enabled() -> bool {
     !crate::window::quiet() && uc_core::core::buildinfo::fake_device().is_none()
@@ -145,8 +152,8 @@ fn fit(c: (i64, i64), w: i64, h: i64, wa: (i64, i64, i64, i64)) -> (i32, i32) {
 }
 
 /// The logical size, made to fit the work area (physical) at this scale.
-fn fitted_size(rings: usize, scale: f64, wa: (i64, i64, i64, i64)) -> (f64, f64) {
-    let (w, h) = dial_size(rings);
+fn fitted_size(size: (f64, f64), scale: f64, wa: (i64, i64, i64, i64)) -> (f64, f64) {
+    let (w, h) = size;
     (w.min(wa.2 as f64 / scale), h.min(wa.3 as f64 / scale))
 }
 
@@ -155,14 +162,14 @@ fn work_area(m: &tauri::Monitor) -> (i64, i64, i64, i64) {
     (wa.position.x as i64, wa.position.y as i64, wa.size.width as i64, wa.size.height as i64)
 }
 
-/// Grow or shrink the window for another number of rings, around the dial's current centre.
-fn resize(win: &WebviewWindow, rings: usize) {
+/// Grow or shrink the window for another size (rings or style), around its current centre.
+fn resize(win: &WebviewWindow, want: (f64, f64)) {
     let (Ok(pos), Ok(size), Ok(Some(m))) = (win.outer_position(), win.outer_size(), win.current_monitor()) else {
         return;
     };
     let scale = m.scale_factor();
     let wa = work_area(&m);
-    let (lw, lh) = fitted_size(rings, scale, wa);
+    let (lw, lh) = fitted_size(want, scale, wa);
     let (w, h) = ((lw * scale).round() as i64, (lh * scale).round() as i64);
     if (w, h) == (size.width as i64, size.height as i64) {
         return;
@@ -176,7 +183,7 @@ fn resize(win: &WebviewWindow, rings: usize) {
 }
 
 /// Put the window on the remembered monitor and place, or near the top-right of the primary monitor.
-fn place(app: &AppHandle, win: &WebviewWindow, rings: usize) {
+fn place(app: &AppHandle, win: &WebviewWindow, want: (f64, f64)) {
     let monitors = app.available_monitors().unwrap_or_default();
     let saved = load_place();
     let remembered = saved.as_ref().and_then(|s| {
@@ -192,7 +199,7 @@ fn place(app: &AppHandle, win: &WebviewWindow, rings: usize) {
     let Some(m) = monitor else { return };
     let scale = m.scale_factor();
     let wa = work_area(&m);
-    let (lw, lh) = fitted_size(rings, scale, wa);
+    let (lw, lh) = fitted_size(want, scale, wa);
     let (w, h) = ((lw * scale).round() as i64, (lh * scale).round() as i64);
     let r = rect(&m);
     // The window's centre (the dial is at its top, the caption below).
@@ -227,11 +234,11 @@ impl MenuView for TauriMenu {
                     }
                 },
             };
-            let rings = rings(&view);
+            let want = view_size(&view);
             if first {
-                place(&app, &win, rings);
+                place(&app, &win, want);
             } else {
-                resize(&win, rings);
+                resize(&win, want);
             }
             let _ = app.emit("uc:au05-menu", &view);
             if first {
@@ -258,16 +265,18 @@ mod tests {
     /// The window grows with the rings (the same sizes as `dialSize` in public/js/quick-menu-dial.js, checked
     /// by scripts/check-quick-menu.cjs) and stays inside the work area.
     #[test]
-    fn the_dial_window_fits_its_rings_and_the_work_area() {
+    fn the_menu_window_fits_its_rings_or_style_and_the_work_area() {
         assert_eq!(dial_size(1), (522.0, 618.0));
         assert_eq!(dial_size(2), (580.0, 676.0));
         assert_eq!(dial_size(3), (682.0, 778.0));
         assert_eq!(dial_size(9), dial_size(3), "at most 3 rings");
         assert_eq!(rings(&serde_json::json!({"levels": [{}, {}]})), 3);
         assert_eq!(rings(&serde_json::json!({})), 1);
+        assert_eq!(view_size(&serde_json::json!({"style": "list", "levels": [{}]})), LIST_SIZE);
+        assert_eq!(view_size(&serde_json::json!({"style": "dial", "levels": [{}]})), dial_size(2));
         let wa = (0, 0, 1920, 1040);
         assert_eq!(fit((960, 520), 682, 778, wa), (619, 131));
         assert_eq!(fit((1900, 20), 682, 778, wa), (1238, 0), "clamped into the work area");
-        assert_eq!(fitted_size(3, 1.0, (0, 0, 1280, 600)), (682.0, 600.0), "never taller than the work area");
+        assert_eq!(fitted_size(dial_size(3), 1.0, (0, 0, 1280, 600)), (682.0, 600.0), "never taller than the work area");
     }
 }
